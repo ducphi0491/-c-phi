@@ -86,6 +86,9 @@ dependencies {
     implementation("com.google.android.play:review-ktx:2.0.1")
 
     implementation("com.google.android.gms:play-services-auth:21.1.0")
+
+    // Google Mobile Ads SDK - dang dung App ID va Banner ID thu nghiem cua Google.
+    implementation("com.google.android.gms:play-services-ads:25.4.0")
     implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("com.google.oboe:oboe:1.9.0")
     implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
