@@ -1,3 +1,4 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 package duc_phi.music
 
 import android.content.ContentUris
@@ -6,13 +7,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.provider.DocumentsContract
 import android.provider.MediaStore
-import android.provider.OpenableColumns
+import android.provider.Settings
 import android.widget.Toast
+import android.webkit.WebView
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -28,6 +30,12 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.Transformer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -83,12 +91,18 @@ internal enum class RepeatSetting {
     ONE
 }
 
+internal enum class OnlineSearchMode {
+    APPLE_MUSIC,
+    YOUTUBE
+}
+
 internal enum class SongSource {
     LOCAL_MEDIASTORE,
     PERSONAL_DRIVE,
     PUBLIC_DRIVE,
     DOWNLOADED,
     ONLINE_HTTP,
+    YOUTUBE,
     APP_RESOURCE
 }
 
@@ -135,10 +149,21 @@ internal data class SharedDriveEntry(
     val size: Long
 )
 
-private data class PendingDocumentFolder(
-    val documentId: String,
-    val displayPath: String
+internal data class PersonalDriveFolder(
+    val id: String,
+    val name: String
 )
+
+internal data class PersonalDriveEntry(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val isFolder: Boolean,
+    val canDownload: Boolean,
+    val size: Long
+)
+
+private class PersonalDriveAuthorizationException(message: String) : IOException(message)
 
 private val SUPPORTED_AUDIO_EXTENSIONS = setOf(
     "mp3", "m4a", "m4b", "aac", "adts", "flac", "wav", "wave",
@@ -240,6 +265,7 @@ internal class MusicController(private val context: Context) {
     private var sleepTimerJob: Job? = null
     private val artworkRequests = mutableSetOf<String>()
     private val cachedPlaybackUris = mutableMapOf<String, Uri>()
+    private val activeTransformers = mutableSetOf<Transformer>()
 
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         val attributes = AudioAttributes.Builder()
@@ -282,13 +308,30 @@ internal class MusicController(private val context: Context) {
     var errorMessage by mutableStateOf<String?>(null)
     var statusMessage by mutableStateOf<String?>(null)
 
-    var personalDriveUriText by mutableStateOf(prefs.getString(KEY_PERSONAL_DRIVE_URI, "").orEmpty())
+    private var personalDriveAccessToken: String? = null
+    private var personalDriveInvalidToken: String? = null
+    private var pendingPersonalDrivePlaybackId: String? = null
+
+    var personalDriveAccountEmail by mutableStateOf<String?>(
+        prefs.getString(KEY_PERSONAL_DRIVE_ACCOUNT, null)
+    )
         private set
-    var personalDriveName by mutableStateOf(prefs.getString(KEY_PERSONAL_DRIVE_NAME, "").orEmpty())
+    var personalDriveBusy by mutableStateOf(false)
         private set
+    var personalDriveError by mutableStateOf<String?>(null)
+        private set
+    var personalDriveNeedsAuthorization by mutableStateOf(false)
+        private set
+    val personalDrivePath = mutableStateListOf<PersonalDriveFolder>()
+    var personalDriveEntries by mutableStateOf<List<PersonalDriveEntry>>(emptyList())
+        private set
+    val personalDriveSelectedIds = mutableStateMapOf<String, Boolean>()
+    var showPersonalDriveDialog by mutableStateOf(false)
+
+    val hasPersonalDriveAuthorization: Boolean
+        get() = !personalDriveAccessToken.isNullOrBlank()
+
     var isScanningLocal by mutableStateOf(false)
-        private set
-    var isScanningPersonalDrive by mutableStateOf(false)
         private set
 
     var publicLinkText by mutableStateOf(prefs.getString(KEY_PUBLIC_LINK, "").orEmpty())
@@ -303,8 +346,22 @@ internal class MusicController(private val context: Context) {
         private set
     val publicSelectedIds = mutableStateMapOf<String, Boolean>()
     var showPublicDriveDialog by mutableStateOf(false)
+
+    val onlineSearchResults = mutableStateListOf<SongItem>()
+    var onlineSearchMode by mutableStateOf(OnlineSearchMode.APPLE_MUSIC)
+    var onlineSearchQuery by mutableStateOf("")
+    var onlineSearchBusy by mutableStateOf(false)
+        private set
+    var onlineSearchError by mutableStateOf<String?>(null)
+        private set
+
     var sleepTimerMinutesLeft by mutableIntStateOf(0)
         private set
+
+    var audioToolBusy by mutableStateOf(false)
+        private set
+
+    private var youtubeWebView: WebView? = null
 
     val currentSong: SongItem?
         get() = queue.getOrNull(currentIndex)
@@ -314,13 +371,14 @@ internal class MusicController(private val context: Context) {
         configurePlayerListener()
         tickerJob = scope.launch {
             while (true) {
-                positionMs = player.currentPosition.coerceAtLeast(0L)
-                val detected = player.duration
-                durationMs = if (detected == C.TIME_UNSET || detected <= 0L) 1L else detected
-                delay(if (player.isPlaying) 250L else 650L)
+                if (currentSong?.source != SongSource.YOUTUBE) {
+                    positionMs = player.currentPosition.coerceAtLeast(0L)
+                    val detected = player.duration
+                    durationMs = if (detected == C.TIME_UNSET || detected <= 0L) 1L else detected
+                }
+                delay(if (isPlaying) 250L else 650L)
             }
         }
-        restorePersonalDriveIfPossible()
     }
 
     fun release() {
@@ -328,6 +386,8 @@ internal class MusicController(private val context: Context) {
         tickerJob?.cancel()
         sleepTimerJob?.cancel()
         saveQueue()
+        youtubeWebView = null
+        activeTransformers.clear()
         player.release()
         scope.cancel()
     }
@@ -440,82 +500,224 @@ internal class MusicController(private val context: Context) {
         }
     }
 
-    fun attachPersonalDrive(treeUri: Uri, grantedFlags: Int) {
-        if (!isGoogleDriveTree(treeUri)) {
-            errorMessage = "Bạn vừa chọn bộ nhớ điện thoại. Hãy mở menu bên trái trong cửa sổ chọn thư mục rồi chọn Google Drive."
+    /**
+     * Access tokens are kept in memory only. Google Identity Services can silently issue
+     * a fresh token on the next authorization request after the user has granted consent.
+     */
+    fun setPersonalDriveAuthorization(accessToken: String, accountEmail: String?) {
+        if (accessToken.isBlank()) {
+            errorMessage = "Google không trả access token cho Drive. Hãy cấp lại quyền."
             return
         }
-        val takeFlags = grantedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION
-        val persisted = runCatching {
-            if (takeFlags != 0) {
-                context.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
-            }
-            hasPersistedReadPermission(treeUri)
-        }.getOrDefault(false)
-
-        personalDriveUriText = treeUri.toString()
-        if (persisted) {
-            prefs.edit().putString(KEY_PERSONAL_DRIVE_URI, treeUri.toString()).apply()
+        personalDriveAccessToken = accessToken
+        personalDriveInvalidToken = null
+        personalDriveAccountEmail = accountEmail?.takeIf { it.isNotBlank() }
+        personalDriveNeedsAuthorization = false
+        personalDriveError = null
+        personalDriveAccountEmail?.let { email ->
+            prefs.edit().putString(KEY_PERSONAL_DRIVE_ACCOUNT, email).apply()
         }
-        scanPersonalDrive(treeUri, persistName = persisted)
+
+        val retryId = pendingPersonalDrivePlaybackId
+        pendingPersonalDrivePlaybackId = null
+        if (retryId != null) {
+            val retryIndex = queue.indexOfFirst { it.id == retryId }
+            if (retryIndex >= 0) playQueueIndex(retryIndex)
+        }
     }
 
+    fun requestPersonalDriveAuthorization() {
+        personalDriveNeedsAuthorization = true
+    }
+
+    fun consumePersonalDriveAuthorizationRequest() {
+        personalDriveNeedsAuthorization = false
+    }
+
+    /** Returns a token rejected by Drive so Google Play services can evict it from cache. */
+    fun consumePersonalDriveInvalidToken(): String? {
+        val token = personalDriveInvalidToken
+        personalDriveInvalidToken = null
+        return token
+    }
+
+    /** Clears only the current app session. It does not revoke the Google OAuth grant. */
+    fun clearPersonalDriveSession(
+        removeSongs: Boolean = true,
+        forgetAccount: Boolean = false
+    ) {
+        personalDriveAccessToken = null
+        personalDriveInvalidToken = null
+        personalDriveBusy = false
+        personalDriveError = null
+        personalDriveNeedsAuthorization = false
+        personalDrivePath.clear()
+        personalDriveEntries = emptyList()
+        personalDriveSelectedIds.clear()
+        showPersonalDriveDialog = false
+        pendingPersonalDrivePlaybackId = null
+        if (removeSongs) personalDriveSongs.clear()
+        if (forgetAccount) {
+            personalDriveAccountEmail = null
+            prefs.edit().remove(KEY_PERSONAL_DRIVE_ACCOUNT).apply()
+        }
+    }
+
+    /** Called after Google AuthorizationClient.revokeAccess completes. */
     fun disconnectPersonalDrive() {
-        val uri = personalDriveUriText.takeIf { it.isNotBlank() }?.let(Uri::parse)
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.releasePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
-        }
-        personalDriveUriText = ""
-        personalDriveName = ""
-        personalDriveSongs.clear()
-        prefs.edit().remove(KEY_PERSONAL_DRIVE_URI).remove(KEY_PERSONAL_DRIVE_NAME).apply()
-        statusMessage = "Đã ngắt liên kết thư mục Google Drive cá nhân"
+        clearPersonalDriveSession(removeSongs = true, forgetAccount = true)
+        statusMessage = "Đã ngắt quyền Google Drive cá nhân"
     }
 
-    private fun restorePersonalDriveIfPossible() {
-        val saved = personalDriveUriText.takeIf { it.isNotBlank() } ?: return
-        val uri = runCatching { Uri.parse(saved) }.getOrNull() ?: return
-        if (isGoogleDriveTree(uri) && hasPersistedReadPermission(uri)) {
-            scanPersonalDrive(uri, persistName = true)
-        } else {
-            personalDriveUriText = ""
-            personalDriveName = ""
-            prefs.edit().remove(KEY_PERSONAL_DRIVE_URI).remove(KEY_PERSONAL_DRIVE_NAME).apply()
-        }
-    }
-
-    private fun scanPersonalDrive(treeUri: Uri, persistName: Boolean) {
-        if (isScanningPersonalDrive) return
-        isScanningPersonalDrive = true
-        errorMessage = null
+    fun openPersonalDriveRoot() {
+        val token = requirePersonalDriveToken() ?: return
+        personalDriveBusy = true
+        personalDriveError = null
         scope.launch {
             val result = runCatching {
-                withContext(Dispatchers.IO) { scanDocumentTree(treeUri) }
-            }
-            isScanningPersonalDrive = false
-            result.onSuccess { (rootName, songs) ->
-                personalDriveName = rootName
-                personalDriveSongs.clear()
-                personalDriveSongs.addAll(songs)
-                if (persistName) {
-                    prefs.edit()
-                        .putString(KEY_PERSONAL_DRIVE_URI, treeUri.toString())
-                        .putString(KEY_PERSONAL_DRIVE_NAME, rootName)
-                        .apply()
-                }
-                statusMessage = "Đã thêm ${songs.size} bài từ Google Drive"
-            }.onFailure { throwable ->
-                errorMessage = when (throwable) {
-                    is SecurityException -> "Quyền Google Drive không còn hiệu lực. Hãy chọn lại thư mục."
-                    else -> "Không đọc được Google Drive: ${throwable.localizedMessage ?: "Lỗi không xác định"}"
+                withContext(Dispatchers.IO) {
+                    PersonalDriveApi.listChildren(token, PersonalDriveFolder("root", "Drive của tôi"))
                 }
             }
+            personalDriveBusy = false
+            result.onSuccess { entries ->
+                personalDrivePath.clear()
+                personalDrivePath.add(PersonalDriveFolder("root", "Drive của tôi"))
+                personalDriveEntries = entries
+                personalDriveSelectedIds.clear()
+            }.onFailure(::handlePersonalDriveFailure)
         }
+    }
+
+    fun openPersonalDriveFolder(entry: PersonalDriveEntry) {
+        val token = requirePersonalDriveToken() ?: return
+        if (!entry.isFolder || personalDriveBusy) return
+        val folder = PersonalDriveFolder(entry.id, entry.name)
+        personalDriveBusy = true
+        personalDriveError = null
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { PersonalDriveApi.listChildren(token, folder) }
+            }
+            personalDriveBusy = false
+            result.onSuccess { entries ->
+                personalDrivePath.add(folder)
+                personalDriveEntries = entries
+                personalDriveSelectedIds.clear()
+            }.onFailure(::handlePersonalDriveFailure)
+        }
+    }
+
+    fun goBackPersonalDrive() {
+        val token = requirePersonalDriveToken() ?: return
+        if (personalDrivePath.size <= 1 || personalDriveBusy) return
+        val parent = personalDrivePath[personalDrivePath.lastIndex - 1]
+        personalDriveBusy = true
+        personalDriveError = null
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { PersonalDriveApi.listChildren(token, parent) }
+            }
+            personalDriveBusy = false
+            result.onSuccess { entries ->
+                personalDrivePath.removeAt(personalDrivePath.lastIndex)
+                personalDriveEntries = entries
+                personalDriveSelectedIds.clear()
+            }.onFailure(::handlePersonalDriveFailure)
+        }
+    }
+
+    fun isPersonalDrivePlayable(entry: PersonalDriveEntry): Boolean =
+        PersonalDriveApi.isPlayable(entry)
+
+    fun togglePersonalDriveSelection(entry: PersonalDriveEntry) {
+        if (!PersonalDriveApi.isPlayable(entry)) return
+        if (personalDriveSelectedIds.containsKey(entry.id)) {
+            personalDriveSelectedIds.remove(entry.id)
+        } else {
+            personalDriveSelectedIds[entry.id] = true
+        }
+    }
+
+    fun toggleAllPersonalDrivePlayable() {
+        val playable = personalDriveEntries.filter(PersonalDriveApi::isPlayable)
+        if (playable.isNotEmpty() && playable.all { personalDriveSelectedIds.containsKey(it.id) }) {
+            personalDriveSelectedIds.clear()
+        } else {
+            personalDriveSelectedIds.clear()
+            playable.forEach { personalDriveSelectedIds[it.id] = true }
+        }
+    }
+
+    fun addSelectedPersonalDrive(playNow: Boolean) {
+        val folderName = personalDrivePath.joinToString(" / ") { it.name }
+        val selected = personalDriveEntries
+            .filter { personalDriveSelectedIds.containsKey(it.id) && PersonalDriveApi.isPlayable(it) }
+            .map { PersonalDriveApi.toSong(it, folderName) }
+        if (selected.isEmpty()) {
+            personalDriveError = "Hãy chọn ít nhất một file âm thanh."
+            return
+        }
+        mergePersonalDriveSongs(selected)
+        if (playNow) {
+            showPersonalDriveDialog = false
+            playCollection(selected, 0)
+        } else {
+            statusMessage = "Đã thêm ${selected.size} bài từ Drive của tôi"
+        }
+    }
+
+    fun addCurrentPersonalDriveFolder(playNow: Boolean) {
+        val token = requirePersonalDriveToken() ?: return
+        val folder = personalDrivePath.lastOrNull() ?: return
+        personalDriveBusy = true
+        personalDriveError = null
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    PersonalDriveApi.collectAudioRecursively(token, folder)
+                }
+            }
+            personalDriveBusy = false
+            result.onSuccess { songs ->
+                if (songs.isEmpty()) {
+                    personalDriveError = "Thư mục này không có file âm thanh được hỗ trợ."
+                } else {
+                    mergePersonalDriveSongs(songs)
+                    if (playNow) {
+                        showPersonalDriveDialog = false
+                        playCollection(songs, 0)
+                    } else {
+                        statusMessage = "Đã thêm ${songs.size} bài từ thư mục ${folder.name}"
+                    }
+                }
+            }.onFailure(::handlePersonalDriveFailure)
+        }
+    }
+
+    private fun mergePersonalDriveSongs(songs: List<SongItem>) {
+        val merged = (personalDriveSongs + songs).distinctBy { it.id }
+        personalDriveSongs.clear()
+        personalDriveSongs.addAll(merged)
+    }
+
+    private fun requirePersonalDriveToken(): String? {
+        val token = personalDriveAccessToken
+        if (token.isNullOrBlank()) {
+            personalDriveError = "Hãy đăng nhập và cấp quyền đọc Google Drive."
+            personalDriveNeedsAuthorization = true
+            return null
+        }
+        return token
+    }
+
+    private fun handlePersonalDriveFailure(throwable: Throwable) {
+        if (throwable is PersonalDriveAuthorizationException) {
+            personalDriveInvalidToken = personalDriveAccessToken
+            personalDriveAccessToken = null
+            personalDriveNeedsAuthorization = true
+        }
+        personalDriveError = throwable.localizedMessage ?: "Không đọc được Google Drive cá nhân"
     }
 
     fun setPublicLink(value: String) {
@@ -607,10 +809,23 @@ internal class MusicController(private val context: Context) {
         }
     }
 
+    fun isPublicEntryPlayable(entry: SharedDriveEntry): Boolean =
+        SharedDriveApi.isPlayable(entry)
+
     fun togglePublicEntry(entry: SharedDriveEntry) {
         if (!SharedDriveApi.isPlayable(entry)) return
         if (publicSelectedIds[entry.id] == true) publicSelectedIds.remove(entry.id)
         else publicSelectedIds[entry.id] = true
+    }
+
+    fun toggleAllPublicEntries() {
+        val playable = publicEntries.filter(SharedDriveApi::isPlayable)
+        if (playable.isEmpty()) return
+        if (playable.all { publicSelectedIds[it.id] == true }) {
+            playable.forEach { publicSelectedIds.remove(it.id) }
+        } else {
+            playable.forEach { publicSelectedIds[it.id] = true }
+        }
     }
 
     fun addSelectedPublicSongs(playImmediately: Boolean) {
@@ -664,6 +879,221 @@ internal class MusicController(private val context: Context) {
         saveSongList(KEY_PUBLIC_SONGS, publicDriveSongs)
     }
 
+    fun changeOnlineSearchMode(mode: OnlineSearchMode) {
+        if (onlineSearchMode == mode) return
+        onlineSearchMode = mode
+        onlineSearchResults.clear()
+        onlineSearchError = null
+    }
+
+    fun searchOnline(query: String = onlineSearchQuery) {
+        val cleanQuery = query.trim()
+        onlineSearchQuery = cleanQuery
+        if (cleanQuery.isBlank()) {
+            onlineSearchResults.clear()
+            onlineSearchError = "Hãy nhập tên bài hát hoặc ca sĩ."
+            return
+        }
+        if (onlineSearchBusy) return
+        onlineSearchBusy = true
+        onlineSearchError = null
+        scope.launch {
+            val mode = onlineSearchMode
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    when (mode) {
+                        OnlineSearchMode.APPLE_MUSIC -> searchAppleMusic(cleanQuery)
+                        OnlineSearchMode.YOUTUBE -> searchYoutube(cleanQuery)
+                    }
+                }
+            }
+            onlineSearchBusy = false
+            result.onSuccess { songs ->
+                onlineSearchResults.clear()
+                onlineSearchResults.addAll(songs)
+                if (songs.isEmpty()) {
+                    onlineSearchError = "Không tìm thấy kết quả cho '$cleanQuery'."
+                }
+            }.onFailure { error ->
+                onlineSearchError = "Không thể tìm kiếm: ${error.localizedMessage ?: "Lỗi kết nối"}"
+            }
+        }
+    }
+
+    private fun searchAppleMusic(query: String): List<SongItem> {
+        val url = "https://itunes.apple.com/search?term=${URLEncoder.encode(query, "UTF-8")}&media=music&entity=song&limit=30&country=US"
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 15_000
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", "Tunertools-Android/2.0")
+        return try {
+            if (connection.responseCode !in 200..299) {
+                throw IOException("Apple Music HTTP ${connection.responseCode}")
+            }
+            val array = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+                .optJSONArray("results") ?: JSONArray()
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val preview = item.optString("previewUrl").replace("http://", "https://")
+                    if (!preview.startsWith("https://")) continue
+                    val rawArtwork = item.optString("artworkUrl100")
+                    add(
+                        SongItem(
+                            id = "apple_${item.optString("trackId", index.toString())}",
+                            title = item.optString("trackName", "Không rõ tên"),
+                            artist = item.optString("artistName", "Không rõ nghệ sĩ"),
+                            album = item.optString("collectionName", "Apple Music"),
+                            folderName = "Apple Music Preview",
+                            uri = Uri.parse(preview),
+                            durationMs = 30_000L,
+                            source = SongSource.ONLINE_HTTP,
+                            mimeType = "audio/mp4",
+                            artworkUrl = rawArtwork
+                                .replace("100x100bb", "600x600bb")
+                                .takeIf { it.startsWith("https://") }
+                        )
+                    )
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun searchYoutube(query: String): List<SongItem> {
+        val url = "https://cut.tunertools.top/api/v1/search?query=${URLEncoder.encode(query, "UTF-8")}&limit=30"
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 20_000
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", "Tunertools-Android/2.0")
+        return try {
+            if (connection.responseCode !in 200..299) {
+                throw IOException("YouTube search HTTP ${connection.responseCode}")
+            }
+            val json = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            if (!json.optString("status").equals("success", ignoreCase = true)) return emptyList()
+            val array = json.optJSONArray("data") ?: JSONArray()
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val rawId = item.optString("id")
+                    val videoId = rawId.removePrefix("vid_").takeIf { it.isNotBlank() } ?: continue
+                    val durationSeconds = item.optLong("duration", 0L)
+                    add(
+                        SongItem(
+                            id = if (rawId.startsWith("vid_")) rawId else "vid_$videoId",
+                            title = item.optString("title", "YouTube Video"),
+                            artist = item.optString("artist", "YouTube"),
+                            album = "YouTube",
+                            folderName = "YouTube",
+                            uri = Uri.parse("https://youtu.be/$videoId"),
+                            durationMs = if (durationSeconds > 0L) durationSeconds * 1000L else 0L,
+                            source = SongSource.YOUTUBE,
+                            mimeType = "video/youtube",
+                            artworkUrl = item.optString("artworkUrl").takeIf { it.startsWith("https://") }
+                        )
+                    )
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun playOnlineResult(song: SongItem) {
+        val list = onlineSearchResults.toList().ifEmpty { listOf(song) }
+        val index = list.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+        playCollection(list, index)
+        openNowPlaying()
+    }
+
+    fun attachYoutubeWebView(webView: WebView) {
+        youtubeWebView = webView
+    }
+
+    fun detachYoutubeWebView(webView: WebView) {
+        if (youtubeWebView === webView) youtubeWebView = null
+    }
+
+    fun updateYoutubePlaybackState(
+        position: Long,
+        duration: Long,
+        playerState: Int,
+        ready: Boolean,
+        errorCode: Int = 0
+    ) {
+        if (currentSong?.source != SongSource.YOUTUBE) return
+        positionMs = position.coerceAtLeast(0L)
+        if (duration > 0L) durationMs = duration
+        isPlaying = playerState == 1
+        isLoading = !ready || playerState == -1 || playerState == 3
+
+        if (errorCode != 0) {
+            isPlaying = false
+            isLoading = false
+            val message = when (errorCode) {
+                2 -> "ID hoặc tham số video YouTube không hợp lệ."
+                5 -> "YouTube không thể phát video này bằng trình phát HTML5 trên thiết bị hiện tại."
+                100 -> "Video YouTube đã bị xóa, đặt riêng tư hoặc không còn tồn tại."
+                101, 150 -> "Chủ sở hữu video không cho phép phát trong ứng dụng nhúng. Hãy mở video bằng ứng dụng YouTube."
+                153 -> "YouTube chưa nhận diện được ứng dụng nhúng. Hãy cập nhật bản ứng dụng mới rồi thử lại."
+                else -> "Không thể phát video YouTube trong ứng dụng (mã lỗi $errorCode)."
+            }
+            if (errorMessage != message) errorMessage = message
+        }
+    }
+
+    fun youtubeVideoId(song: SongItem? = currentSong): String? {
+        val resolvedSong = song ?: return null
+        val text = resolvedSong.uri.toString()
+        val candidate = when {
+            "youtu.be/" in text -> text.substringAfter("youtu.be/").substringBefore('?').substringBefore('&')
+            "watch?v=" in text -> text.substringAfter("watch?v=").substringBefore('&')
+            "/embed/" in text -> text.substringAfter("/embed/").substringBefore('?').substringBefore('&')
+            else -> resolvedSong.id.removePrefix("vid_")
+        }
+        return candidate.takeIf { Regex("[A-Za-z0-9_-]{11}").matches(it) }
+    }
+
+    fun youtubeEmbedUrl(song: SongItem? = currentSong): String {
+        val resolvedSong = song ?: return ""
+        val videoId = youtubeVideoId(resolvedSong) ?: return resolvedSong.uri.toString()
+        val appIdentity = "https://${context.packageName.lowercase(Locale.ROOT)}"
+        val encodedIdentity = URLEncoder.encode(appIdentity, "UTF-8")
+        return "https://www.youtube.com/embed/$videoId" +
+                "?autoplay=1&playsinline=1&controls=1&rel=0&fs=1&enablejsapi=1" +
+                "&origin=$encodedIdentity&widget_referrer=$encodedIdentity"
+    }
+
+    fun openCurrentYoutubeExternally() {
+        val song = currentSong ?: return
+        val videoId = youtubeVideoId(song)
+        val webUri = Uri.parse(
+            videoId?.let { "https://www.youtube.com/watch?v=$it" }
+                ?: song.uri.toString()
+        )
+        val youtubeIntent = videoId?.let {
+            Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$it")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+        val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            if (youtubeIntent != null && youtubeIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(youtubeIntent)
+            } else {
+                context.startActivity(webIntent)
+            }
+        }.onFailure {
+            errorMessage = "Không tìm thấy ứng dụng có thể mở video YouTube."
+        }
+    }
+
     fun playCollection(collection: List<SongItem>, index: Int) {
         if (collection.isEmpty()) return
         val safeIndex = index.coerceIn(0, collection.lastIndex)
@@ -688,6 +1118,13 @@ internal class MusicController(private val context: Context) {
 
     fun togglePlayback() {
         val song = currentSong
+        if (song?.source == SongSource.YOUTUBE) {
+            youtubeWebView?.evaluateJavascript(
+                "window.tunertoolsToggle ? window.tunertoolsToggle() : 'not_ready';",
+                null
+            )
+            return
+        }
         when {
             song == null -> {
                 val first = allLibrarySongs().firstOrNull() ?: return
@@ -705,8 +1142,8 @@ internal class MusicController(private val context: Context) {
 
     fun previous() {
         if (queue.isEmpty()) return
-        if (player.currentPosition > 3_000L) {
-            player.seekTo(0L)
+        if (positionMs > 3_000L) {
+            seekTo(0L)
             return
         }
         val target = when {
@@ -733,8 +1170,16 @@ internal class MusicController(private val context: Context) {
     }
 
     fun seekTo(position: Long) {
-        player.seekTo(position.coerceAtLeast(0L))
-        positionMs = position.coerceAtLeast(0L)
+        val safePosition = position.coerceAtLeast(0L)
+        if (currentSong?.source == SongSource.YOUTUBE) {
+            youtubeWebView?.evaluateJavascript(
+                "window.tunertoolsSeek ? window.tunertoolsSeek(${safePosition / 1000.0}) : -1;",
+                null
+            )
+        } else {
+            player.seekTo(safePosition)
+        }
+        positionMs = safePosition
     }
 
     fun cycleRepeat() {
@@ -781,6 +1226,10 @@ internal class MusicController(private val context: Context) {
     }
 
     fun downloadSongForOffline(song: SongItem) {
+        if (song.source == SongSource.YOUTUBE) {
+            statusMessage = "YouTube không cung cấp file âm thanh trực tiếp để tải Offline trong chức năng này."
+            return
+        }
         scope.launch {
             isLoading = true
             val result = runCatching {
@@ -797,12 +1246,293 @@ internal class MusicController(private val context: Context) {
         }
     }
 
+    fun canUseLocalAudioTools(song: SongItem): Boolean =
+        song.source == SongSource.LOCAL_MEDIASTORE || song.source == SongSource.DOWNLOADED
+
+    fun localAudioToolSongs(excludeId: String? = null): List<SongItem> =
+        localSongs
+            .filter(::canUseLocalAudioTools)
+            .filter { excludeId == null || it.id != excludeId }
+            .distinctBy { it.id }
+
+    fun cutLocalSong(song: SongItem, startMs: Long, endMs: Long) {
+        if (!canUseLocalAudioTools(song)) {
+            statusMessage = "Cắt nhạc chỉ áp dụng cho tệp đã lưu trên điện thoại."
+            return
+        }
+        val safeDuration = song.durationMs.coerceAtLeast(1L)
+        val start = startMs.coerceIn(0L, safeDuration - 1L)
+        val end = endMs.coerceIn(start + 1L, safeDuration)
+        val clippedMedia = MediaItem.Builder()
+            .setUri(song.uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(start)
+                    .setEndPositionMs(end)
+                    .build()
+            )
+            .build()
+        val edited = EditedMediaItem.Builder(clippedMedia).build()
+        val sequence = EditedMediaItemSequence(edited)
+        val composition = Composition.Builder(listOf(sequence)).build()
+        val outputTitle = "${song.title} (Cut)"
+        val fileName = "${safeFileName(song.title)}_cut_${System.currentTimeMillis()}.m4a"
+        startAudioExport(
+            composition = composition,
+            fileName = fileName,
+            title = outputTitle,
+            artist = song.artist,
+            duration = end - start,
+            successMessage = "Đã cắt và lưu bài hát vào Music/MeloWare"
+        )
+    }
+
+    fun mergeLocalSongs(
+        first: SongItem,
+        second: SongItem,
+        firstStartMs: Long = 0L,
+        firstEndMs: Long = first.durationMs,
+        secondStartMs: Long = 0L,
+        secondEndMs: Long = second.durationMs
+    ) {
+        if (!canUseLocalAudioTools(first) || !canUseLocalAudioTools(second)) {
+            statusMessage = "Ghép nhạc chỉ áp dụng cho các tệp đã lưu trên điện thoại."
+            return
+        }
+        if (first.id == second.id) {
+            statusMessage = "Hãy chọn hai bài hát khác nhau để ghép."
+            return
+        }
+
+        val firstDuration = first.durationMs.coerceAtLeast(1L)
+        val secondDuration = second.durationMs.coerceAtLeast(1L)
+
+        val safeFirstStart = firstStartMs.coerceIn(0L, firstDuration - 1L)
+        val safeFirstEnd = firstEndMs.coerceIn(safeFirstStart + 1L, firstDuration)
+        val safeSecondStart = secondStartMs.coerceIn(0L, secondDuration - 1L)
+        val safeSecondEnd = secondEndMs.coerceIn(safeSecondStart + 1L, secondDuration)
+
+        val firstMediaItem = MediaItem.Builder()
+            .setUri(first.uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(safeFirstStart)
+                    .setEndPositionMs(safeFirstEnd)
+                    .build()
+            )
+            .build()
+        val secondMediaItem = MediaItem.Builder()
+            .setUri(second.uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(safeSecondStart)
+                    .setEndPositionMs(safeSecondEnd)
+                    .build()
+            )
+            .build()
+
+        val firstItem = EditedMediaItem.Builder(firstMediaItem).build()
+        val secondItem = EditedMediaItem.Builder(secondMediaItem).build()
+        val sequence = EditedMediaItemSequence(firstItem, secondItem)
+        val composition = Composition.Builder(listOf(sequence)).build()
+        val mergedTitle = "${first.title} + ${second.title}"
+        val mergedArtist = listOf(first.artist, second.artist)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(" & ")
+            .ifBlank { "MeloWare" }
+        val fileName = "${safeFileName(first.title)}_merged_${System.currentTimeMillis()}.m4a"
+        startAudioExport(
+            composition = composition,
+            fileName = fileName,
+            title = mergedTitle,
+            artist = mergedArtist,
+            duration = (safeFirstEnd - safeFirstStart) + (safeSecondEnd - safeSecondStart),
+            successMessage = "Đã cắt hai đoạn, ghép và lưu vào Music/MeloWare"
+        )
+    }
+
+    fun setAsRingtone(song: SongItem, ringtoneType: Int) {
+        if (!canUseLocalAudioTools(song)) {
+            statusMessage = "Hãy tải bài hát về máy trước khi đặt làm nhạc chuông."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(context)) {
+            statusMessage = "Hãy cấp quyền sửa đổi cài đặt hệ thống, sau đó chọn lại chức năng nhạc chuông."
+            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }
+            return
+        }
+        runCatching {
+            RingtoneManager.setActualDefaultRingtoneUri(context, ringtoneType, song.uri)
+        }.onSuccess {
+            statusMessage = if (ringtoneType == RingtoneManager.TYPE_NOTIFICATION) {
+                "Đã đặt làm âm báo thông báo"
+            } else {
+                "Đã đặt làm nhạc chuông cuộc gọi"
+            }
+        }.onFailure { error ->
+            errorMessage = "Không thể đặt nhạc chuông: ${error.localizedMessage ?: "Lỗi không xác định"}"
+        }
+    }
+
+    fun restoreDefaultRingtone(ringtoneType: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(context)) {
+            statusMessage = "Hãy cấp quyền sửa đổi cài đặt hệ thống rồi thử lại."
+            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }
+            return
+        }
+        runCatching {
+            val manager = RingtoneManager(context).apply { setType(ringtoneType) }
+            val defaultUri = manager.cursor?.use { cursor ->
+                if (cursor.moveToFirst()) manager.getRingtoneUri(cursor.position) else null
+            }
+            RingtoneManager.setActualDefaultRingtoneUri(context, ringtoneType, defaultUri)
+        }.onSuccess {
+            statusMessage = "Đã khôi phục âm thanh hệ thống mặc định"
+        }.onFailure { error ->
+            errorMessage = "Không thể khôi phục nhạc chuông: ${error.localizedMessage ?: "Lỗi không xác định"}"
+        }
+    }
+
+    private fun startAudioExport(
+        composition: Composition,
+        fileName: String,
+        title: String,
+        artist: String,
+        duration: Long,
+        successMessage: String
+    ) {
+        if (audioToolBusy) {
+            statusMessage = "Một tác vụ âm thanh khác đang được xử lý."
+            return
+        }
+        audioToolBusy = true
+        errorMessage = null
+        val outputFile = File(context.cacheDir, fileName).apply {
+            if (exists()) delete()
+        }
+        lateinit var transformer: Transformer
+        transformer = Transformer.Builder(context)
+            .addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    activeTransformers.remove(transformer)
+                    scope.launch {
+                        val result = runCatching {
+                            withContext(Dispatchers.IO) {
+                                publishExportedAudio(
+                                    sourceFile = outputFile,
+                                    fileName = fileName,
+                                    title = title,
+                                    artist = artist,
+                                    duration = duration
+                                )
+                            }
+                        }
+                        outputFile.delete()
+                        audioToolBusy = false
+                        result.onSuccess {
+                            statusMessage = successMessage
+                            scanLocalMusic()
+                        }.onFailure { error ->
+                            errorMessage = "Không thể lưu tệp âm thanh: ${error.localizedMessage ?: "Lỗi không xác định"}"
+                        }
+                    }
+                }
+
+                override fun onError(
+                    composition: Composition,
+                    exportResult: ExportResult,
+                    exportException: ExportException
+                ) {
+                    activeTransformers.remove(transformer)
+                    outputFile.delete()
+                    scope.launch {
+                        audioToolBusy = false
+                        errorMessage = "Xử lý âm thanh thất bại: ${exportException.localizedMessage ?: "Lỗi Transformer"}"
+                    }
+                }
+            })
+            .build()
+        activeTransformers.add(transformer)
+        runCatching {
+            transformer.start(composition, outputFile.absolutePath)
+        }.onFailure { error ->
+            activeTransformers.remove(transformer)
+            outputFile.delete()
+            audioToolBusy = false
+            errorMessage = "Không thể bắt đầu xử lý âm thanh: ${error.localizedMessage ?: "Lỗi không xác định"}"
+        }
+    }
+
+    private fun publishExportedAudio(
+        sourceFile: File,
+        fileName: String,
+        title: String,
+        artist: String,
+        duration: Long
+    ): Uri {
+        if (!sourceFile.isFile || sourceFile.length() <= 0L) {
+            throw IOException("Tệp xuất âm thanh bị rỗng")
+        }
+        val resolver = context.contentResolver
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Audio.Media.TITLE, title)
+            put(MediaStore.Audio.Media.ARTIST, artist)
+            put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+            put(MediaStore.Audio.Media.IS_MUSIC, true)
+            if (duration > 0L) put(MediaStore.Audio.Media.DURATION, duration)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/MeloWare")
+                put(MediaStore.Audio.Media.IS_PENDING, 1)
+            }
+        }
+        val target = resolver.insert(collection, values)
+            ?: throw IOException("Không thể tạo tệp trong MediaStore")
+        try {
+            sourceFile.inputStream().use { input ->
+                resolver.openOutputStream(target)?.use { output ->
+                    input.copyTo(output, 128 * 1024)
+                } ?: throw IOException("Không mở được tệp đích")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Audio.Media.IS_PENDING, 0)
+                resolver.update(target, values, null, null)
+            }
+            return target
+        } catch (error: Throwable) {
+            resolver.delete(target, null, null)
+            throw error
+        }
+    }
+
+    private fun safeFileName(value: String): String = value
+        .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        .trim()
+        .ifBlank { "MeloWare" }
+
     fun shareCurrentSong() {
         val song = currentSong ?: return
         val shareText = buildString {
             append(song.title)
             if (song.artist.isNotBlank()) append(" - ${song.artist}")
             if (song.source == SongSource.PUBLIC_DRIVE) append("\nNguồn: Google Drive công khai")
+            if (song.source == SongSource.ONLINE_HTTP) append("\nNguồn: Apple Music Preview")
+            if (song.source == SongSource.YOUTUBE) append("\n${song.uri}")
         }
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -849,7 +1579,8 @@ internal class MusicController(private val context: Context) {
         SongSource.DOWNLOADED -> "Đã tải Offline"
         SongSource.PERSONAL_DRIVE -> "Google Drive"
         SongSource.PUBLIC_DRIVE -> "Drive chia sẻ"
-        SongSource.ONLINE_HTTP -> "Online"
+        SongSource.ONLINE_HTTP -> "Apple Music Preview"
+        SongSource.YOUTUBE -> "YouTube"
         SongSource.APP_RESOURCE -> "Ứng dụng"
     }
 
@@ -860,7 +1591,8 @@ internal class MusicController(private val context: Context) {
             SongSource.PUBLIC_DRIVE -> "DRIVE PUBLIC $ext"
             SongSource.DOWNLOADED -> "OFFLINE $ext"
             SongSource.LOCAL_MEDIASTORE -> ext.takeIf { it != "AUDIO" } ?: "OFFLINE"
-            SongSource.ONLINE_HTTP -> "ONLINE"
+            SongSource.ONLINE_HTTP -> "APPLE MUSIC"
+            SongSource.YOUTUBE -> "YOUTUBE VIDEO"
             SongSource.APP_RESOURCE -> "DEMO"
         }
     }
@@ -868,10 +1600,11 @@ internal class MusicController(private val context: Context) {
     private fun configurePlayerListener() {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(value: Boolean) {
-                isPlaying = value
+                if (currentSong?.source != SongSource.YOUTUBE) isPlaying = value
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (currentSong?.source == SongSource.YOUTUBE) return
                 isLoading = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
                 if (playbackState == Player.STATE_READY) {
                     isLoading = false
@@ -893,6 +1626,7 @@ internal class MusicController(private val context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (currentSong?.source == SongSource.YOUTUBE) return
                 isLoading = false
                 isPlaying = false
                 errorMessage = "Không thể phát bài hát. ${error.errorCodeName}: ${error.cause?.localizedMessage ?: error.localizedMessage}"
@@ -907,6 +1641,20 @@ internal class MusicController(private val context: Context) {
     private fun prepareCurrent(autoPlay: Boolean) {
         val song = currentSong ?: return
         playbackJob?.cancel()
+        if (song.source == SongSource.YOUTUBE) {
+            player.pause()
+            player.clearMediaItems()
+            positionMs = 0L
+            durationMs = song.durationMs.coerceAtLeast(1L)
+            errorMessage = null
+            isLoading = true
+            // Chờ IFrame Player báo trạng thái thật; không giả định autoplay luôn thành công.
+            isPlaying = false
+            addRecent(song)
+            ensureArtwork(song)
+            saveQueue()
+            return
+        }
         playbackJob = scope.launch {
             isLoading = true
             errorMessage = null
@@ -914,8 +1662,16 @@ internal class MusicController(private val context: Context) {
                 resolvePlaybackUri(song)
             } catch (throwable: Throwable) {
                 isLoading = false
+                if (throwable is PersonalDriveAuthorizationException) {
+                    personalDriveInvalidToken = personalDriveAccessToken
+                    personalDriveAccessToken = null
+                    personalDriveNeedsAuthorization = true
+                    pendingPersonalDrivePlaybackId = song.id
+                }
                 errorMessage = when (throwable) {
-                    is SecurityException -> "Ứng dụng đã mất quyền đọc Google Drive. Hãy chọn lại thư mục."
+                    is PersonalDriveAuthorizationException -> throwable.localizedMessage
+                        ?: "Phiên Google Drive đã hết hạn. Hãy cấp lại quyền."
+                    is SecurityException -> "Ứng dụng đã mất quyền đọc Google Drive. Hãy cấp lại quyền."
                     is FileNotFoundException -> "Không tìm thấy file nhạc hoặc tài khoản hiện tại không có quyền."
                     else -> "Không chuẩn bị được bài hát: ${throwable.localizedMessage ?: "Lỗi không xác định"}"
                 }
@@ -941,7 +1697,11 @@ internal class MusicController(private val context: Context) {
             if (file?.isFile == true && file.length() > 0L) return cached
         }
         val cached = withContext(Dispatchers.IO) {
-            DriveAudioCache.getOrCreate(context, song)
+            DriveAudioCache.getOrCreate(
+                context = context,
+                song = song,
+                personalDriveAccessToken = personalDriveAccessToken
+            )
         }
         cachedPlaybackUris[song.id] = cached
         return cached
@@ -1037,7 +1797,7 @@ internal class MusicController(private val context: Context) {
                 } else {
                     File(relativeOrPath).parentFile?.name ?: "Nhạc trên máy"
                 }
-                val downloaded = folder.contains("Tunertools", ignoreCase = true)
+                val downloaded = (folder.contains("Tunertools", ignoreCase = true) || folder.contains("MeloWare", ignoreCase = true))
                 output += SongItem(
                     id = uri.toString(),
                     title = parsed.first,
@@ -1054,78 +1814,8 @@ internal class MusicController(private val context: Context) {
         return output.distinctBy { it.id }
     }
 
-    private fun scanDocumentTree(treeUri: Uri): Pair<String, List<SongItem>> {
-        val resolver = context.contentResolver
-        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-        val rootDocument = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId)
-        val rootName = queryDocumentDisplayName(rootDocument)?.ifBlank { "Google Drive" } ?: "Google Drive"
-        val pending = ArrayDeque<PendingDocumentFolder>()
-        val visited = hashSetOf<String>()
-        val songs = mutableListOf<SongItem>()
-        pending.add(PendingDocumentFolder(rootId, rootName))
-        val projection = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE
-        )
-        while (pending.isNotEmpty()) {
-            val current = pending.removeFirst()
-            if (!visited.add(current.documentId)) continue
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, current.documentId)
-            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
-                val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                while (cursor.moveToNext()) {
-                    val documentId = cursor.stringOrEmpty(idIndex)
-                    if (documentId.isBlank()) continue
-                    val displayName = cursor.stringOrEmpty(nameIndex)
-                    val mime = cursor.stringOrNull(mimeIndex)
-                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                        val childName = displayName.ifBlank { "Thư mục" }
-                        pending.add(PendingDocumentFolder(documentId, "${current.displayPath}/$childName"))
-                        continue
-                    }
-                    if (!isSupportedAudio(displayName, mime)) continue
-                    val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
-                    val parsed = parseTitleArtist(displayName, "Google Drive")
-                    songs += SongItem(
-                        id = documentUri.toString(),
-                        title = parsed.first,
-                        artist = parsed.second,
-                        album = "Google Drive",
-                        folderName = current.displayPath,
-                        uri = documentUri,
-                        durationMs = 0L,
-                        source = SongSource.PERSONAL_DRIVE,
-                        mimeType = resolveAudioMime(displayName, mime)
-                    )
-                }
-            }
-        }
-        return rootName to songs.distinctBy { it.id }
-    }
-
-    private fun queryDocumentDisplayName(uri: Uri): String? = runCatching {
-        context.contentResolver.query(
-            uri,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-    }.getOrNull()
-
-    private fun isGoogleDriveTree(uri: Uri): Boolean =
-        uri.authority.orEmpty().startsWith("com.google.android.apps.docs", ignoreCase = true)
-
-    private fun hasPersistedReadPermission(uri: Uri): Boolean =
-        context.contentResolver.persistedUriPermissions.any { permission ->
-            permission.isReadPermission && permission.uri == uri
-        }
-
     private fun saveUriToMusicFolder(sourceUri: Uri, song: SongItem): String {
-        val safeTitle = song.title.replace(Regex("[\\/:*?\"<>|]"), "_").trim().ifBlank { "Tunertools" }
+        val safeTitle = song.title.replace(Regex("[\\/:*?\"<>|]"), "_").trim().ifBlank { "MeloWare" }
         val safeArtist = song.artist.replace(Regex("[\\/:*?\"<>|]"), "_").trim()
         val extension = extensionForMime(song.mimeType).takeUnless { it == "audio" } ?: "mp3"
         val fileName = if (safeArtist.isBlank()) "$safeTitle.$extension" else "$safeTitle - $safeArtist.$extension"
@@ -1142,7 +1832,7 @@ internal class MusicController(private val context: Context) {
             put(MediaStore.Audio.Media.MIME_TYPE, song.mimeType ?: "audio/mpeg")
             put(MediaStore.Audio.Media.IS_MUSIC, true)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/Tunertools")
+                put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/MeloWare")
                 put(MediaStore.Audio.Media.IS_PENDING, 1)
             }
         }
@@ -1163,7 +1853,7 @@ internal class MusicController(private val context: Context) {
             resolver.delete(target, null, null)
             throw error
         }
-        return "Music/Tunertools/$fileName"
+        return "Music/MeloWare/$fileName"
     }
 
     private fun restoreState() {
@@ -1224,7 +1914,8 @@ internal class MusicController(private val context: Context) {
                         "SAF_CLOUD", "PERSONAL_DRIVE" -> SongSource.PERSONAL_DRIVE
                         "PUBLIC_DRIVE" -> SongSource.PUBLIC_DRIVE
                         "DOWNLOADED" -> SongSource.DOWNLOADED
-                        "ONLINE_HTTP", "YOUTUBE" -> SongSource.ONLINE_HTTP
+                        "ONLINE_HTTP" -> SongSource.ONLINE_HTTP
+                        "YOUTUBE" -> SongSource.YOUTUBE
                         "APP_RESOURCE" -> SongSource.APP_RESOURCE
                         else -> SongSource.LOCAL_MEDIASTORE
                     }
@@ -1274,8 +1965,7 @@ internal class MusicController(private val context: Context) {
         private const val KEY_PUBLIC_SONGS = "public_songs"
         private const val KEY_CURRENT_INDEX = "current_index"
         private const val KEY_FAVORITES = "favorites"
-        private const val KEY_PERSONAL_DRIVE_URI = "google_drive_tree_uri"
-        private const val KEY_PERSONAL_DRIVE_NAME = "google_drive_tree_name"
+        private const val KEY_PERSONAL_DRIVE_ACCOUNT = "google_drive_oauth_account"
         private const val KEY_PUBLIC_LINK = "public_drive_last_link"
         private const val DRIVE_CACHE_DIR = "tunertools_drive_cache"
     }
@@ -1286,7 +1976,11 @@ private object DriveAudioCache {
     private const val MAX_BYTES = 512L * 1024L * 1024L
     private val locks = ConcurrentHashMap<String, Any>()
 
-    fun getOrCreate(context: Context, song: SongItem): Uri {
+    fun getOrCreate(
+        context: Context,
+        song: SongItem,
+        personalDriveAccessToken: String?
+    ): Uri {
         require(song.source == SongSource.PERSONAL_DRIVE || song.source == SongSource.PUBLIC_DRIVE)
         val key = MessageDigest.getInstance("SHA-256")
             .digest(song.id.toByteArray(Charsets.UTF_8))
@@ -1308,12 +2002,25 @@ private object DriveAudioCache {
                 partial.delete()
                 try {
                     FileOutputStream(partial).use { output ->
-                        if (song.source == SongSource.PUBLIC_DRIVE) {
-                            SharedDriveApi.copyAudioTo(context, song, output)
-                        } else {
-                            context.contentResolver.openInputStream(song.uri)?.use { input ->
-                                input.copyTo(output, 128 * 1024)
-                            } ?: throw FileNotFoundException("Google Drive không trả dữ liệu cho ${song.title}")
+                        when {
+                            song.source == SongSource.PUBLIC_DRIVE -> {
+                                SharedDriveApi.copyAudioTo(context, song, output)
+                            }
+                            song.uri.scheme.equals("mydrive", ignoreCase = true) -> {
+                                val token = personalDriveAccessToken
+                                    ?: throw PersonalDriveAuthorizationException(
+                                        "Phiên Google Drive đã hết hạn. Hãy cấp lại quyền."
+                                    )
+                                PersonalDriveApi.copyAudioTo(token, song, output)
+                            }
+                            else -> {
+                                // Backward compatibility for old SAF-based playlist entries.
+                                context.contentResolver.openInputStream(song.uri)?.use { input ->
+                                    input.copyTo(output, 128 * 1024)
+                                } ?: throw FileNotFoundException(
+                                    "Google Drive không trả dữ liệu cho ${song.title}"
+                                )
+                            }
                         }
                     }
                     if (!partial.isFile || partial.length() <= 0L) throw IOException("File tải về bị rỗng")
@@ -1351,6 +2058,202 @@ private object DriveAudioCache {
             if (oldest.delete()) bytes -= length
         }
     }
+}
+
+private object PersonalDriveApi {
+    private const val BASE = "https://www.googleapis.com/drive/v3/files"
+    private const val FOLDER_MIME = "application/vnd.google-apps.folder"
+    private const val MAX_PER_FOLDER = 10_000
+    private const val MAX_PLAYLIST = 2_000
+    private const val MAX_AUDIO_BYTES = 512L * 1024L * 1024L
+
+    fun listChildren(
+        accessToken: String,
+        folder: PersonalDriveFolder
+    ): List<PersonalDriveEntry> {
+        val results = arrayListOf<PersonalDriveEntry>()
+        val query = "'${folder.id}' in parents and trashed = false"
+        val fields = "nextPageToken,files(id,name,mimeType,size,capabilities(canDownload))"
+        var nextPage: String? = null
+        var pages = 0
+        do {
+            val url = StringBuilder("$BASE?q=${urlEncode(query)}")
+                .append("&fields=${urlEncode(fields)}")
+                .append("&spaces=drive&pageSize=1000")
+                .append("&supportsAllDrives=true&includeItemsFromAllDrives=true")
+                .append("&orderBy=${urlEncode("folder,name_natural")}")
+                .apply {
+                    if (!nextPage.isNullOrBlank()) append("&pageToken=${urlEncode(nextPage!!)}")
+                }
+                .toString()
+            val json = getJson(accessToken, url)
+            val array = json.optJSONArray("files")
+            if (array != null) {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    val id = item.optString("id")
+                    if (id.isBlank()) continue
+                    val mime = item.optString("mimeType")
+                    results += PersonalDriveEntry(
+                        id = id,
+                        name = item.optString("name", "Chưa có tên"),
+                        mimeType = mime,
+                        isFolder = mime == FOLDER_MIME,
+                        canDownload = item.optJSONObject("capabilities")
+                            ?.optBoolean("canDownload", true) ?: true,
+                        size = item.optLong("size", 0L)
+                    )
+                }
+            }
+            nextPage = json.optString("nextPageToken").takeIf { it.isNotBlank() }
+            pages++
+            if (results.size >= MAX_PER_FOLDER || pages >= 10) {
+                if (nextPage != null) {
+                    throw IOException("Thư mục quá lớn. Hãy chọn một thư mục con nhỏ hơn.")
+                }
+                break
+            }
+        } while (nextPage != null)
+        return results.sortedWith(
+            compareBy<PersonalDriveEntry> { !it.isFolder }
+                .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+    }
+
+    fun isPlayable(entry: PersonalDriveEntry): Boolean {
+        if (entry.isFolder || !entry.canDownload) return false
+        return entry.mimeType.startsWith("audio/", ignoreCase = true) ||
+                extensionOf(entry.name) in SUPPORTED_AUDIO_EXTENSIONS
+    }
+
+    fun toSong(entry: PersonalDriveEntry, folderName: String): SongItem {
+        val uri = Uri.Builder()
+            .scheme("mydrive")
+            .authority("file")
+            .appendPath(entry.id)
+            .build()
+        val parsed = parseTitleArtist(entry.name, "Google Drive")
+        return SongItem(
+            id = "mydrive_${entry.id}",
+            title = parsed.first,
+            artist = parsed.second,
+            album = folderName.ifBlank { "Drive của tôi" },
+            folderName = folderName.ifBlank { "Drive của tôi" },
+            uri = uri,
+            source = SongSource.PERSONAL_DRIVE,
+            mimeType = resolveAudioMime(entry.name, entry.mimeType)
+        )
+    }
+
+    fun collectAudioRecursively(
+        accessToken: String,
+        selectedFolder: PersonalDriveFolder
+    ): List<SongItem> {
+        val folders = ArrayDeque<Pair<PersonalDriveFolder, String>>()
+        val visited = hashSetOf<String>()
+        val songs = linkedMapOf<String, SongItem>()
+        folders.add(selectedFolder to selectedFolder.name)
+        while (folders.isNotEmpty()) {
+            val (current, displayPath) = folders.removeFirst()
+            if (!visited.add(current.id)) continue
+            val entries = listChildren(accessToken, current)
+            entries.forEach { entry ->
+                if (entry.isFolder) {
+                    folders.add(
+                        PersonalDriveFolder(entry.id, entry.name) to "$displayPath / ${entry.name}"
+                    )
+                } else if (isPlayable(entry)) {
+                    songs[entry.id] = toSong(entry, displayPath)
+                }
+                if (songs.size >= MAX_PLAYLIST) {
+                    throw IOException(
+                        "Thư mục có trên $MAX_PLAYLIST bài. Hãy chọn thư mục nhỏ hơn."
+                    )
+                }
+            }
+        }
+        return songs.values.toList()
+    }
+
+    fun copyAudioTo(accessToken: String, song: SongItem, output: OutputStream) {
+        val fileId = song.uri.lastPathSegment
+            ?.takeIf { Regex("[A-Za-z0-9_-]{10,}").matches(it) }
+            ?: throw FileNotFoundException("Không tìm thấy File ID của Google Drive")
+        val url = "$BASE/$fileId?alt=media&supportsAllDrives=true"
+        val connection = connect(accessToken, url)
+        try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw httpError(code, connection)
+            val contentType = connection.contentType.orEmpty().lowercase(Locale.ROOT)
+            if (contentType.contains("text/html") || contentType.contains("application/json")) {
+                throw IOException("Google Drive trả dữ liệu không phải âm thanh.")
+            }
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(128 * 1024)
+                var bytes = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    bytes += count
+                    if (bytes > MAX_AUDIO_BYTES) throw IOException("File lớn hơn 512 MB")
+                    output.write(buffer, 0, count)
+                }
+                if (bytes <= 0L) throw IOException("Google Drive trả file rỗng")
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun getJson(accessToken: String, url: String): JSONObject {
+        val connection = connect(accessToken, url)
+        try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw httpError(code, connection)
+            return JSONObject(
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun connect(accessToken: String, url: String): HttpURLConnection {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 20_000
+        connection.readTimeout = 45_000
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("Authorization", "Bearer $accessToken")
+        connection.setRequestProperty(
+            "Accept",
+            "application/json, audio/*, application/octet-stream"
+        )
+        return connection
+    }
+
+    private fun httpError(code: Int, connection: HttpURLConnection): IOException {
+        val body = runCatching {
+            connection.errorStream?.bufferedReader()?.use { it.readText().take(1_200) }
+        }.getOrNull().orEmpty()
+        val message = runCatching {
+            JSONObject(body).getJSONObject("error").optString("message")
+        }.getOrNull().orEmpty().ifBlank { body.take(250) }
+        return when (code) {
+            401 -> PersonalDriveAuthorizationException(
+                "Phiên Google Drive đã hết hạn hoặc bị thu hồi. Hãy cấp lại quyền."
+            )
+            403 -> IOException(
+                "Google Drive từ chối quyền truy cập. Kiểm tra Drive API, OAuth scope drive.readonly và tài khoản Google. $message"
+            )
+            404 -> FileNotFoundException("Không tìm thấy file hoặc thư mục Google Drive. $message")
+            429 -> IOException("Google Drive API đang vượt giới hạn. Hãy thử lại sau.")
+            else -> IOException("Google Drive HTTP $code: $message")
+        }
+    }
+
+    private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
 }
 
 private object SharedDriveApi {
@@ -1455,7 +2358,7 @@ private object SharedDriveApi {
     fun isPlayable(entry: SharedDriveEntry): Boolean {
         if (entry.isFolder || !entry.canDownload) return false
         return entry.mimeType.startsWith("audio/", ignoreCase = true) ||
-            extensionOf(entry.name) in SUPPORTED_AUDIO_EXTENSIONS
+                extensionOf(entry.name) in SUPPORTED_AUDIO_EXTENSIONS
     }
 
     fun toSong(entry: SharedDriveEntry, root: SharedDriveLink, folderName: String): SongItem {
@@ -1653,7 +2556,7 @@ private object ArtworkResolver {
                 val track = normalize(item.optString("trackName"))
                 val artist = normalize(item.optString("artistName"))
                 val score = similarity(expectedTitle, track) * 0.72 +
-                    similarity(expectedArtist, artist) * 0.28
+                        similarity(expectedArtist, artist) * 0.28
                 val raw = item.optString("artworkUrl100")
                 if (score > bestScore && raw.startsWith("https://")) {
                     bestScore = score
