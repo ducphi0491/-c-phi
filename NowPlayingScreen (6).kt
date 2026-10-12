@@ -1,8 +1,13 @@
 package duc_phi.music
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.view.View
+import android.view.ContextThemeWrapper
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -13,9 +18,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.os.Build
 import android.widget.FrameLayout
-import android.media.audiofx.BassBoost
-import android.media.audiofx.Equalizer as AndroidEqualizer
-import android.media.audiofx.LoudnessEnhancer
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -57,6 +59,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Phonelink
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Download
@@ -67,7 +73,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MicExternalOn
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
@@ -84,16 +90,19 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Speaker
 import androidx.compose.material.icons.rounded.Stars
+import androidx.compose.material.icons.rounded.StopCircle
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -113,11 +122,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -133,18 +146,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.mediarouter.app.MediaRouteButton
+import com.google.android.gms.cast.framework.CastButtonFactory
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.util.Locale
 
 @Composable
@@ -155,6 +166,9 @@ internal fun NowPlayingScreen(controller: MusicController) {
     var showTimer by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     var actionSong by remember { mutableStateOf<SongItem?>(null) }
+    var karaokeMode by rememberSaveable(song?.id) { mutableStateOf(false) }
+    var wifiSharePage by remember { mutableStateOf(WifiSharePage.NONE) }
+    var showCastScanPanel by remember { mutableStateOf(false) }
     val screenListState = rememberLazyListState()
 
     BackHandler { controller.goBackFromPlayer() }
@@ -176,6 +190,21 @@ internal fun NowPlayingScreen(controller: MusicController) {
         return
     }
 
+    // Keep one Cast route button attached to the activity; the Cast chooser is
+    // opened only after the user explicitly presses Search in our dialog.
+    val castContext = LocalContext.current
+    val castRouteButton = remember(castContext) {
+        MediaRouteButton(castContext).apply {
+            CastButtonFactory.setUpMediaRouteButton(castContext, this)
+        }
+    }
+
+    LaunchedEffect(Unit) { controller.initializeCast() }
+
+    LaunchedEffect(song.id, controller.isLoading) {
+        if (!controller.isLoading) controller.ensureAudioTechnicalInfo(song)
+    }
+
     // Khi mo danh sach, doi den khung tiep theo de item duoc do kich thuoc,
     // sau do cuon mem den khu vuc danh sach phat o cuoi man hinh.
     LaunchedEffect(showQueue) {
@@ -189,8 +218,7 @@ internal fun NowPlayingScreen(controller: MusicController) {
         controller.ensureArtwork(song)
     }
 
-    LazyColumn(
-        state = screenListState,
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(
@@ -200,98 +228,111 @@ internal fun NowPlayingScreen(controller: MusicController) {
             )
             .statusBarsPadding()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
-            .navigationBarsPadding(),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        item {
-            NowPlayingHeader(
-                onBack = controller::goBackFromPlayer,
-                onLyrics = {
-                    controller.statusMessage = "Lời bài hát / Karaoke sẽ được tích hợp ở bước tiếp theo."
-                },
-                onCast = {
-                    controller.statusMessage = "Tính năng Cast lên TV sẽ được tích hợp ở bước tiếp theo."
-                },
-                onWifiPlayback = {
-                    controller.statusMessage = "Tính năng phát nhạc qua Wi-Fi sẽ được tích hợp ở bước tiếp theo."
-                },
-                onTools = if (controller.canUseLocalAudioTools(song)) {
-                    { actionSong = song }
-                } else null
-            )
-        }
+        LazyColumn(
+            state = screenListState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            item {
+                NowPlayingHeader(
+                    controller = controller,
+                    karaokeActive = karaokeMode,
+                    onBack = controller::goBackFromPlayer,
+                    onLyrics = { karaokeMode = !karaokeMode },
+                    castRouteButton = castRouteButton,
+                    onCastRequested = { showCastScanPanel = true },
+                    onWifiPlayback = { wifiSharePage = WifiSharePage.CHOOSER },
+                    onTools = if (controller.canUseLocalAudioTools(song)) {
+                        { actionSong = song }
+                    } else null
+                )
+            }
 
-        item {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                if (song.source == SongSource.YOUTUBE) {
-                    YoutubePlayerSurface(
+            item {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (song.source == SongSource.MOVIE) {
+                        MoviePlayerSurface(
+                            controller = controller,
+                            song = song,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 520.dp)
+                                .aspectRatio(16f / 9f)
+                                .heightIn(min = 200.dp)
+                        )
+                    } else if (karaokeMode) {
+                        KaraokeBackdrop(
+                            controller = controller,
+                            song = song,
+                            modifier = Modifier
+                                .fillMaxWidth(0.94f)
+                                .widthIn(max = 380.dp)
+                                .aspectRatio(1f)
+                        )
+                    } else {
+                        ArtworkImage(
+                            song = song,
+                            artworkUrl = controller.artworkFor(song),
+                            modifier = Modifier
+                                .fillMaxWidth(0.90f)
+                                .widthIn(max = 360.dp)
+                                .aspectRatio(1f),
+                            cornerRadius = 24
+                        )
+                    }
+                }
+            }
+
+            item {
+                TrackTitleBlock(
+                    controller = controller,
+                    song = song
+                )
+            }
+
+            item {
+                // Gom tiến trình, cụm Play và các nút công cụ vào một khối để đẩy chúng lên cao hơn.
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    PlaybackProgress(
+                        positionMs = controller.positionMs,
+                        durationMs = controller.durationMs,
+                        onSeek = controller::seekTo
+                    )
+                    MainPlaybackControls(controller)
+                    PlayerActions(
                         controller = controller,
                         song = song,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .widthIn(max = 520.dp)
-                            .aspectRatio(16f / 9f)
-                            .heightIn(min = 200.dp)
+                        onEqualizer = { showEqualizer = true },
+                        onTimer = { showTimer = true },
+                        onQueue = { showQueue = !showQueue },
+                        queueVisible = showQueue
                     )
-                } else {
-                    ArtworkImage(
-                        song = song,
-                        artworkUrl = controller.artworkFor(song),
-                        modifier = Modifier
-                            .fillMaxWidth(0.90f)
-                            .widthIn(max = 360.dp)
-                            .aspectRatio(1f),
-                        cornerRadius = 24
+                }
+            }
+
+            if (showQueue) {
+                item(key = "now_playing_queue") {
+                    QueuePanel(
+                        controller = controller,
+                        onClose = { showQueue = false },
+                        onTools = { selected -> actionSong = selected }
                     )
                 }
             }
         }
 
-        item {
-            TrackTitleBlock(
-                controller = controller,
-                song = song
-            )
-        }
-
-        item {
-            // Gom tiến trình, cụm Play và các nút công cụ vào một khối để đẩy chúng lên cao hơn.
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                PlaybackProgress(
-                    positionMs = controller.positionMs,
-                    durationMs = controller.durationMs,
-                    onSeek = controller::seekTo
-                )
-                MainPlaybackControls(controller)
-                PlayerActions(
-                    controller = controller,
-                    song = song,
-                    onEqualizer = { showEqualizer = true },
-                    onTimer = { showTimer = true },
-                    onQueue = { showQueue = !showQueue },
-                    queueVisible = showQueue
-                )
-            }
-        }
-
-        if (showQueue) {
-            item(key = "now_playing_queue") {
-                QueuePanel(
-                    controller = controller,
-                    onClose = { showQueue = false },
-                    onTools = { selected -> actionSong = selected }
-                )
-            }
-        }
     }
 
     if (showEqualizer) {
         EqualizerDialog(
-            audioSessionId = controller.audioSessionId,
+            controller = controller,
             onDismiss = { showEqualizer = false }
         )
     }
@@ -307,6 +348,52 @@ internal fun NowPlayingScreen(controller: MusicController) {
         )
     }
 
+    if (showCastScanPanel) {
+        CastScanPanelDialog(
+            controller = controller,
+            onSearchDevices = {
+                // Only this explicit action opens the official Cast device picker.
+                controller.initializeCast()
+                val result = runCatching { castRouteButton.showDialog() }
+                if (result.getOrDefault(false)) {
+                    showCastScanPanel = false
+                } else {
+                    controller.statusMessage = result.exceptionOrNull()?.localizedMessage
+                        ?.let { "Không mở được danh sách Cast: $it" }
+                        ?: "Không mở được bảng chọn Cast. Hãy kiểm tra Wi-Fi và thiết bị hỗ trợ Google Cast."
+                }
+            },
+            onDismiss = { showCastScanPanel = false }
+        )
+    }
+
+    when (wifiSharePage) {
+        WifiSharePage.CHOOSER -> WifiShareChoiceDialog(
+            onBrowser = {
+                wifiSharePage = WifiSharePage.BROWSER
+                if (!controller.wifiHostActive && !controller.wifiHostBusy) {
+                    controller.toggleWifiHost()
+                }
+            },
+            onMeloWare = { wifiSharePage = WifiSharePage.APP },
+            onLaptop = { wifiSharePage = WifiSharePage.LAPTOP },
+            onDismiss = { wifiSharePage = WifiSharePage.NONE }
+        )
+        WifiSharePage.BROWSER -> WifiHostDialog(
+            controller = controller,
+            onDismiss = { wifiSharePage = WifiSharePage.NONE }
+        )
+        WifiSharePage.APP -> MeloWareWifiAppDialog(
+            controller = controller,
+            onDismiss = { wifiSharePage = WifiSharePage.NONE }
+        )
+        WifiSharePage.LAPTOP -> MeloWareLaptopDialog(
+            controller = controller,
+            onDismiss = { wifiSharePage = WifiSharePage.NONE }
+        )
+        WifiSharePage.NONE -> Unit
+    }
+
     actionSong?.let { selectedSong ->
         SongToolsHost(
             controller = controller,
@@ -318,13 +405,17 @@ internal fun NowPlayingScreen(controller: MusicController) {
 
 @Composable
 private fun NowPlayingHeader(
+    controller: MusicController,
+    karaokeActive: Boolean,
     onBack: () -> Unit,
     onLyrics: () -> Unit,
-    onCast: () -> Unit,
+    castRouteButton: MediaRouteButton,
+    onCastRequested: () -> Unit,
     onWifiPlayback: () -> Unit,
     onTools: (() -> Unit)?
 ) {
     val colors = LocalMusicColors.current
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -341,25 +432,40 @@ private fun NowPlayingHeader(
 
         IconButton(onClick = onLyrics) {
             Icon(
-                Icons.Rounded.Mic,
-                contentDescription = "Lời bài hát và Karaoke",
-                tint = colors.purpleBright
+                imageVector = Icons.Rounded.MicExternalOn,
+                contentDescription = "Micro karaoke - Mở lời bài hát",
+                tint = if (karaokeActive) colors.purpleBright else colors.textSecondary,
+                modifier = Modifier.size(25.dp)
             )
         }
 
-        IconButton(onClick = onCast) {
-            Icon(
-                Icons.Rounded.Cast,
-                contentDescription = "Cast lên TV",
-                tint = colors.textSecondary
+        Box(contentAlignment = Alignment.Center) {
+            // Tapping Cast only opens MeloWare's own panel, without
+            // immediately opening the system Cast route discovery dialog.
+            IconButton(onClick = onCastRequested) {
+                Icon(
+                    Icons.Rounded.Cast,
+                    contentDescription = "Cast lên TV hoặc thiết bị âm thanh",
+                    tint = when {
+                        controller.castConnected -> colors.purpleBright
+                        controller.castConnecting -> colors.blue
+                        else -> colors.textSecondary
+                    }
+                )
+            }
+            AndroidView(
+                factory = { castRouteButton },
+                modifier = Modifier
+                    .size(1.dp)
+                    .graphicsLayer(alpha = 0f)
             )
         }
 
         IconButton(onClick = onWifiPlayback) {
             Icon(
                 Icons.Rounded.Wifi,
-                contentDescription = "Phát nhạc qua Wi-Fi",
-                tint = colors.textSecondary
+                contentDescription = "Phát nhạc qua Wi-Fi nội bộ",
+                tint = if (controller.wifiHostActive) colors.purpleBright else colors.textSecondary
             )
         }
 
@@ -375,8 +481,116 @@ private fun NowPlayingHeader(
     }
 }
 
+/**
+ * First step of Cast: show a MeloWare panel. Actual discovery and route
+ * selection remain in Google's supported MediaRouteButton picker and happen
+ * only when the user presses the search button below.
+ */
 @Composable
-private fun YoutubePlayerSurface(
+private fun CastScanPanelDialog(
+    controller: MusicController,
+    onSearchDevices: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.48f))
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = colors.purple.copy(alpha = 0.15f)
+                    ) {
+                        Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Cast, contentDescription = null,
+                                tint = colors.purpleBright)
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Kết nối Google Cast", color = colors.textPrimary,
+                            fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("TV, Chromecast và loa hỗ trợ Cast",
+                            color = colors.textSecondary, fontSize = 11.sp)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng bảng Cast",
+                            tint = colors.textSecondary)
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = colors.backgroundSoft,
+                    border = BorderStroke(1.dp, colors.border)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Rounded.Tv, contentDescription = null,
+                            tint = if (controller.castConnected) colors.purpleBright
+                            else colors.textSecondary,
+                            modifier = Modifier.size(25.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (controller.castConnected) "Đã kết nối thiết bị"
+                                else if (controller.castConnecting) "Đang kết nối..."
+                                else "Chưa kết nối thiết bị nào",
+                                color = colors.textPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                            if (controller.castConnected) {
+                                Text(controller.castDeviceName ?: "Thiết bị Google Cast",
+                                    color = colors.textSecondary, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    "Kết nối điện thoại và TV/loa vào cùng mạng Wi-Fi. " +
+                            "Nhấn Tìm thiết bị để mở danh sách Google Cast và chọn nơi phát nhạc.",
+                    color = colors.textSecondary, fontSize = 12.sp
+                )
+
+                Button(
+                    onClick = onSearchDevices,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                ) {
+                    Icon(Icons.Rounded.Cast, contentDescription = null,
+                        modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(9.dp))
+                    Text(if (controller.castConnected) "Tìm / đổi thiết bị Cast"
+                    else "Bắt đầu tìm thiết bị", fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    "Bảng chọn thiết bị sẽ chỉ xuất hiện khi bạn nhấn nút trên.",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    color = colors.textSecondary,
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoviePlayerSurface(
     controller: MusicController,
     song: SongItem,
     modifier: Modifier = Modifier
@@ -391,7 +605,7 @@ private fun YoutubePlayerSurface(
     val appIdentity = remember(context.packageName) {
         "https://${context.packageName.lowercase(Locale.ROOT)}"
     }
-    val videoId = remember(song.id, song.uri) { controller.youtubeVideoId(song) }
+    val videoId = remember(song.id, song.uri) { controller.movieVideoId(song) }
 
     val webView = remember(song.id) {
         WebView(context).apply {
@@ -442,10 +656,10 @@ private fun YoutubePlayerSurface(
     }
 
     DisposableEffect(webView) {
-        controller.attachYoutubeWebView(webView)
+        controller.attachMovieWebView(webView)
         webView.onResume()
         onDispose {
-            controller.detachYoutubeWebView(webView)
+            controller.detachMovieWebView(webView)
             runCatching { webView.onPause() }
             runCatching { webView.stopLoading() }
             runCatching { webView.loadUrl("about:blank") }
@@ -456,7 +670,7 @@ private fun YoutubePlayerSurface(
     LaunchedEffect(song.id, videoId, appIdentity) {
         val resolvedVideoId = videoId
         if (resolvedVideoId == null) {
-            controller.updateYoutubePlaybackState(
+            controller.updateMoviePlaybackState(
                 position = 0L,
                 duration = song.durationMs,
                 playerState = -1,
@@ -465,11 +679,11 @@ private fun YoutubePlayerSurface(
             )
             return@LaunchedEffect
         }
-        val html = youtubePlayerHtml(
+        val html = moviePlayerHtml(
             videoId = resolvedVideoId,
             origin = appIdentity
         )
-        // YouTube yêu cầu WebView cung cấp danh tính ứng dụng qua Referer.
+        // Movie yêu cầu WebView cung cấp danh tính ứng dụng qua Referer.
         // loadDataWithBaseURL đặt base URL này làm Referer cho IFrame Player.
         webView.loadDataWithBaseURL(
             "$appIdentity/",
@@ -496,7 +710,7 @@ private fun YoutubePlayerSurface(
                 val playerState = parts.getOrNull(3)?.toIntOrNull() ?: -1
                 val errorCode = parts.getOrNull(4)?.toIntOrNull() ?: 0
 
-                controller.updateYoutubePlaybackState(
+                controller.updateMoviePlaybackState(
                     position = ((position ?: 0.0).coerceAtLeast(0.0) * 1000.0).toLong(),
                     duration = if (duration != null && duration.isFinite() && duration > 0.0) {
                         (duration * 1000.0).toLong()
@@ -593,7 +807,7 @@ private fun YoutubePlayerSurface(
     }
 }
 
-private fun youtubePlayerHtml(videoId: String, origin: String): String {
+private fun moviePlayerHtml(videoId: String, origin: String): String {
     return """
         <!doctype html>
         <html>
@@ -684,11 +898,951 @@ private fun youtubePlayerHtml(videoId: String, origin: String): String {
 }
 
 @Composable
+private fun KaraokeBackdrop(
+    controller: MusicController,
+    song: SongItem,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalMusicColors.current
+    val shape = RoundedCornerShape(26.dp)
+    val lyrics = controller.lyricsFor(song)
+    val loading = controller.lyricsLoading(song)
+    val error = controller.lyricsError(song)
+    val lyricListState = rememberLazyListState()
+
+    LaunchedEffect(song.id) {
+        controller.loadLyrics(song)
+    }
+
+    val activeLineIndex = if (lyrics?.synced == true && lyrics.lines.isNotEmpty()) {
+        lyrics.lines.indexOfLast { line ->
+            val timestamp = line.timestampMs ?: Long.MAX_VALUE
+            timestamp <= controller.positionMs + 120L
+        }
+    } else {
+        -1
+    }
+
+    LaunchedEffect(activeLineIndex, lyrics?.recordId) {
+        if (activeLineIndex >= 0 && lyrics?.synced == true) {
+            lyricListState.animateScrollToItem((activeLineIndex - 2).coerceAtLeast(0))
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(colors.card)
+    ) {
+        ArtworkImage(
+            song = song,
+            artworkUrl = controller.artworkFor(song),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(scaleX = 1.12f, scaleY = 1.12f)
+                .blur(22.dp),
+            cornerRadius = 26
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0x99020411),
+                            Color(0xDD08051A),
+                            Color(0xF6050713)
+                        )
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = colors.purple.copy(alpha = 0.22f),
+                    border = BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.65f))
+                ) {
+                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Rounded.MicExternalOn,
+                            contentDescription = null,
+                            tint = colors.purpleBright,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        song.title,
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        song.artist,
+                        color = Color.White.copy(alpha = 0.68f),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    "LRCLIB",
+                    color = colors.purpleBright,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            when {
+                loading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp,
+                                color = colors.purpleBright
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text("Đang tìm lời bài hát...", color = Color.White.copy(alpha = 0.86f))
+                            Text(
+                                "Tìm theo tên bài hát và ca sĩ",
+                                color = Color.White.copy(alpha = 0.55f),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                error != null -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.MicExternalOn,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.62f),
+                                modifier = Modifier.size(38.dp)
+                            )
+                            Text(
+                                error,
+                                color = Color.White.copy(alpha = 0.84f),
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            TextButton(onClick = { controller.loadLyrics(song, forceRefresh = true) }) {
+                                Text("Tìm lại", color = colors.purpleBright)
+                            }
+                        }
+                    }
+                }
+
+                lyrics?.instrumental == true -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Rounded.MusicNote,
+                                contentDescription = null,
+                                tint = colors.purpleBright,
+                                modifier = Modifier.size(46.dp)
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "Bản nhạc không lời",
+                                color = Color.White,
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                lyrics != null && lyrics.lines.isNotEmpty() -> {
+                    LazyColumn(
+                        state = lyricListState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 58.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        itemsIndexed(
+                            items = lyrics.lines,
+                            key = { index, line -> "${line.timestampMs ?: -1L}_$index" }
+                        ) { index, line ->
+                            val active = lyrics.synced && index == activeLineIndex
+                            Text(
+                                text = line.text,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = line.timestampMs != null) {
+                                        line.timestampMs?.let(controller::seekTo)
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = if (active) 4.dp else 0.dp),
+                                color = when {
+                                    active -> Color.White
+                                    lyrics.synced -> Color.White.copy(alpha = 0.48f)
+                                    else -> Color.White.copy(alpha = 0.88f)
+                                },
+                                fontSize = if (active) 20.sp else 15.sp,
+                                lineHeight = if (active) 27.sp else 22.sp,
+                                fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Medium,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
+                else -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "Chưa có dữ liệu lời bài hát",
+                                color = Color.White.copy(alpha = 0.88f),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(onClick = { controller.loadLyrics(song, forceRefresh = true) }) {
+                                Text("Tìm lại trên LRCLIB", color = colors.purpleBright)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+private enum class WifiSharePage { NONE, CHOOSER, BROWSER, APP, LAPTOP }
+
+/** Two phones with opposite arrows for MeloWare <-> MeloWare LAN sharing. */
+@Composable
+private fun TwoPhonesTransferIcon(
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier.size(32.dp)) {
+        // Draw using a normalized 36x36 grid, so the icon remains sharp on any density.
+        val unit = size.minDimension / 36f
+        val originX = (size.width - 36f * unit) / 2f
+        val originY = (size.height - 36f * unit) / 2f
+        fun p(x: Float, y: Float) = Offset(originX + x * unit, originY + y * unit)
+
+        // Both phones are intentionally identical in size.
+        fun phone(x: Float) {
+            drawRoundRect(
+                color = tint,
+                topLeft = p(x, 6.5f),
+                size = Size(10f * unit, 23f * unit),
+                cornerRadius = CornerRadius(2.5f * unit),
+                style = Stroke(width = 2f * unit)
+            )
+            drawLine(
+                color = tint,
+                start = p(x + 3.3f, 10f),
+                end = p(x + 6.7f, 10f),
+                strokeWidth = 1.4f * unit,
+                cap = StrokeCap.Round
+            )
+            drawCircle(color = tint, radius = 0.9f * unit, center = p(x + 5f, 26.5f))
+        }
+        phone(0.5f)
+        phone(25.5f)
+
+        // Upper arrow points right (phone A -> phone B).
+        val arrowStroke = 2.1f * unit
+        fun arrowLine(x1: Float, y1: Float, x2: Float, y2: Float) {
+            drawLine(tint, p(x1, y1), p(x2, y2), arrowStroke, cap = StrokeCap.Round)
+        }
+        arrowLine(13f, 13f, 23f, 13f)
+        arrowLine(19.6f, 9.8f, 23f, 13f)
+        arrowLine(19.6f, 16.2f, 23f, 13f)
+
+        // Lower arrow points left (phone B -> phone A).
+        arrowLine(23f, 23f, 13f, 23f)
+        arrowLine(16.4f, 19.8f, 13f, 23f)
+        arrowLine(16.4f, 26.2f, 13f, 23f)
+    }
+}
+
+@Composable
+private fun WifiShareChoiceDialog(
+    onBrowser: () -> Unit,
+    onMeloWare: () -> Unit,
+    onLaptop: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.46f))
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Wifi, contentDescription = null, tint = colors.purpleBright)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Chia sẻ nhạc qua Wi-Fi", modifier = Modifier.weight(1f),
+                        color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+                Text("Chọn cách kết nối với thiết bị khác cùng mạng Wi-Fi.",
+                    color = colors.textSecondary, fontSize = 12.sp)
+                // 1. Phone <-> computer: the phone creates the link, Chrome selects a folder.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onLaptop),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.backgroundSoft,
+                    border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.45f))
+                ) {
+                    Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Phonelink, contentDescription = null,
+                            tint = colors.purpleBright, modifier = Modifier.size(27.dp))
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("1. Chia sẻ điện thoại và máy tính", color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Text("Mở link trên Chrome laptop, chọn thư mục để nghe hoặc tải nhạc.",
+                                color = colors.textSecondary, fontSize = 11.sp)
+                        }
+                        Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
+                    }
+                }
+                // 2. Phone <-> phone: preserve the existing MeloWare sharing logic.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onMeloWare),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.backgroundSoft,
+                    border = BorderStroke(1.dp, colors.border)
+                ) {
+                    Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TwoPhonesTransferIcon(
+                            tint = colors.purpleBright
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("2. Điện thoại và điện thoại", color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Text("Kết nối hai điện thoại cài MeloWare để chia sẻ nhạc.",
+                                color = colors.textSecondary, fontSize = 11.sp)
+                        }
+                        Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
+                    }
+                }
+                // 3. Link for any device: preserve the old browser HTTP share.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onBrowser),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.backgroundSoft,
+                    border = BorderStroke(1.dp, colors.border)
+                ) {
+                    Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Link, contentDescription = null,
+                            tint = colors.purpleBright, modifier = Modifier.size(27.dp))
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("3. Chia sẻ link (mọi thiết bị)", color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Text("Mở link chia sẻ nhạc bằng trình duyệt, VLC hoặc thiết bị khác.",
+                                color = colors.textSecondary, fontSize = 11.sp)
+                        }
+                        Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> Unit) {
+    val colors = LocalMusicColors.current
+    var receiverMode by rememberSaveable { mutableStateOf(false) }
+    var manualWifiUrl by rememberSaveable { mutableStateOf("") }
+    var showSharedFolders by remember { mutableStateOf(false) }
+    var showRemoteLibrary by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    DisposableEffect(receiverMode) {
+        if (receiverMode) controller.startSearchingMeloWare()
+        onDispose { if (receiverMode) controller.stopSearchingMeloWare() }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.5f))
+        ) {
+            Column(
+                Modifier.padding(17.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Wifi, contentDescription = null, tint = colors.purpleBright)
+                    Spacer(Modifier.width(9.dp))
+                    Text("Kết nối MeloWare", modifier = Modifier.weight(1f),
+                        color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = { receiverMode = false },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (!receiverMode) colors.purple else colors.backgroundSoft
+                        )
+                    ) { Text("Máy gửi", color = if (!receiverMode) Color.White else colors.textSecondary) }
+                    Button(
+                        onClick = { receiverMode = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (receiverMode) colors.purple else colors.backgroundSoft
+                        )
+                    ) { Text("Máy nhận", color = if (receiverMode) Color.White else colors.textSecondary) }
+                }
+                if (!receiverMode) {
+                    Text("Máy A có thể gửi bài đang phát và chọn thêm thư mục nhạc cho máy B duyệt.",
+                        color = colors.textSecondary, fontSize = 12.sp)
+                    Text(controller.currentSong?.title ?: "Chưa chọn bài hát", color = colors.textPrimary,
+                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    // Folder sharing is OFF by default. User on A explicitly selects allowed audio folders.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Rounded.Folder, contentDescription = null, tint = colors.purpleBright,
+                            modifier = Modifier.size(19.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("Thư mục chia sẻ: ${controller.wifiSharedFolderPaths.size}",
+                            modifier = Modifier.weight(1f), color = colors.textPrimary, fontSize = 12.sp)
+                        TextButton(onClick = { showSharedFolders = !showSharedFolders }) {
+                            Text(if (showSharedFolders) "Thu gọn" else "Chọn thư mục", color = colors.purpleBright, fontSize = 12.sp)
+                        }
+                    }
+                    if (showSharedFolders) {
+                        val folders = controller.wifiShareableFolders
+                        if (folders.isEmpty()) {
+                            Text("Không tìm thấy thư mục nhạc đã cấp quyền đọc. Hãy cho phép MeloWare đọc nhạc trên điện thoại và quét lại thư viện.",
+                                color = colors.textSecondary, fontSize = 11.sp)
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Text("Chỉ chia sẻ các file âm thanh đã chọn, không chia sẻ toàn bộ bộ nhớ.",
+                                    color = colors.textSecondary, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    controller.selectAllMeloWareFolders(
+                                        controller.wifiSharedFolderPaths.size < folders.size
+                                    )
+                                }) {
+                                    Text(if (controller.wifiSharedFolderPaths.size == folders.size) "Bỏ chọn" else "Chọn hết",
+                                        fontSize = 11.sp, color = colors.purpleBright)
+                                }
+                            }
+                            LazyColumn(
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 148.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                itemsIndexed(folders) { _, folder ->
+                                    val checked = folder.path in controller.wifiSharedFolderPaths
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            controller.setMeloWareFolderShared(folder.path, !checked)
+                                        },
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = checked,
+                                            onCheckedChange = { controller.setMeloWareFolderShared(folder.path, it) }
+                                        )
+                                        Column(Modifier.weight(1f)) {
+                                            Text(folder.path, color = colors.textPrimary,
+                                                fontSize = 11.sp, maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis)
+                                            Text("${folder.count} bài hát", color = colors.textSecondary, fontSize = 10.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    controller.wifiHostError?.let { Text(it, color = colors.red, fontSize = 12.sp) }
+                    controller.wifiLanDiscovery.error?.let { Text(it, color = colors.red, fontSize = 12.sp) }
+                    if (controller.wifiHostBusy) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(19.dp),
+                                strokeWidth = 2.dp, color = colors.purpleBright)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Đang chuẩn bị nguồn nhạc...", color = colors.textSecondary, fontSize = 12.sp)
+                        }
+                    }
+                    if (controller.wifiAppShareEnabled && controller.wifiHostActive) {
+                        Text("Đang chia sẻ · ${controller.wifiHostUrl.orEmpty()}",
+                            color = colors.purpleBright, fontSize = 11.sp)
+                        TextButton(onClick = {
+                            controller.wifiHostUrl?.let { url ->
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("MeloWare LAN", url))
+                                controller.statusMessage = "Đã sao chép địa chỉ MeloWare"
+                            }
+                        }) { Text("Sao chép địa chỉ kết nối", color = colors.purpleBright) }
+                        Text(if (controller.wifiLanDiscovery.isAdvertising)
+                            "Các máy MeloWare cùng Wi-Fi có thể tìm thấy máy này."
+                        else "Đang công bố thiết bị trên mạng...",
+                            color = colors.textSecondary, fontSize = 11.sp)
+                        OutlinedButton(
+                            onClick = controller::stopWifiHost,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Icon(Icons.Rounded.StopCircle, null); Spacer(Modifier.width(6.dp)); Text("Dừng chia sẻ") }
+                    } else {
+                        Button(
+                            onClick = controller::startSharingToMeloWare,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !controller.wifiHostBusy,
+                            colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                        ) { Icon(Icons.Rounded.Wifi, null); Spacer(Modifier.width(8.dp)); Text("Bật chia sẻ qua MeloWare") }
+                    }
+                } else {
+                    Text("Hai máy cần kết nối cùng Wi-Fi. Chọn thiết bị để phát bài hát ngay trong MeloWare.",
+                        color = colors.textSecondary, fontSize = 12.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Thiết bị tìm thấy: ${controller.wifiLanDiscovery.peers.size}",
+                            color = colors.textPrimary, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f), fontSize = 13.sp)
+                        TextButton(onClick = {
+                            controller.stopSearchingMeloWare()
+                            controller.startSearchingMeloWare()
+                        }) { Text("Quét lại", color = colors.purpleBright) }
+                    }
+                    if (controller.wifiLanDiscovery.isSearching && controller.wifiLanDiscovery.peers.isEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp,
+                                color = colors.purpleBright)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Đang tìm điện thoại MeloWare...", color = colors.textSecondary, fontSize = 12.sp)
+                        }
+                    }
+                    controller.wifiLanDiscovery.error?.let { Text(it, color = colors.red, fontSize = 12.sp) }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        itemsIndexed(controller.wifiLanDiscovery.peers) { _, peer ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = colors.backgroundSoft,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, if (controller.wifiReceivingPeer == peer)
+                                    colors.purpleBright else colors.border)
+                            ) {
+                                Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.MusicNote, null, tint = colors.purpleBright,
+                                            modifier = Modifier.size(19.dp))
+                                        Spacer(Modifier.width(7.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(peer.name, color = colors.textPrimary, fontSize = 12.sp,
+                                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(peer.address, color = colors.textSecondary, fontSize = 10.sp)
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.fillMaxWidth()) {
+                                        TextButton(onClick = { controller.receiveFromMeloWare(peer) },
+                                            modifier = Modifier.weight(1f)) {
+                                            Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(17.dp))
+                                            Spacer(Modifier.width(3.dp))
+                                            Text("Nghe đồng bộ", fontSize = 11.sp)
+                                        }
+                                        TextButton(onClick = {
+                                            controller.openMeloWareLibrary(peer)
+                                            showRemoteLibrary = true
+                                        }, modifier = Modifier.weight(1f)) {
+                                            Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(17.dp))
+                                            Spacer(Modifier.width(3.dp))
+                                            Text("Duyệt thư mục", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (controller.wifiLanDiscovery.peers.isEmpty()) {
+                        OutlinedTextField(
+                            value = manualWifiUrl,
+                            onValueChange = { manualWifiUrl = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Hoặc dán URL từ máy A", fontSize = 12.sp) },
+                            singleLine = true
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(
+                                onClick = { controller.receiveFromMeloWareUrl(manualWifiUrl) },
+                                enabled = manualWifiUrl.isNotBlank(),
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                            ) { Text("Nghe đồng bộ", fontSize = 11.sp) }
+                            OutlinedButton(
+                                onClick = {
+                                    if (controller.openMeloWareLibraryUrl(manualWifiUrl)) showRemoteLibrary = true
+                                },
+                                enabled = manualWifiUrl.isNotBlank(),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Duyệt thư mục", fontSize = 11.sp) }
+                        }
+                    }
+                    controller.wifiPeerMessage?.let { Text(it, color = colors.textSecondary, fontSize = 12.sp) }
+                    controller.wifiReceivingPeer?.let { peer ->
+                        Text("Đang nghe từ: ${peer.name}", color = colors.purpleBright, fontSize = 12.sp)
+                        TextButton(onClick = {
+                            controller.openMeloWareLibrary(peer)
+                            showRemoteLibrary = true
+                        }) {
+                            Icon(Icons.Rounded.Folder, null, tint = colors.purpleBright,
+                                modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Duyệt thư mục máy A", color = colors.purpleBright, fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = controller::stopReceivingMeloWare,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Icon(Icons.Rounded.StopCircle, null); Spacer(Modifier.width(6.dp)); Text("Ngắt kết nối") }
+                    }
+                    if (controller.wifiLanDiscovery.peers.isEmpty()) {
+                        Text("Nếu không thấy thiết bị: kiểm tra cùng mạng Wi-Fi, tắt AP isolation trên router và bật Máy gửi trên điện thoại A.",
+                            color = colors.textSecondary, fontSize = 11.sp)
+                    }
+                }
+                Text("Bài đang phát và các thư mục nhạc được máy A cho phép có thể truy cập qua Wi-Fi. Không sử dụng trên Wi-Fi công cộng.",
+                    color = colors.textSecondary, fontSize = 10.sp)
+            }
+        }
+    }
+    if (showRemoteLibrary) {
+        MeloWareRemoteLibraryDialog(
+            controller = controller,
+            onDismiss = {
+                showRemoteLibrary = false
+                controller.closeMeloWareLibrary()
+            },
+            onSongSelected = {
+                showRemoteLibrary = false
+                controller.closeMeloWareLibrary()
+                onDismiss()
+            }
+        )
+    }
+}
+
+/** A real in-app browser: remote folders -> tracks -> ExoPlayer on phone B. */
+@Composable
+private fun MeloWareRemoteLibraryDialog(
+    controller: MusicController,
+    onDismiss: () -> Unit,
+    onSongSelected: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val peer = controller.wifiLibraryPeer
+    val folder = controller.wifiRemoteFolderPath
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.78f),
+            shape = RoundedCornerShape(23.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.48f))
+        ) {
+            Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Folder, contentDescription = null, tint = colors.purpleBright)
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Thư mục nhạc được chia sẻ", color = colors.textPrimary,
+                            fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        Text(peer?.name.orEmpty(), color = colors.textSecondary,
+                            fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng",
+                            tint = colors.textSecondary)
+                    }
+                }
+                if (peer != null && folder == null) {
+                    TextButton(onClick = { controller.openMeloWareLibrary(peer) }) {
+                        Text("Làm mới thư mục", color = colors.purpleBright, fontSize = 12.sp)
+                    }
+                }
+                if (folder != null) {
+                    TextButton(onClick = controller::backToMeloWareFolders) {
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = null,
+                            modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Tất cả thư mục", color = colors.purpleBright)
+                    }
+                    Text(folder, color = colors.textPrimary, fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                controller.wifiRemoteError?.let {
+                    Text(it, color = colors.red, fontSize = 12.sp)
+                }
+                if (controller.wifiRemoteLoading) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp, color = colors.purpleBright)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Đang tải danh sách từ máy A...", color = colors.textSecondary,
+                            fontSize = 12.sp)
+                    }
+                }
+                if (!controller.wifiRemoteLoading && controller.wifiRemoteError == null) {
+                    if (folder == null && controller.wifiRemoteFolders.isEmpty()) {
+                        Text("Máy A chưa chọn thư mục nhạc để chia sẻ. Trên máy A, chọn Máy gửi → Chọn thư mục và đánh dấu những thư mục cho phép truy cập.",
+                            color = colors.textSecondary, fontSize = 12.sp)
+                    } else if (folder != null && controller.wifiRemoteSongs.isEmpty()) {
+                        Text("Thư mục này không có bài nhạc để phát.",
+                            color = colors.textSecondary, fontSize = 12.sp)
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (folder == null) {
+                        itemsIndexed(controller.wifiRemoteFolders) { _, item ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    controller.loadMeloWareFolder(item.path)
+                                },
+                                color = colors.backgroundSoft,
+                                shape = RoundedCornerShape(11.dp),
+                                border = BorderStroke(1.dp, colors.border)
+                            ) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Rounded.Folder, null, tint = colors.purpleBright,
+                                        modifier = Modifier.size(24.dp))
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(item.path, fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = colors.textPrimary, maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis)
+                                        Text("${item.count} bài hát", color = colors.textSecondary,
+                                            fontSize = 11.sp)
+                                    }
+                                    Icon(Icons.Rounded.KeyboardArrowRight, null,
+                                        tint = colors.textSecondary)
+                                }
+                            }
+                        }
+                    } else {
+                        itemsIndexed(controller.wifiRemoteSongs) { index, item ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    controller.playFromMeloWareFolder(index)
+                                    onSongSelected()
+                                },
+                                color = colors.backgroundSoft,
+                                shape = RoundedCornerShape(11.dp),
+                                border = BorderStroke(1.dp, colors.border)
+                            ) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Rounded.MusicNote, null, tint = colors.purpleBright,
+                                        modifier = Modifier.size(22.dp))
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(item.title, color = colors.textPrimary, fontSize = 13.sp,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${item.artist} · ${formatDuration(item.durationMs)}",
+                                            color = colors.textSecondary, fontSize = 11.sp,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Icon(Icons.Rounded.PlayArrow, null, tint = colors.purpleBright)
+                                }
+                            }
+                        }
+                        if (controller.wifiRemoteNextOffset >= 0) {
+                            item {
+                                TextButton(onClick = controller::loadMoreMeloWareFolder,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !controller.wifiRemoteLoading) {
+                                    Text("Tải thêm bài hát", color = colors.purpleBright)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("Chỉ đọc file nhạc được máy A cho phép. Không thể xem ảnh, tài liệu hoặc sửa/xóa file của máy A.",
+                    color = colors.textSecondary, fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WifiHostDialog(
+    controller: MusicController,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val context = LocalContext.current
+    val url = controller.wifiHostUrl
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.50f))
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = colors.purple.copy(alpha = 0.16f)
+                    ) {
+                        Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Wifi, contentDescription = null, tint = colors.purpleBright)
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Phát nhạc qua Wi-Fi", color = colors.textPrimary, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                        Text("Mở đường dẫn trên thiết bị cùng mạng", color = colors.textSecondary, fontSize = 11.sp)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+
+                if (controller.wifiHostBusy) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = colors.purpleBright)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Đang chuẩn bị file và máy chủ nội bộ...", color = colors.textSecondary)
+                    }
+                }
+
+                controller.wifiHostError?.let { error ->
+                    Text(error, color = colors.red, fontSize = 12.sp)
+                }
+
+                if (!url.isNullOrBlank()) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        color = colors.backgroundSoft,
+                        border = BorderStroke(1.dp, colors.border)
+                    ) {
+                        Text(
+                            url,
+                            modifier = Modifier.padding(13.dp),
+                            color = colors.purpleBright,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Text(
+                        "Thiết bị nhận phải kết nối cùng Wi-Fi với điện thoại. Có thể mở URL bằng trình duyệt, VLC hoặc thiết bị âm thanh hỗ trợ URL mạng.",
+                        color = colors.textSecondary,
+                        fontSize = 11.sp
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("MeloWare Wi-Fi URL", url))
+                                controller.statusMessage = "Đã sao chép đường dẫn Wi-Fi"
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Sao chép")
+                        }
+                        Button(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, url)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Chia sẻ đường dẫn MeloWare"))
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                        ) {
+                            Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Chia sẻ")
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            controller.stopWifiHost()
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.StopCircle, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Dừng máy chủ Wi-Fi")
+                    }
+                } else if (!controller.wifiHostBusy) {
+                    Button(
+                        onClick = controller::toggleWifiHost,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                    ) {
+                        Icon(Icons.Rounded.Wifi, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Bắt đầu phát qua Wi-Fi")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TrackTitleBlock(
     controller: MusicController,
     song: SongItem
 ) {
     val colors = LocalMusicColors.current
+    val technicalInfo = controller.audioTechnicalInfoFor(song)
+    LaunchedEffect(song.id, controller.isLoading) {
+        if (!controller.isLoading) controller.ensureAudioTechnicalInfo(song)
+    }
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -719,40 +1873,66 @@ private fun TrackTitleBlock(
             }
         }
         Spacer(Modifier.height(8.dp))
-        LazyRow(
+        Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(end = 10.dp)
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            item {
-                MetadataChip(
-                    controller.sourceLabel(song.source),
-                    if (song.source == SongSource.YOUTUBE) Icons.Rounded.Tv else Icons.Rounded.Cloud
-                )
-            }
-            item { MetadataChip(controller.formatBadge(song), Icons.Rounded.MusicNote) }
-            if (song.mimeType?.contains("flac", ignoreCase = true) == true) {
-                item { MetadataChip("Lossless", Icons.Rounded.Equalizer) }
-            }
+            MetadataChip(
+                text = technicalInfo.qualityLabel,
+                icon = Icons.Rounded.Equalizer,
+                modifier = Modifier.weight(1f)
+            )
+            MetadataChip(
+                text = technicalInfo.extensionLabel,
+                icon = Icons.Rounded.MusicNote,
+                modifier = Modifier.weight(1f)
+            )
+            MetadataChip(
+                text = technicalInfo.sizeLabel,
+                icon = Icons.Rounded.Download,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
 
 @Composable
-private fun MetadataChip(text: String, icon: ImageVector) {
+private fun MetadataChip(
+    text: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier
+) {
     val colors = LocalMusicColors.current
     Surface(
+        modifier = modifier.height(44.dp),
         shape = RoundedCornerShape(16.dp),
         color = colors.purple.copy(alpha = 0.13f),
         border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.32f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, contentDescription = null, tint = colors.purpleBright, modifier = Modifier.size(17.dp))
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = colors.purpleBright,
+                modifier = Modifier.size(17.dp)
+            )
             Spacer(Modifier.width(5.dp))
-            Text(text, color = colors.purpleBright, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = text,
+                color = colors.purpleBright,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -878,9 +2058,9 @@ private fun PlayerActions(
     onQueue: () -> Unit,
     queueVisible: Boolean
 ) {
-    val isYoutube = song.source == SongSource.YOUTUBE
+    val isMovie = song.source == SongSource.MOVIE
 
-    // Khong cuon ngang: 5 nut cho nhac, 4 nut cho YouTube.
+    // Khong cuon ngang: 5 nut cho nhac, 4 nut cho Movie.
     // Gioi han chieu rong de cac nut gon va sat nhau tren man hinh lon,
     // nhung van tu co theo be rong thuc te cua dien thoai nho.
     Box(
@@ -888,11 +2068,11 @@ private fun PlayerActions(
         contentAlignment = Alignment.Center
     ) {
         Row(
-            modifier = Modifier.widthIn(max = if (isYoutube) 276.dp else 325.dp),
+            modifier = Modifier.widthIn(max = if (isMovie) 276.dp else 325.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.Top
         ) {
-            if (!isYoutube) {
+            if (!isMovie) {
                 PlayerAction(
                     icon = Icons.Rounded.Equalizer,
                     label = "Equalizer",
@@ -913,7 +2093,7 @@ private fun PlayerActions(
                 onClick = onTimer,
                 modifier = Modifier.weight(1f)
             )
-            if (!isYoutube) {
+            if (!isMovie) {
                 PlayerAction(
                     icon = Icons.Rounded.Download,
                     label = "Tải về",
@@ -923,8 +2103,8 @@ private fun PlayerActions(
             } else {
                 PlayerAction(
                     icon = Icons.Rounded.Tv,
-                    label = "YouTube",
-                    onClick = controller::openCurrentYoutubeExternally,
+                    label = "Movie",
+                    onClick = controller::openCurrentMovieExternally,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1031,7 +2211,7 @@ private fun QueuePanel(
 
 @Composable
 private fun EqualizerDialog(
-    audioSessionId: Int,
+    controller: MusicController,
     onDismiss: () -> Unit
 ) {
     val colors = LocalMusicColors.current
@@ -1049,8 +2229,7 @@ private fun EqualizerDialog(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 EqualizerPanel(
-                    audioSessionId = audioSessionId,
-                    onImportAudio = {},
+                    controller = controller,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = 38.dp)
@@ -1155,8 +2334,7 @@ private data class EqPreset(
 
 @Composable
 internal fun EqualizerPanel(
-    audioSessionId: Int,
-    onImportAudio: () -> Unit,
+    controller: MusicController,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalMusicColors.current
@@ -1175,89 +2353,10 @@ internal fun EqualizerPanel(
         )
     }
 
-    var bass by rememberSaveable { mutableIntStateOf(4) }
-    var mid by rememberSaveable { mutableIntStateOf(2) }
-    var treble by rememberSaveable { mutableIntStateOf(3) }
-    var selectedPresetIndex by rememberSaveable { mutableIntStateOf(0) }
-    var loudnessEnabled by rememberSaveable { mutableStateOf(true) }
-    var advancedMode by rememberSaveable { mutableStateOf(false) }
     var showAdvancedDialog by rememberSaveable { mutableStateOf(false) }
 
-    var band60 by rememberSaveable { mutableIntStateOf(4) }
-    var band230 by rememberSaveable { mutableIntStateOf(3) }
-    var band910 by rememberSaveable { mutableIntStateOf(2) }
-    var band3600 by rememberSaveable { mutableIntStateOf(2) }
-    var band14000 by rememberSaveable { mutableIntStateOf(3) }
-
-    val audioFxEngine = remember { AudioFxEngine() }
-    var audioFxReady by remember { mutableStateOf(false) }
-
-    LaunchedEffect(audioSessionId) {
-        audioFxReady = audioFxEngine.attach(audioSessionId)
-    }
-
-    LaunchedEffect(
-        audioFxReady, advancedMode, bass, mid, treble,
-        band60, band230, band910, band3600, band14000, loudnessEnabled,
-    ) {
-        delay(100L)
-        if (audioFxReady) {
-            withContext(Dispatchers.IO) {
-                if (advancedMode) {
-                    audioFxEngine.applyFiveBand(
-                        intArrayOf(band60, band230, band910, band3600, band14000),
-                    )
-                } else {
-                    audioFxEngine.applyThreeBand(bass, mid, treble)
-                }
-                audioFxEngine.setLoudness(loudnessEnabled)
-            }
-        }
-    }
-
-    DisposableEffect(audioFxEngine) {
-        onDispose { audioFxEngine.release() }
-    }
-
-    fun selectPreset(index: Int, preset: EqPreset) {
-        selectedPresetIndex = index
-        advancedMode = false
-        if (index != 0) {
-            bass = preset.bass
-            mid = preset.mid
-            treble = preset.treble
-        }
-    }
-
-    fun updateBass(value: Int) {
-        bass = value.coerceIn(-6, 6)
-        selectedPresetIndex = 0
-        advancedMode = false
-    }
-
-    fun updateMid(value: Int) {
-        mid = value.coerceIn(-6, 6)
-        selectedPresetIndex = 0
-        advancedMode = false
-    }
-
-    fun updateTreble(value: Int) {
-        treble = value.coerceIn(-6, 6)
-        selectedPresetIndex = 0
-        advancedMode = false
-    }
-
-    fun resetEqualizer() {
-        bass = 0
-        mid = 0
-        treble = 0
-        band60 = 0
-        band230 = 0
-        band910 = 0
-        band3600 = 0
-        band14000 = 0
-        selectedPresetIndex = 1
-        advancedMode = false
+    LaunchedEffect(Unit) {
+        controller.refreshEqualizer()
     }
 
     Surface(
@@ -1266,8 +2365,11 @@ internal fun EqualizerPanel(
         color = palette.card.copy(alpha = 0.94f),
         border = BorderStroke(1.dp, palette.border),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp).fillMaxSize()) {
-
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .fillMaxSize()
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1279,19 +2381,32 @@ internal fun EqualizerPanel(
                     Icon(
                         imageVector = Icons.Rounded.Tune,
                         contentDescription = null,
-                        tint = palette.textSecondary,
+                        tint = if (controller.equalizerReady) palette.purpleBright else palette.textSecondary,
                         modifier = Modifier.size(26.dp),
                     )
-                    Text(
-                        text = "Equalizer",
-                        color = palette.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                    )
+                    Column {
+                        Text(
+                            text = "Equalizer",
+                            color = palette.textPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                        )
+                        Text(
+                            text = when {
+                                controller.equalizerReady -> "Đang áp dụng cho phiên âm thanh ${controller.audioSessionId}"
+                                controller.audioSessionId <= 0 -> eqStrings.errStartPlay()
+                                else -> controller.equalizerError ?: eqStrings.errNoFx()
+                            },
+                            color = if (controller.equalizerReady) palette.purpleBright else palette.textMuted,
+                            fontSize = 10.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1301,13 +2416,20 @@ internal fun EqualizerPanel(
                     PresetChip(
                         label = preset.name,
                         icon = preset.icon,
-                        selected = selectedPresetIndex == index,
-                        onClick = { selectPreset(index, preset) },
+                        selected = controller.equalizerSelectedPresetIndex == index,
+                        onClick = {
+                            controller.selectEqualizerPreset(
+                                index = index,
+                                bass = preset.bass,
+                                mid = preset.mid,
+                                treble = preset.treble
+                            )
+                        },
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth().weight(1f),
@@ -1316,25 +2438,25 @@ internal fun EqualizerPanel(
             ) {
                 EqControlColumn(
                     label = "BASS",
-                    value = bass,
-                    onValueChange = ::updateBass,
+                    value = controller.equalizerBass,
+                    onValueChange = controller::updateEqualizerBass,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
                 EqControlColumn(
                     label = "MID",
-                    value = mid,
-                    onValueChange = ::updateMid,
+                    value = controller.equalizerMid,
+                    onValueChange = controller::updateEqualizerMid,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
                 EqControlColumn(
                     label = "TREBLE",
-                    value = treble,
-                    onValueChange = ::updateTreble,
+                    value = controller.equalizerTreble,
+                    onValueChange = controller::updateEqualizerTreble,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1343,21 +2465,12 @@ internal fun EqualizerPanel(
             ) {
                 OutlinedButton(
                     onClick = {
-                        if (!advancedMode) {
-                            band60 = bass
-                            band230 = ((bass + mid) / 2f).roundToInt()
-                            band910 = mid
-                            band3600 = ((mid + treble) / 2f).roundToInt()
-                            band14000 = treble
-                        }
+                        controller.prepareAdvancedEqualizerBands()
                         showAdvancedDialog = true
                     },
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, palette.border),
-                    contentPadding = PaddingValues(
-                        horizontal = 12.dp,
-                        vertical = 7.dp,
-                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 7.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.GraphicEq,
@@ -1366,21 +2479,14 @@ internal fun EqualizerPanel(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = eqStrings.advanced(),
-                        color = palette.textPrimary,
-                        fontSize = 12.sp,
-                    )
+                    Text(eqStrings.advanced(), color = palette.textPrimary, fontSize = 12.sp)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 OutlinedButton(
-                    onClick = ::resetEqualizer,
+                    onClick = controller::resetEqualizer,
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, palette.border),
-                    contentPadding = PaddingValues(
-                        horizontal = 11.dp,
-                        vertical = 7.dp,
-                    ),
+                    contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.RestartAlt,
@@ -1389,49 +2495,43 @@ internal fun EqualizerPanel(
                         modifier = Modifier.size(17.dp),
                     )
                     Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                        text = eqStrings.reset(),
-                        color = palette.textPrimary,
-                        fontSize = 12.sp,
-                    )
+                    Text(eqStrings.reset(), color = palette.textPrimary, fontSize = 12.sp)
                 }
             }
 
-            if (audioSessionId <= 0 || !audioFxReady) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = if (audioSessionId <= 0) eqStrings.errStartPlay() else eqStrings.errNoFx(),
-                    color = palette.textMuted,
-                    fontSize = 11.sp,
-                )
+            controller.equalizerError?.takeIf { !controller.equalizerReady }?.let { error ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = error,
+                        color = palette.textMuted,
+                        fontSize = 10.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = controller::refreshEqualizer) {
+                        Text("Thử lại", color = palette.purpleBright, fontSize = 11.sp)
+                    }
+                }
             }
         }
     }
 
     if (showAdvancedDialog) {
         AdvancedEqDialog(
-            values = listOf(band60, band230, band910, band3600, band14000),
+            values = listOf(
+                controller.equalizerBand60,
+                controller.equalizerBand230,
+                controller.equalizerBand910,
+                controller.equalizerBand3600,
+                controller.equalizerBand14000
+            ),
             eqStrings = eqStrings,
-            onValueChange = { index, value ->
-                when (index) {
-                    0 -> band60 = value
-                    1 -> band230 = value
-                    2 -> band910 = value
-                    3 -> band3600 = value
-                    4 -> band14000 = value
-                }
-                advancedMode = true
-                selectedPresetIndex = 0
-            },
-            onFlat = {
-                band60 = 0
-                band230 = 0
-                band910 = 0
-                band3600 = 0
-                band14000 = 0
-                advancedMode = true
-                selectedPresetIndex = 0
-            },
+            onValueChange = controller::updateAdvancedEqualizerBand,
+            onFlat = controller::setAdvancedEqualizerFlat,
             onDismiss = { showAdvancedDialog = false },
         )
     }
@@ -1906,131 +3006,3 @@ private fun AdvancedBandRow(
 }
 
 private fun formatDb(value: Int): String = if (value > 0) "+$value" else value.toString()
-
-private class AudioFxEngine {
-    private var equalizer: AndroidEqualizer? = null
-    private var loudnessEnhancer: LoudnessEnhancer? = null
-    private var bassBoost: BassBoost? = null
-    private var sessionId: Int = 0
-
-    fun attach(newSessionId: Int): Boolean {
-        if (newSessionId <= 0) {
-            release()
-            return false
-        }
-        if (newSessionId == sessionId && (equalizer != null || loudnessEnhancer != null || bassBoost != null)) {
-            return true
-        }
-
-        release()
-        sessionId = newSessionId
-
-        equalizer = runCatching {
-            AndroidEqualizer(0, newSessionId).apply {
-                enabled = true
-            }
-        }.getOrNull()
-
-        loudnessEnhancer = runCatching {
-            LoudnessEnhancer(newSessionId).apply {
-                setTargetGain(600)
-                enabled = false
-            }
-        }.getOrNull()
-
-        bassBoost = runCatching {
-            BassBoost(0, newSessionId).apply {
-                enabled = true
-            }
-        }.getOrNull()
-
-        return equalizer != null || loudnessEnhancer != null || bassBoost != null
-    }
-
-    private fun applyHardwareBass(bassValue: Int) {
-        val effect = bassBoost ?: return
-        runCatching {
-            if (bassValue > 0) {
-                effect.enabled = true
-                val strength = ((bassValue / 6f) * 1000f).coerceIn(0f, 1000f).toInt().toShort()
-                effect.setStrength(strength)
-            } else {
-                effect.enabled = false
-            }
-        }
-    }
-
-    fun applyThreeBand(bass: Int, mid: Int, treble: Int) {
-        applyHardwareBass(bass)
-
-        val effect = equalizer ?: return
-        val levelRange = runCatching { effect.bandLevelRange }.getOrNull() ?: return
-        if (levelRange.size < 2) return
-        val minimumLevel = levelRange[0].toInt()
-        val maximumLevel = levelRange[1].toInt()
-        val bandCount = runCatching { effect.numberOfBands.toInt() }.getOrDefault(0)
-
-        for (bandIndex in 0 until bandCount) {
-            val band = bandIndex.toShort()
-            val centerHz = runCatching { effect.getCenterFreq(band) / 1000f }.getOrDefault(0f)
-            val desiredDb = when {
-                centerHz < 300f -> bass
-                centerHz < 4000f -> mid
-                else -> treble
-            }
-            val desiredMillibels = (desiredDb * 100).coerceIn(minimumLevel, maximumLevel)
-            runCatching {
-                effect.setBandLevel(band, desiredMillibels.toShort())
-            }
-        }
-    }
-
-    fun applyFiveBand(values: IntArray) {
-        if (values.isNotEmpty()) {
-            applyHardwareBass(values[0])
-        }
-
-        val effect = equalizer ?: return
-        if (values.size < 5) return
-        val levelRange = runCatching { effect.bandLevelRange }.getOrNull() ?: return
-        if (levelRange.size < 2) return
-        val minimumLevel = levelRange[0].toInt()
-        val maximumLevel = levelRange[1].toInt()
-        val targetFrequencies = floatArrayOf(60f, 230f, 910f, 3600f, 14000f)
-        val bandCount = runCatching { effect.numberOfBands.toInt() }.getOrDefault(0)
-
-        for (bandIndex in 0 until bandCount) {
-            val band = bandIndex.toShort()
-            val centerHz = runCatching { effect.getCenterFreq(band) / 1000f }.getOrDefault(1f)
-            val closestTarget = targetFrequencies.indices.minByOrNull { targetIndex ->
-                abs(ln(max(centerHz, 1f).toDouble() / targetFrequencies[targetIndex].toDouble()))
-            } ?: 0
-            val desiredMillibels = (values[closestTarget] * 100)
-                .coerceIn(minimumLevel, maximumLevel)
-            runCatching {
-                effect.setBandLevel(band, desiredMillibels.toShort())
-            }
-        }
-    }
-
-    fun setLoudness(enabled: Boolean) {
-        val effect = loudnessEnhancer ?: return
-        runCatching {
-            effect.setTargetGain(600)
-            effect.enabled = enabled
-        }
-    }
-
-    fun release() {
-        runCatching { equalizer?.enabled = false }
-        runCatching { loudnessEnhancer?.enabled = false }
-        runCatching { bassBoost?.enabled = false }
-        runCatching { equalizer?.release() }
-        runCatching { loudnessEnhancer?.release() }
-        runCatching { bassBoost?.release() }
-        equalizer = null
-        loudnessEnhancer = null
-        bassBoost = null
-        sessionId = 0
-    }
-}
