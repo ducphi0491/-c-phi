@@ -8,10 +8,18 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.media.RingtoneManager
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer as AndroidEqualizer
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
+import android.os.Handler
+import android.os.Looper
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.Toast
 import android.webkit.WebView
@@ -23,6 +31,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -36,6 +45,21 @@ import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
+import com.google.android.gms.cast.CastMediaControlIntent
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaMetadata as CastMediaMetadata
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastOptions
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.CastState
+import com.google.android.gms.cast.framework.CastStateListener
+import com.google.android.gms.cast.framework.OptionsProvider
+import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.cast.framework.SessionProvider
+import com.google.android.gms.cast.framework.media.CastMediaOptions
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import com.google.android.gms.common.images.WebImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,13 +76,24 @@ import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.ArrayDeque
 import java.util.Locale
+import java.util.Collections
+import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
@@ -93,7 +128,7 @@ internal enum class RepeatSetting {
 
 internal enum class OnlineSearchMode {
     APPLE_MUSIC,
-    YOUTUBE
+    MOVIE
 }
 
 internal enum class SongSource {
@@ -102,7 +137,7 @@ internal enum class SongSource {
     PUBLIC_DRIVE,
     DOWNLOADED,
     ONLINE_HTTP,
-    YOUTUBE,
+    MOVIE,
     APP_RESOURCE
 }
 
@@ -121,6 +156,48 @@ internal data class SongItem(
     val durationLabel: String
         get() = if (durationMs > 0L) formatDuration(durationMs) else "--:--"
 }
+
+internal data class MeloWareLanPeer(
+    val name: String,
+    val address: String,
+    val port: Int,
+    val token: String
+)
+
+internal data class MeloWareSharedTrack(
+    val key: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationMs: Long,
+    val mimeType: String
+)
+
+internal data class AudioTechnicalInfo(
+    val qualityLabel: String,
+    val extensionLabel: String,
+    val sizeLabel: String,
+    val bitrateKbps: Int? = null,
+    val sampleRateHz: Int? = null,
+    val sizeBytes: Long? = null
+)
+
+internal data class LyricLine(
+    val timestampMs: Long?,
+    val text: String
+)
+
+internal data class LyricsContent(
+    val recordId: Long,
+    val trackName: String,
+    val artistName: String,
+    val albumName: String,
+    val durationMs: Long,
+    val instrumental: Boolean,
+    val synced: Boolean,
+    val lines: List<LyricLine>,
+    val sourceName: String = "LRCLIB"
+)
 
 internal data class MusicFolder(
     val name: String,
@@ -266,6 +343,48 @@ internal class MusicController(private val context: Context) {
     private val artworkRequests = mutableSetOf<String>()
     private val cachedPlaybackUris = mutableMapOf<String, Uri>()
     private val activeTransformers = mutableSetOf<Transformer>()
+    private val audioTechnicalInfoById = mutableStateMapOf<String, AudioTechnicalInfo>()
+    private val lyricsBySongId = mutableStateMapOf<String, LyricsContent>()
+    private val lyricsLoadingBySongId = mutableStateMapOf<String, Boolean>()
+    private val lyricsErrorBySongId = mutableStateMapOf<String, String>()
+    private val lyricsJobs = mutableMapOf<String, Job>()
+    private val audioFxEngine = PersistentAudioFxEngine()
+    val wifiLanDiscovery = MeloWareLanDiscovery(context.applicationContext)
+    private var wifiAppShareRequested = false
+    var wifiAppShareEnabled by mutableStateOf(false)
+        private set
+    var wifiReceivingPeer by mutableStateOf<MeloWareLanPeer?>(null)
+        private set
+    var wifiPeerMessage by mutableStateOf<String?>(null)
+        private set
+    private var wifiPeerReceiveJob: Job? = null
+    private var wifiLastRemoteKey: String? = null
+
+    private var localAudioServer: LocalAudioHttpServer? = null
+    private var hostedSongId: String? = null
+    private var wifiHostRequestedByUser = false
+    var wifiHostActive by mutableStateOf(false)
+        private set
+    var wifiHostBusy by mutableStateOf(false)
+        private set
+    var wifiHostUrl by mutableStateOf<String?>(null)
+        private set
+    var wifiHostError by mutableStateOf<String?>(null)
+        private set
+
+    private var castContext: CastContext? = null
+    private var castInitialized = false
+    private var castSessionListener: SessionManagerListener<CastSession>? = null
+    private var castStateListener: CastStateListener? = null
+    private var remoteMediaCallback: RemoteMediaClient.Callback? = null
+    private var remoteProgressListener: RemoteMediaClient.ProgressListener? = null
+    var castConnected by mutableStateOf(false)
+        private set
+    var castConnecting by mutableStateOf(false)
+        private set
+    var castDeviceName by mutableStateOf<String?>(null)
+        private set
+
 
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         val attributes = AudioAttributes.Builder()
@@ -303,6 +422,41 @@ internal class MusicController(private val context: Context) {
         private set
     var audioSessionId by mutableIntStateOf(0)
         private set
+
+    // Equalizer state belongs to the player/controller, not to the dialog UI.
+    // This keeps the effect active after the Equalizer window is closed and
+    // lets it reattach automatically whenever ExoPlayer creates a new session.
+    var equalizerBass by mutableIntStateOf(prefs.getInt(KEY_EQ_BASS, 4))
+        private set
+    var equalizerMid by mutableIntStateOf(prefs.getInt(KEY_EQ_MID, 2))
+        private set
+    var equalizerTreble by mutableIntStateOf(prefs.getInt(KEY_EQ_TREBLE, 3))
+        private set
+    var equalizerBand60 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_60, 4))
+        private set
+    var equalizerBand230 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_230, 3))
+        private set
+    var equalizerBand910 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_910, 2))
+        private set
+    var equalizerBand3600 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_3600, 2))
+        private set
+    var equalizerBand14000 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_14000, 3))
+        private set
+    var equalizerSelectedPresetIndex by mutableIntStateOf(prefs.getInt(KEY_EQ_PRESET, 0))
+        private set
+    var equalizerAdvancedMode by mutableStateOf(prefs.getBoolean(KEY_EQ_ADVANCED, false))
+        private set
+    var equalizerLoudnessEnabled by mutableStateOf(prefs.getBoolean(KEY_EQ_LOUDNESS, false))
+        private set
+    var equalizerEnabled by mutableStateOf(prefs.getBoolean(KEY_EQ_ENABLED, false))
+        private set
+    var equalizerReady by mutableStateOf(false)
+        private set
+    var equalizerHasControl by mutableStateOf(false)
+        private set
+    var equalizerError by mutableStateOf<String?>(null)
+        private set
+
     var shuffleEnabled by mutableStateOf(false)
     var repeatSetting by mutableStateOf(RepeatSetting.OFF)
     var errorMessage by mutableStateOf<String?>(null)
@@ -361,7 +515,7 @@ internal class MusicController(private val context: Context) {
     var audioToolBusy by mutableStateOf(false)
         private set
 
-    private var youtubeWebView: WebView? = null
+    private var movieWebView: WebView? = null
 
     val currentSong: SongItem?
         get() = queue.getOrNull(currentIndex)
@@ -371,7 +525,7 @@ internal class MusicController(private val context: Context) {
         configurePlayerListener()
         tickerJob = scope.launch {
             while (true) {
-                if (currentSong?.source != SongSource.YOUTUBE) {
+                if (currentSong?.source != SongSource.MOVIE && !castConnected) {
                     positionMs = player.currentPosition.coerceAtLeast(0L)
                     val detected = player.duration
                     durationMs = if (detected == C.TIME_UNSET || detected <= 0L) 1L else detected
@@ -385,9 +539,16 @@ internal class MusicController(private val context: Context) {
         playbackJob?.cancel()
         tickerJob?.cancel()
         sleepTimerJob?.cancel()
+        lyricsJobs.values.forEach(Job::cancel)
+        lyricsJobs.clear()
         saveQueue()
-        youtubeWebView = null
+        movieWebView = null
         activeTransformers.clear()
+        stopReceivingMeloWare()
+        wifiLanDiscovery.stopDiscovery()
+        stopWifiHostInternal(clearUserRequest = true)
+        unregisterCastListeners()
+        audioFxEngine.release()
         player.release()
         scope.cancel()
     }
@@ -398,6 +559,516 @@ internal class MusicController(private val context: Context) {
 
     fun dismissStatus() {
         statusMessage = null
+    }
+
+    fun lyricsFor(song: SongItem): LyricsContent? = lyricsBySongId[song.id]
+
+    fun lyricsLoading(song: SongItem): Boolean = lyricsLoadingBySongId[song.id] == true
+
+    fun lyricsError(song: SongItem): String? = lyricsErrorBySongId[song.id]
+
+    fun loadLyrics(song: SongItem, forceRefresh: Boolean = false) {
+        if (!forceRefresh && lyricsBySongId.containsKey(song.id)) return
+        if (lyricsLoadingBySongId[song.id] == true) return
+
+        lyricsJobs.remove(song.id)?.cancel()
+        lyricsLoadingBySongId[song.id] = true
+        lyricsErrorBySongId.remove(song.id)
+
+        val knownDurationMs = when {
+            song.durationMs > 1_000L -> song.durationMs
+            currentSong?.id == song.id && durationMs > 1_000L -> durationMs
+            else -> 0L
+        }
+
+        lyricsJobs[song.id] = scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    LrclibLyricsRepository.findLyrics(
+                        context = context,
+                        song = song,
+                        knownDurationMs = knownDurationMs,
+                        forceRefresh = forceRefresh
+                    )
+                }
+            }
+            lyricsLoadingBySongId[song.id] = false
+            lyricsJobs.remove(song.id)
+            result.onSuccess { content ->
+                lyricsBySongId[song.id] = content
+                lyricsErrorBySongId.remove(song.id)
+            }.onFailure { error ->
+                lyricsErrorBySongId[song.id] = error.localizedMessage
+                    ?: "Không tìm thấy lời bài hát phù hợp trên LRCLIB."
+            }
+        }
+    }
+
+    fun audioTechnicalInfoFor(song: SongItem): AudioTechnicalInfo =
+        audioTechnicalInfoById[song.id] ?: provisionalAudioTechnicalInfo(song)
+
+    fun ensureAudioTechnicalInfo(song: SongItem) {
+        val existing = audioTechnicalInfoById[song.id]
+        val driveCacheReady = song.source in setOf(SongSource.PERSONAL_DRIVE, SongSource.PUBLIC_DRIVE) &&
+                cachedPlaybackUris[song.id]?.path?.let(::File)?.takeIf(File::isFile)?.length()?.let { it > 0L } == true
+        // Với bài Drive, metadata có thể được đọc quá sớm trước khi file cache sẵn sàng.
+        // Khi cache đã xuất hiện mà dung lượng cũ vẫn chưa biết, cho phép đọc lại một lần.
+        if (existing != null && !(driveCacheReady && existing.sizeBytes == null)) return
+        scope.launch {
+            val info = runCatching {
+                withContext(Dispatchers.IO) { readAudioTechnicalInfo(song) }
+            }.getOrElse { provisionalAudioTechnicalInfo(song) }
+            audioTechnicalInfoById[song.id] = info
+        }
+    }
+
+    fun selectEqualizerPreset(index: Int, bass: Int, mid: Int, treble: Int) {
+        equalizerEnabled = true
+        equalizerSelectedPresetIndex = index.coerceAtLeast(0)
+        equalizerAdvancedMode = false
+        if (index != 0) {
+            equalizerBass = bass.coerceIn(-6, 6)
+            equalizerMid = mid.coerceIn(-6, 6)
+            equalizerTreble = treble.coerceIn(-6, 6)
+        }
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun updateEqualizerBass(value: Int) {
+        equalizerEnabled = true
+        equalizerBass = value.coerceIn(-6, 6)
+        equalizerSelectedPresetIndex = 0
+        equalizerAdvancedMode = false
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun updateEqualizerMid(value: Int) {
+        equalizerEnabled = true
+        equalizerMid = value.coerceIn(-6, 6)
+        equalizerSelectedPresetIndex = 0
+        equalizerAdvancedMode = false
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun updateEqualizerTreble(value: Int) {
+        equalizerEnabled = true
+        equalizerTreble = value.coerceIn(-6, 6)
+        equalizerSelectedPresetIndex = 0
+        equalizerAdvancedMode = false
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun prepareAdvancedEqualizerBands() {
+        if (equalizerAdvancedMode) return
+        equalizerBand60 = equalizerBass
+        equalizerBand230 = ((equalizerBass + equalizerMid) / 2f).toInt().coerceIn(-6, 6)
+        equalizerBand910 = equalizerMid
+        equalizerBand3600 = ((equalizerMid + equalizerTreble) / 2f).toInt().coerceIn(-6, 6)
+        equalizerBand14000 = equalizerTreble
+        persistEqualizerState()
+    }
+
+    fun updateAdvancedEqualizerBand(index: Int, value: Int) {
+        equalizerEnabled = true
+        val safe = value.coerceIn(-6, 6)
+        when (index) {
+            0 -> equalizerBand60 = safe
+            1 -> equalizerBand230 = safe
+            2 -> equalizerBand910 = safe
+            3 -> equalizerBand3600 = safe
+            4 -> equalizerBand14000 = safe
+            else -> return
+        }
+        equalizerAdvancedMode = true
+        equalizerSelectedPresetIndex = 0
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun setAdvancedEqualizerFlat() {
+        equalizerEnabled = true
+        equalizerBand60 = 0
+        equalizerBand230 = 0
+        equalizerBand910 = 0
+        equalizerBand3600 = 0
+        equalizerBand14000 = 0
+        equalizerAdvancedMode = true
+        equalizerSelectedPresetIndex = 0
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun setEqualizerLoudness(enabled: Boolean) {
+        equalizerEnabled = true
+        equalizerLoudnessEnabled = enabled
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun resetEqualizer() {
+        equalizerEnabled = true
+        equalizerBass = 0
+        equalizerMid = 0
+        equalizerTreble = 0
+        equalizerBand60 = 0
+        equalizerBand230 = 0
+        equalizerBand910 = 0
+        equalizerBand3600 = 0
+        equalizerBand14000 = 0
+        equalizerSelectedPresetIndex = 1
+        equalizerAdvancedMode = false
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun refreshEqualizer() {
+        equalizerEnabled = true
+        persistEqualizerState()
+        applyEqualizerSettings(force = true)
+    }
+
+    private fun persistEqualizerState() {
+        prefs.edit()
+            .putInt(KEY_EQ_BASS, equalizerBass)
+            .putInt(KEY_EQ_MID, equalizerMid)
+            .putInt(KEY_EQ_TREBLE, equalizerTreble)
+            .putInt(KEY_EQ_BAND_60, equalizerBand60)
+            .putInt(KEY_EQ_BAND_230, equalizerBand230)
+            .putInt(KEY_EQ_BAND_910, equalizerBand910)
+            .putInt(KEY_EQ_BAND_3600, equalizerBand3600)
+            .putInt(KEY_EQ_BAND_14000, equalizerBand14000)
+            .putInt(KEY_EQ_PRESET, equalizerSelectedPresetIndex)
+            .putBoolean(KEY_EQ_ADVANCED, equalizerAdvancedMode)
+            .putBoolean(KEY_EQ_LOUDNESS, equalizerLoudnessEnabled)
+            .putBoolean(KEY_EQ_ENABLED, equalizerEnabled)
+            .apply()
+    }
+
+    private fun attachAndApplyEqualizer(sessionId: Int, force: Boolean = false) {
+        if (sessionId <= 0 || sessionId == C.AUDIO_SESSION_ID_UNSET) {
+            equalizerReady = false
+            equalizerHasControl = false
+            equalizerError = "Phiên âm thanh chưa sẵn sàng."
+            return
+        }
+
+        audioSessionId = sessionId
+        val attach = audioFxEngine.attach(sessionId, force)
+        equalizerReady = attach.ready
+        equalizerHasControl = attach.hasControl
+        equalizerError = attach.error
+        if (!attach.ready) return
+
+        val applyError = if (equalizerAdvancedMode) {
+            audioFxEngine.applyFiveBand(
+                intArrayOf(
+                    equalizerBand60,
+                    equalizerBand230,
+                    equalizerBand910,
+                    equalizerBand3600,
+                    equalizerBand14000
+                )
+            )
+        } else {
+            audioFxEngine.applyThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+        }
+        // LoudnessEnhancer is optional. A device may not provide it while its
+        // Equalizer still works, so a Loudness failure must not disable EQ.
+        audioFxEngine.setLoudness(equalizerLoudnessEnabled)
+        equalizerError = applyError
+        equalizerReady = applyError == null
+    }
+
+    private fun applyEqualizerSettings(force: Boolean = false) {
+        if (!equalizerEnabled) return
+        if (currentSong?.source == SongSource.MOVIE || castConnected) {
+            equalizerReady = false
+            equalizerHasControl = false
+            equalizerError = "Equalizer chỉ áp dụng cho nhạc phát trực tiếp trên điện thoại."
+            return
+        }
+        val session = player.audioSessionId.takeIf { it > 0 && it != C.AUDIO_SESSION_ID_UNSET }
+            ?: audioSessionId.takeIf { it > 0 && it != C.AUDIO_SESSION_ID_UNSET }
+        if (session == null) {
+            equalizerReady = false
+            equalizerHasControl = false
+            equalizerError = "Hãy phát một bài nhạc trước khi điều chỉnh Equalizer."
+            return
+        }
+        attachAndApplyEqualizer(session, force = force)
+    }
+
+    fun initializeCast() {
+        if (castInitialized) return
+        castInitialized = true
+        CastContext.getSharedInstance(context, ContextCompat.getMainExecutor(context))
+            .addOnSuccessListener { shared ->
+                castContext = shared
+                val sessionManager = shared.sessionManager
+                castStateListener = CastStateListener { state ->
+                    castConnecting = state == CastState.CONNECTING
+                    if (state == CastState.NOT_CONNECTED || state == CastState.NO_DEVICES_AVAILABLE) {
+                        castConnected = false
+                    }
+                }.also(shared::addCastStateListener)
+
+                castSessionListener = object : SessionManagerListener<CastSession> {
+                    override fun onSessionStarting(session: CastSession) {
+                        castConnecting = true
+                    }
+
+                    override fun onSessionStarted(session: CastSession, sessionId: String) {
+                        onCastSessionReady(session)
+                    }
+
+                    override fun onSessionStartFailed(session: CastSession, error: Int) {
+                        castConnecting = false
+                        castConnected = false
+                        statusMessage = "Không thể kết nối thiết bị Cast (mã $error)"
+                    }
+
+                    override fun onSessionEnding(session: CastSession) = Unit
+
+                    override fun onSessionEnded(session: CastSession, error: Int) {
+                        onCastSessionClosed()
+                    }
+
+                    override fun onSessionResuming(session: CastSession, sessionId: String) {
+                        castConnecting = true
+                    }
+
+                    override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+                        onCastSessionReady(session)
+                    }
+
+                    override fun onSessionResumeFailed(session: CastSession, error: Int) {
+                        onCastSessionClosed()
+                    }
+
+                    override fun onSessionSuspended(session: CastSession, reason: Int) {
+                        castConnecting = false
+                        castConnected = false
+                    }
+                }.also { listener ->
+                    sessionManager.addSessionManagerListener(listener, CastSession::class.java)
+                }
+
+                sessionManager.currentCastSession?.takeIf { it.isConnected }?.let(::onCastSessionReady)
+            }
+            .addOnFailureListener { error ->
+                castInitialized = false
+                statusMessage = "Thiết bị này chưa khởi tạo được Google Cast: ${error.localizedMessage ?: "lỗi không xác định"}"
+            }
+    }
+
+
+    /** Share ONLY the currently playing song with other MeloWare devices on the LAN. */
+    fun startSharingToMeloWare() {
+        val song = currentSong
+        if (song == null || song.source == SongSource.MOVIE) {
+            wifiHostError = "Hãy chọn một bài nhạc trước khi chia sẻ bằng MeloWare."
+            return
+        }
+        if (castConnected) {
+            statusMessage = "Hãy ngắt Cast trước khi chia sẻ MeloWare tới điện thoại khác."
+            return
+        }
+        wifiAppShareRequested = true
+        wifiAppShareEnabled = true
+        wifiHostRequestedByUser = true
+        if (wifiHostActive && localAudioServer != null) {
+            wifiLanDiscovery.advertise(localAudioServer!!.port, localAudioServer!!.token)
+        } else if (!wifiHostBusy) {
+            startWifiHostForCurrentSong(showMessage = true)
+        }
+    }
+
+    fun startSearchingMeloWare() {
+        wifiLanDiscovery.startDiscovery()
+    }
+
+    fun stopSearchingMeloWare() {
+        wifiLanDiscovery.stopDiscovery()
+    }
+
+    /** Fallback for routers that block mDNS but allow HTTP to the other phone. */
+    fun receiveFromMeloWareUrl(rawUrl: String) {
+        val input = rawUrl.trim()
+        val parsed = runCatching { Uri.parse(input) }.getOrNull()
+        val address = parsed?.host.orEmpty()
+        val token = parsed?.pathSegments?.firstOrNull().orEmpty()
+        val isLocal = address.matches(Regex("(?:10|192\\.168)\\..*")) ||
+            address.matches(Regex("172\\.(?:1[6-9]|2[0-9]|3[01])\\..*"))
+        val port = parsed?.port ?: -1
+        if (parsed?.scheme != "http" || !isLocal || port !in 1..65535 ||
+            !Regex("[a-fA-F0-9]{32}").matches(token)) {
+            wifiPeerMessage = "Dán URL Wi-Fi nội bộ hợp lệ từ MeloWare máy A để kết nối."
+            return
+        }
+        receiveFromMeloWare(MeloWareLanPeer("MeloWare ($address)", address, port, token))
+    }
+
+    /** Receiver uses ExoPlayer, not an external browser. Poll metadata for song changes. */
+    fun receiveFromMeloWare(peer: MeloWareLanPeer) {
+        stopReceivingMeloWare()
+        wifiReceivingPeer = peer
+        wifiPeerMessage = "Đang kết nối tới ${peer.name}..."
+        wifiPeerReceiveJob = scope.launch {
+            var failures = 0
+            while (true) {
+                val result = runCatching { withContext(Dispatchers.IO) { fetchMeloWareLanTrack(peer) } }
+                val remoteTrack = result.getOrNull()
+                if (remoteTrack != null) {
+                    failures = 0
+                    wifiPeerMessage = null
+                    val remoteId = "meloware_lan_${peer.address}_${peer.port}_${remoteTrack.key}"
+                    if (wifiLastRemoteKey != remoteTrack.key || currentSong?.id != remoteId) {
+                        wifiLastRemoteKey = remoteTrack.key
+                        val source = Uri.parse("http://${peer.address}:${peer.port}/${peer.token}/current")
+                        val remoteSong = SongItem(
+                            id = remoteId,
+                            title = remoteTrack.title,
+                            artist = remoteTrack.artist,
+                            album = remoteTrack.album,
+                            uri = source,
+                            durationMs = remoteTrack.durationMs,
+                            source = SongSource.ONLINE_HTTP,
+                            mimeType = remoteTrack.mimeType
+                        )
+                        playSong(remoteSong, listOf(remoteSong))
+                        statusMessage = "Đang nghe từ MeloWare: ${peer.name}"
+                    }
+                } else {
+                    val error = result.exceptionOrNull()
+                    if (error is CancellationException) throw error
+                    failures++
+                    wifiPeerMessage = if (failures >= 3) {
+                        "Không truy cập được ${peer.name}. Kiểm tra Wi-Fi và máy đang chia sẻ."
+                    } else "Đang thử kết nối lại ${peer.name}..."
+                }
+                delay(2_500L)
+            }
+        }
+    }
+
+    fun stopReceivingMeloWare() {
+        wifiPeerReceiveJob?.cancel()
+        wifiPeerReceiveJob = null
+        wifiReceivingPeer = null
+        wifiLastRemoteKey = null
+        wifiPeerMessage = null
+        if (currentSong?.id?.startsWith("meloware_lan_") == true) player.pause()
+    }
+
+    private fun fetchMeloWareLanTrack(peer: MeloWareLanPeer): MeloWareSharedTrack {
+        val endpoint = URL("http://${peer.address}:${peer.port}/${peer.token}/info")
+        val connection = endpoint.openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 4_000
+        connection.readTimeout = 5_000
+        try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                throw IOException("Không đọc được thông tin bài hát (HTTP ${connection.responseCode})")
+            }
+            val data = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val json = JSONObject(data)
+            if (json.optString("app") != "MeloWare") throw IOException("Thiết bị không phải MeloWare")
+            val songKey = json.optString("key").takeIf { it.isNotBlank() }
+                ?: throw IOException("Không có mã bài hát")
+            return MeloWareSharedTrack(
+                key = songKey,
+                title = json.optString("title", "Bài hát không tên"),
+                artist = json.optString("artist", "Nghệ sĩ chưa biết"),
+                album = json.optString("album"),
+                durationMs = json.optLong("durationMs", 0L).coerceAtLeast(0L),
+                mimeType = json.optString("mimeType", "audio/mpeg")
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun toggleWifiHost() {
+        if (wifiHostActive) {
+            if (castConnected) {
+                statusMessage = "Đang phát qua Cast. Hãy ngắt Cast trước khi dừng máy chủ Wi-Fi."
+                return
+            }
+            wifiHostRequestedByUser = false
+            stopWifiHostInternal(clearUserRequest = true)
+            statusMessage = "Đã dừng phát nhạc qua Wi-Fi"
+            return
+        }
+        wifiAppShareRequested = false
+        wifiAppShareEnabled = false
+        wifiLanDiscovery.stopAdvertising()
+        wifiHostRequestedByUser = true
+        startWifiHostForCurrentSong(showMessage = true)
+    }
+
+    fun stopWifiHost() {
+        if (castConnected) {
+            statusMessage = "Đang phát qua Cast. Hãy ngắt Cast trước."
+            return
+        }
+        wifiHostRequestedByUser = false
+        stopWifiHostInternal(clearUserRequest = true)
+    }
+
+    fun castCurrentSong() {
+        val song = currentSong ?: return
+        if (song.source == SongSource.MOVIE) {
+            statusMessage = "Movie dùng trình phát riêng; Cast âm thanh hỗ trợ các bài nhạc trong thư viện."
+            return
+        }
+        initializeCast()
+        val session = castContext?.sessionManager?.currentCastSession
+        if (session == null || !session.isConnected) {
+            statusMessage = "Hãy chọn TV hoặc thiết bị âm thanh trong bảng Cast."
+            return
+        }
+        scope.launch {
+            val streamUrl = runCatching { ensureWifiHostUrl(song) }
+                .onFailure { wifiHostError = it.localizedMessage }
+                .getOrNull()
+            if (streamUrl == null) {
+                errorMessage = wifiHostError ?: "Không tạo được luồng phát nội bộ cho Cast."
+                return@launch
+            }
+            val remote = session.remoteMediaClient ?: run {
+                errorMessage = "Thiết bị Cast chưa sẵn sàng nhận bài hát."
+                return@launch
+            }
+            bindRemoteMediaClient(remote)
+            val metadata = CastMediaMetadata(CastMediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
+                putString(CastMediaMetadata.KEY_TITLE, song.title)
+                putString(CastMediaMetadata.KEY_ARTIST, song.artist)
+                putString(CastMediaMetadata.KEY_ALBUM_TITLE, song.album)
+                artworkFor(song)?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                    ?.let { addImage(WebImage(Uri.parse(it))) }
+            }
+            val mediaInfo = MediaInfo.Builder(streamUrl)
+                .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                .setContentType(song.mimeType ?: mimeForExtension(extensionForMime(song.mimeType)))
+                .setMetadata(metadata)
+                .setStreamDuration(song.durationMs.coerceAtLeast(durationMs))
+                .build()
+            remote.load(
+                MediaLoadRequestData.Builder()
+                    .setMediaInfo(mediaInfo)
+                    .setAutoplay(true)
+                    .setCurrentTime(positionMs.coerceAtLeast(0L))
+                    .build()
+            )
+            player.pause()
+            castConnected = true
+            castDeviceName = session.castDevice?.friendlyName
+            statusMessage = "Đang phát trên ${castDeviceName ?: "thiết bị Cast"}"
+        }
     }
 
     fun openHome() {
@@ -526,6 +1197,47 @@ internal class MusicController(private val context: Context) {
         }
     }
 
+    /** Imports only the Drive items that the user explicitly shared through Google Picker. */
+    fun importPersonalDrivePickerSelection(
+        accessToken: String,
+        accountEmail: String?,
+        pickedIds: List<String>
+    ) {
+        val validIds = pickedIds
+            .map { it.trim() }
+            .filter { it.matches(Regex("[A-Za-z0-9_-]{10,}")) }
+            .distinct()
+        if (validIds.isEmpty()) {
+            statusMessage = "Bạn chưa chọn file hoặc thư mục Google Drive nào."
+            return
+        }
+
+        setPersonalDriveAuthorization(accessToken, accountEmail)
+        if (personalDriveBusy) return
+        personalDriveBusy = true
+        personalDriveError = null
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    PersonalDriveApi.importPickerSelection(accessToken, validIds)
+                }
+            }
+            personalDriveBusy = false
+            result.onSuccess { songs ->
+                if (songs.isEmpty()) {
+                    personalDriveError =
+                        "Các mục đã chọn không có file âm thanh được hỗ trợ. Nếu đã chọn thư mục nhưng Google không cấp quyền cho file con, hãy chọn trực tiếp các bài hát trong Picker."
+                } else {
+                    mergePersonalDriveSongs(songs)
+                    librarySource = LibrarySource.PERSONAL_DRIVE
+                    libraryTab = LibraryTab.SONGS
+                    currentScreen = MusicScreen.LIBRARY
+                    statusMessage = "Đã thêm ${songs.size} bài từ Google Drive"
+                }
+            }.onFailure(::handlePersonalDriveFailure)
+        }
+    }
+
     fun requestPersonalDriveAuthorization() {
         personalDriveNeedsAuthorization = true
     }
@@ -556,7 +1268,10 @@ internal class MusicController(private val context: Context) {
         personalDriveSelectedIds.clear()
         showPersonalDriveDialog = false
         pendingPersonalDrivePlaybackId = null
-        if (removeSongs) personalDriveSongs.clear()
+        if (removeSongs) {
+            personalDriveSongs.clear()
+            saveSongList(KEY_PERSONAL_DRIVE_SONGS, emptyList())
+        }
         if (forgetAccount) {
             personalDriveAccountEmail = null
             prefs.edit().remove(KEY_PERSONAL_DRIVE_ACCOUNT).apply()
@@ -566,7 +1281,7 @@ internal class MusicController(private val context: Context) {
     /** Called after Google AuthorizationClient.revokeAccess completes. */
     fun disconnectPersonalDrive() {
         clearPersonalDriveSession(removeSongs = true, forgetAccount = true)
-        statusMessage = "Đã ngắt quyền Google Drive cá nhân"
+        statusMessage = "Đã ngắt quyền Google Drive của MeloWare"
     }
 
     fun openPersonalDriveRoot() {
@@ -699,12 +1414,13 @@ internal class MusicController(private val context: Context) {
         val merged = (personalDriveSongs + songs).distinctBy { it.id }
         personalDriveSongs.clear()
         personalDriveSongs.addAll(merged)
+        saveSongList(KEY_PERSONAL_DRIVE_SONGS, personalDriveSongs)
     }
 
     private fun requirePersonalDriveToken(): String? {
         val token = personalDriveAccessToken
         if (token.isNullOrBlank()) {
-            personalDriveError = "Hãy đăng nhập và cấp quyền đọc Google Drive."
+            personalDriveError = "Hãy mở Google Picker và chọn lại file Google Drive."
             personalDriveNeedsAuthorization = true
             return null
         }
@@ -903,7 +1619,7 @@ internal class MusicController(private val context: Context) {
                 withContext(Dispatchers.IO) {
                     when (mode) {
                         OnlineSearchMode.APPLE_MUSIC -> searchAppleMusic(cleanQuery)
-                        OnlineSearchMode.YOUTUBE -> searchYoutube(cleanQuery)
+                        OnlineSearchMode.MOVIE -> searchMovie(cleanQuery)
                     }
                 }
             }
@@ -929,7 +1645,7 @@ internal class MusicController(private val context: Context) {
         connection.setRequestProperty("User-Agent", "Tunertools-Android/2.0")
         return try {
             if (connection.responseCode !in 200..299) {
-                throw IOException("Apple Music HTTP ${connection.responseCode}")
+                throw IOException("Music HTTP ${connection.responseCode}")
             }
             val array = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
                 .optJSONArray("results") ?: JSONArray()
@@ -944,8 +1660,8 @@ internal class MusicController(private val context: Context) {
                             id = "apple_${item.optString("trackId", index.toString())}",
                             title = item.optString("trackName", "Không rõ tên"),
                             artist = item.optString("artistName", "Không rõ nghệ sĩ"),
-                            album = item.optString("collectionName", "Apple Music"),
-                            folderName = "Apple Music Preview",
+                            album = item.optString("collectionName", "Music"),
+                            folderName = "Music Preview",
                             uri = Uri.parse(preview),
                             durationMs = 30_000L,
                             source = SongSource.ONLINE_HTTP,
@@ -962,7 +1678,7 @@ internal class MusicController(private val context: Context) {
         }
     }
 
-    private fun searchYoutube(query: String): List<SongItem> {
+    private fun searchMovie(query: String): List<SongItem> {
         val url = "https://cut.tunertools.top/api/v1/search?query=${URLEncoder.encode(query, "UTF-8")}&limit=30"
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = 12_000
@@ -971,7 +1687,7 @@ internal class MusicController(private val context: Context) {
         connection.setRequestProperty("User-Agent", "Tunertools-Android/2.0")
         return try {
             if (connection.responseCode !in 200..299) {
-                throw IOException("YouTube search HTTP ${connection.responseCode}")
+                throw IOException("Movie search HTTP ${connection.responseCode}")
             }
             val json = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             if (!json.optString("status").equals("success", ignoreCase = true)) return emptyList()
@@ -985,13 +1701,15 @@ internal class MusicController(private val context: Context) {
                     add(
                         SongItem(
                             id = if (rawId.startsWith("vid_")) rawId else "vid_$videoId",
-                            title = item.optString("title", "YouTube Video"),
-                            artist = item.optString("artist", "YouTube"),
-                            album = "YouTube",
-                            folderName = "YouTube",
+                            title = item.optString("title", "Movie Video"),
+                            artist = item.optString("artist", "Movie").let {
+                                if (it.equals("YouTube", ignoreCase = true)) "Movie" else it
+                            },
+                            album = "Movie",
+                            folderName = "Movie",
                             uri = Uri.parse("https://youtu.be/$videoId"),
                             durationMs = if (durationSeconds > 0L) durationSeconds * 1000L else 0L,
-                            source = SongSource.YOUTUBE,
+                            source = SongSource.MOVIE,
                             mimeType = "video/youtube",
                             artworkUrl = item.optString("artworkUrl").takeIf { it.startsWith("https://") }
                         )
@@ -1010,22 +1728,22 @@ internal class MusicController(private val context: Context) {
         openNowPlaying()
     }
 
-    fun attachYoutubeWebView(webView: WebView) {
-        youtubeWebView = webView
+    fun attachMovieWebView(webView: WebView) {
+        movieWebView = webView
     }
 
-    fun detachYoutubeWebView(webView: WebView) {
-        if (youtubeWebView === webView) youtubeWebView = null
+    fun detachMovieWebView(webView: WebView) {
+        if (movieWebView === webView) movieWebView = null
     }
 
-    fun updateYoutubePlaybackState(
+    fun updateMoviePlaybackState(
         position: Long,
         duration: Long,
         playerState: Int,
         ready: Boolean,
         errorCode: Int = 0
     ) {
-        if (currentSong?.source != SongSource.YOUTUBE) return
+        if (currentSong?.source != SongSource.MOVIE) return
         positionMs = position.coerceAtLeast(0L)
         if (duration > 0L) durationMs = duration
         isPlaying = playerState == 1
@@ -1035,18 +1753,18 @@ internal class MusicController(private val context: Context) {
             isPlaying = false
             isLoading = false
             val message = when (errorCode) {
-                2 -> "ID hoặc tham số video YouTube không hợp lệ."
-                5 -> "YouTube không thể phát video này bằng trình phát HTML5 trên thiết bị hiện tại."
-                100 -> "Video YouTube đã bị xóa, đặt riêng tư hoặc không còn tồn tại."
-                101, 150 -> "Chủ sở hữu video không cho phép phát trong ứng dụng nhúng. Hãy mở video bằng ứng dụng YouTube."
-                153 -> "YouTube chưa nhận diện được ứng dụng nhúng. Hãy cập nhật bản ứng dụng mới rồi thử lại."
-                else -> "Không thể phát video YouTube trong ứng dụng (mã lỗi $errorCode)."
+                2 -> "ID hoặc tham số video Movie không hợp lệ."
+                5 -> "Movie không thể phát video này bằng trình phát HTML5 trên thiết bị hiện tại."
+                100 -> "Video này đã bị xóa, đặt riêng tư hoặc không còn tồn tại."
+                101, 150 -> "Chủ sở hữu video không cho phép phát trong ứng dụng nhúng. Hãy dùng nút Movie để mở video bên ngoài."
+                153 -> "Nguồn video chưa nhận diện được ứng dụng nhúng. Hãy cập nhật ứng dụng rồi thử lại."
+                else -> "Không thể phát video Movie trong ứng dụng (mã lỗi $errorCode)."
             }
             if (errorMessage != message) errorMessage = message
         }
     }
 
-    fun youtubeVideoId(song: SongItem? = currentSong): String? {
+    fun movieVideoId(song: SongItem? = currentSong): String? {
         val resolvedSong = song ?: return null
         val text = resolvedSong.uri.toString()
         val candidate = when {
@@ -1058,9 +1776,9 @@ internal class MusicController(private val context: Context) {
         return candidate.takeIf { Regex("[A-Za-z0-9_-]{11}").matches(it) }
     }
 
-    fun youtubeEmbedUrl(song: SongItem? = currentSong): String {
+    fun movieEmbedUrl(song: SongItem? = currentSong): String {
         val resolvedSong = song ?: return ""
-        val videoId = youtubeVideoId(resolvedSong) ?: return resolvedSong.uri.toString()
+        val videoId = movieVideoId(resolvedSong) ?: return resolvedSong.uri.toString()
         val appIdentity = "https://${context.packageName.lowercase(Locale.ROOT)}"
         val encodedIdentity = URLEncoder.encode(appIdentity, "UTF-8")
         return "https://www.youtube.com/embed/$videoId" +
@@ -1068,14 +1786,14 @@ internal class MusicController(private val context: Context) {
                 "&origin=$encodedIdentity&widget_referrer=$encodedIdentity"
     }
 
-    fun openCurrentYoutubeExternally() {
+    fun openCurrentMovieExternally() {
         val song = currentSong ?: return
-        val videoId = youtubeVideoId(song)
+        val videoId = movieVideoId(song)
         val webUri = Uri.parse(
             videoId?.let { "https://www.youtube.com/watch?v=$it" }
                 ?: song.uri.toString()
         )
-        val youtubeIntent = videoId?.let {
+        val movieIntent = videoId?.let {
             Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$it")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -1084,13 +1802,13 @@ internal class MusicController(private val context: Context) {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching {
-            if (youtubeIntent != null && youtubeIntent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(youtubeIntent)
+            if (movieIntent != null && movieIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(movieIntent)
             } else {
                 context.startActivity(webIntent)
             }
         }.onFailure {
-            errorMessage = "Không tìm thấy ứng dụng có thể mở video YouTube."
+            errorMessage = "Không tìm thấy ứng dụng có thể mở video."
         }
     }
 
@@ -1117,9 +1835,13 @@ internal class MusicController(private val context: Context) {
     }
 
     fun togglePlayback() {
+        if (castConnected) {
+            castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.togglePlayback()
+            return
+        }
         val song = currentSong
-        if (song?.source == SongSource.YOUTUBE) {
-            youtubeWebView?.evaluateJavascript(
+        if (song?.source == SongSource.MOVIE) {
+            movieWebView?.evaluateJavascript(
                 "window.tunertoolsToggle ? window.tunertoolsToggle() : 'not_ready';",
                 null
             )
@@ -1171,8 +1893,13 @@ internal class MusicController(private val context: Context) {
 
     fun seekTo(position: Long) {
         val safePosition = position.coerceAtLeast(0L)
-        if (currentSong?.source == SongSource.YOUTUBE) {
-            youtubeWebView?.evaluateJavascript(
+        if (castConnected) {
+            castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.seek(safePosition)
+            positionMs = safePosition
+            return
+        }
+        if (currentSong?.source == SongSource.MOVIE) {
+            movieWebView?.evaluateJavascript(
                 "window.tunertoolsSeek ? window.tunertoolsSeek(${safePosition / 1000.0}) : -1;",
                 null
             )
@@ -1226,8 +1953,8 @@ internal class MusicController(private val context: Context) {
     }
 
     fun downloadSongForOffline(song: SongItem) {
-        if (song.source == SongSource.YOUTUBE) {
-            statusMessage = "YouTube không cung cấp file âm thanh trực tiếp để tải Offline trong chức năng này."
+        if (song.source == SongSource.MOVIE) {
+            statusMessage = "Movie không hỗ trợ tải trực tiếp âm thanh của video bằng chức năng này."
             return
         }
         scope.launch {
@@ -1531,8 +2258,8 @@ internal class MusicController(private val context: Context) {
             append(song.title)
             if (song.artist.isNotBlank()) append(" - ${song.artist}")
             if (song.source == SongSource.PUBLIC_DRIVE) append("\nNguồn: Google Drive công khai")
-            if (song.source == SongSource.ONLINE_HTTP) append("\nNguồn: Apple Music Preview")
-            if (song.source == SongSource.YOUTUBE) append("\n${song.uri}")
+            if (song.source == SongSource.ONLINE_HTTP) append("\nNguồn: Music Preview")
+            if (song.source == SongSource.MOVIE) append("\n${song.uri}")
         }
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -1579,8 +2306,8 @@ internal class MusicController(private val context: Context) {
         SongSource.DOWNLOADED -> "Đã tải Offline"
         SongSource.PERSONAL_DRIVE -> "Google Drive"
         SongSource.PUBLIC_DRIVE -> "Drive chia sẻ"
-        SongSource.ONLINE_HTTP -> "Apple Music Preview"
-        SongSource.YOUTUBE -> "YouTube"
+        SongSource.ONLINE_HTTP -> "Music Preview"
+        SongSource.MOVIE -> "Movie"
         SongSource.APP_RESOURCE -> "Ứng dụng"
     }
 
@@ -1591,8 +2318,8 @@ internal class MusicController(private val context: Context) {
             SongSource.PUBLIC_DRIVE -> "DRIVE PUBLIC $ext"
             SongSource.DOWNLOADED -> "OFFLINE $ext"
             SongSource.LOCAL_MEDIASTORE -> ext.takeIf { it != "AUDIO" } ?: "OFFLINE"
-            SongSource.ONLINE_HTTP -> "APPLE MUSIC"
-            SongSource.YOUTUBE -> "YOUTUBE VIDEO"
+            SongSource.ONLINE_HTTP -> if (song.id.startsWith("meloware_lan_")) "MELOWARE LAN" else "MUSIC"
+            SongSource.MOVIE -> "MOVIE"
             SongSource.APP_RESOURCE -> "DEMO"
         }
     }
@@ -1600,11 +2327,11 @@ internal class MusicController(private val context: Context) {
     private fun configurePlayerListener() {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(value: Boolean) {
-                if (currentSong?.source != SongSource.YOUTUBE) isPlaying = value
+                if (currentSong?.source != SongSource.MOVIE) isPlaying = value
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (currentSong?.source == SongSource.YOUTUBE) return
+                if (currentSong?.source == SongSource.MOVIE) return
                 isLoading = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
                 if (playbackState == Player.STATE_READY) {
                     isLoading = false
@@ -1612,6 +2339,14 @@ internal class MusicController(private val context: Context) {
                     if (readyDuration != C.TIME_UNSET && readyDuration > 0L) {
                         durationMs = readyDuration
                         updateSongDuration(currentSong?.id, readyDuration)
+                    }
+                    val readySessionId = player.audioSessionId
+                    if (
+                        equalizerEnabled &&
+                        readySessionId > 0 &&
+                        readySessionId != C.AUDIO_SESSION_ID_UNSET
+                    ) {
+                        attachAndApplyEqualizer(readySessionId)
                     }
                 } else if (playbackState == Player.STATE_ENDED) {
                     when (repeatSetting) {
@@ -1626,14 +2361,16 @@ internal class MusicController(private val context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                if (currentSong?.source == SongSource.YOUTUBE) return
+                if (currentSong?.source == SongSource.MOVIE) return
                 isLoading = false
                 isPlaying = false
                 errorMessage = "Không thể phát bài hát. ${error.errorCodeName}: ${error.cause?.localizedMessage ?: error.localizedMessage}"
             }
 
             override fun onAudioSessionIdChanged(id: Int) {
-                if (id > 0 && id != C.AUDIO_SESSION_ID_UNSET) audioSessionId = id
+                if (equalizerEnabled && id > 0 && id != C.AUDIO_SESSION_ID_UNSET) {
+                    attachAndApplyEqualizer(id, force = true)
+                }
             }
         })
     }
@@ -1641,7 +2378,29 @@ internal class MusicController(private val context: Context) {
     private fun prepareCurrent(autoPlay: Boolean) {
         val song = currentSong ?: return
         playbackJob?.cancel()
-        if (song.source == SongSource.YOUTUBE) {
+        // Keep the HTTP port/token stable while the user is sharing, so the
+        // receiving MeloWare can follow the next song without rediscovering A.
+        if (hostedSongId != null && hostedSongId != song.id && !wifiHostRequestedByUser) {
+            stopWifiHostInternal(clearUserRequest = false)
+        }
+        if (castConnected && song.source != SongSource.MOVIE) {
+            audioFxEngine.release()
+            equalizerReady = false
+            equalizerHasControl = false
+            player.pause()
+            player.clearMediaItems()
+            positionMs = 0L
+            durationMs = song.durationMs.coerceAtLeast(1L)
+            addRecent(song)
+            ensureArtwork(song)
+            saveQueue()
+            castCurrentSong()
+            return
+        }
+        if (song.source == SongSource.MOVIE) {
+            audioFxEngine.release()
+            equalizerReady = false
+            equalizerHasControl = false
             player.pause()
             player.clearMediaItems()
             positionMs = 0L
@@ -1684,7 +2443,9 @@ internal class MusicController(private val context: Context) {
             if (autoPlay) player.play()
             addRecent(song)
             ensureArtwork(song)
+            ensureAudioTechnicalInfo(song)
             saveQueue()
+            if (wifiHostRequestedByUser) startWifiHostForCurrentSong(showMessage = false)
         }
     }
 
@@ -1705,6 +2466,306 @@ internal class MusicController(private val context: Context) {
         }
         cachedPlaybackUris[song.id] = cached
         return cached
+    }
+
+    private fun provisionalAudioTechnicalInfo(song: SongItem): AudioTechnicalInfo {
+        val extension = resolvedExtension(song).uppercase(Locale.ROOT)
+        val quality = when (extension.lowercase(Locale.ROOT)) {
+            "flac", "wav", "wave", "alac", "ape" -> "Lossless"
+            "m4a", "aac" -> "AAC"
+            "mp3" -> "MP3"
+            else -> "Chất lượng gốc"
+        }
+        val size = if (song.source == SongSource.ONLINE_HTTP || song.source == SongSource.MOVIE) {
+            "Trực tuyến"
+        } else {
+            "Đang đọc..."
+        }
+        return AudioTechnicalInfo(quality, extension.ifBlank { "AUDIO" }, size)
+    }
+
+    private fun readAudioTechnicalInfo(song: SongItem): AudioTechnicalInfo {
+        if (song.source == SongSource.MOVIE) {
+            return AudioTechnicalInfo("Video online", "STREAM", "Trực tuyến")
+        }
+        val uri = cachedPlaybackUris[song.id] ?: song.uri
+        val extension = resolvedExtension(song).uppercase(Locale.ROOT).ifBlank { "AUDIO" }
+        val sizeBytes = readUriSize(uri)
+        var bitrateKbps: Int? = null
+        var sampleRateHz: Int? = null
+        val retriever = MediaMetadataRetriever()
+        try {
+            when (uri.scheme?.lowercase(Locale.ROOT)) {
+                "file" -> uri.path?.let(retriever::setDataSource)
+                "http", "https" -> retriever.setDataSource(uri.toString(), emptyMap())
+                else -> retriever.setDataSource(context, uri)
+            }
+            bitrateKbps = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+                ?.toLongOrNull()?.takeIf { it > 0L }?.div(1000L)?.toInt()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                sampleRateHz = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)
+                    ?.toIntOrNull()?.takeIf { it > 0 }
+            }
+        } catch (_: Exception) {
+            // Metadata kỹ thuật có thể không tồn tại ở một số codec/provider.
+        } finally {
+            runCatching { retriever.release() }
+        }
+        val lossless = extension.lowercase(Locale.ROOT) in setOf("flac", "wav", "wave", "alac", "ape")
+        val quality = when {
+            lossless && (sampleRateHz ?: 0) >= 96_000 -> "Hi-Res • ${(sampleRateHz ?: 0) / 1000} kHz"
+            lossless -> "Lossless"
+            bitrateKbps != null -> "$bitrateKbps kbps"
+            sampleRateHz != null -> "${sampleRateHz!! / 1000} kHz"
+            else -> "Chất lượng gốc"
+        }
+        return AudioTechnicalInfo(
+            qualityLabel = quality,
+            extensionLabel = extension,
+            sizeLabel = sizeBytes?.let(::formatFileSize) ?: if (song.source == SongSource.ONLINE_HTTP) "Trực tuyến" else "Không rõ dung lượng",
+            bitrateKbps = bitrateKbps,
+            sampleRateHz = sampleRateHz,
+            sizeBytes = sizeBytes
+        )
+    }
+
+    private fun resolvedExtension(song: SongItem): String {
+        val fromPath = extensionOf(song.uri.lastPathSegment.orEmpty())
+        return fromPath.takeIf { it.isNotBlank() && it != "audio" }
+            ?: extensionForMime(song.mimeType).takeIf { it != "audio" }
+            ?: "audio"
+    }
+
+    private fun readUriSize(uri: Uri): Long? {
+        return when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "file" -> uri.path?.let(::File)?.takeIf(File::isFile)?.length()
+            "content" -> runCatching {
+                context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+                    ?.use { cursor ->
+                        val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (index >= 0 && cursor.moveToFirst() && !cursor.isNull(index)) cursor.getLong(index) else null
+                    }
+            }.getOrNull()
+            else -> null
+        }?.takeIf { it > 0L }
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        val value = bytes.coerceAtLeast(0L).toDouble()
+        return when {
+            value >= 1024.0 * 1024.0 * 1024.0 -> String.format(Locale.US, "%.2f GB", value / (1024.0 * 1024.0 * 1024.0))
+            value >= 1024.0 * 1024.0 -> String.format(Locale.US, "%.1f MB", value / (1024.0 * 1024.0))
+            value >= 1024.0 -> String.format(Locale.US, "%.0f KB", value / 1024.0)
+            else -> "${bytes} B"
+        }
+    }
+
+    private fun startWifiHostForCurrentSong(showMessage: Boolean) {
+        val song = currentSong ?: return
+        if (song.source == SongSource.MOVIE) {
+            wifiHostError = "Movie không hỗ trợ máy chủ âm thanh Wi-Fi."
+            return
+        }
+        if (wifiHostBusy) return
+        wifiHostBusy = true
+        wifiHostError = null
+        scope.launch {
+            val result = runCatching { ensureWifiHostUrl(song) }
+            wifiHostBusy = false
+            result.onSuccess { url ->
+                if (showMessage) statusMessage = "Máy chủ Wi-Fi đã sẵn sàng: $url"
+            }.onFailure { error ->
+                wifiHostError = error.localizedMessage ?: "Không tạo được máy chủ Wi-Fi"
+                wifiHostActive = false
+                wifiHostUrl = null
+                if (wifiAppShareRequested) {
+                    wifiAppShareRequested = false
+                    wifiAppShareEnabled = false
+                    wifiHostRequestedByUser = false
+                    wifiLanDiscovery.stopAdvertising()
+                }
+                if (showMessage) errorMessage = wifiHostError
+            }
+        }
+    }
+
+    private suspend fun ensureWifiHostUrl(song: SongItem): String {
+        if (wifiHostActive && hostedSongId == song.id && !wifiHostUrl.isNullOrBlank()) {
+            return wifiHostUrl!!
+        }
+        val resolvedUri = resolvePlaybackUri(song)
+        val sourceFile = withContext(Dispatchers.IO) { materializeForWifiHost(song, resolvedUri) }
+        val ip = withContext(Dispatchers.IO) { findLanIpv4Address() }
+            ?: throw IOException("Không tìm thấy địa chỉ Wi-Fi nội bộ. Hãy kết nối cùng một mạng Wi-Fi.")
+        val mime = song.mimeType ?: mimeForExtension(resolvedExtension(song))
+        val key = song.id.sha256().take(20)
+        val existing = localAudioServer?.takeIf { wifiHostActive }
+        val server = if (existing != null) {
+            existing.updateSong(sourceFile, mime, song.title, song.artist, song.album, song.durationMs, key)
+            existing
+        } else {
+            stopWifiHostInternal(clearUserRequest = false)
+            LocalAudioHttpServer(
+                file = sourceFile,
+                contentType = mime,
+                displayName = song.title,
+                artist = song.artist,
+                album = song.album,
+                durationMs = song.durationMs,
+                songKey = key
+            ).also {
+                it.start()
+                localAudioServer = it
+            }
+        }
+        hostedSongId = song.id
+        wifiHostActive = true
+        wifiHostError = null
+        wifiHostUrl = "http://$ip:${server.port}/${server.token}/${sourceFile.name}"
+        if (wifiAppShareRequested) wifiLanDiscovery.advertise(server.port, server.token)
+        return wifiHostUrl!!
+    }
+
+    private fun materializeForWifiHost(song: SongItem, uri: Uri): File {
+        if (uri.scheme.equals("file", ignoreCase = true)) {
+            val direct = uri.path?.let(::File)
+            if (direct?.isFile == true && direct.length() > 0L) return direct
+        }
+        val directory = File(context.cacheDir, "meloware_wifi_host").apply { mkdirs() }
+        val extension = resolvedExtension(song).ifBlank { "audio" }
+        val target = File(directory, "${song.id.sha256().take(24)}.$extension")
+        if (target.isFile && target.length() > 0L) return target
+        val input = when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "http", "https" -> {
+                val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                connection.connectTimeout = 20_000
+                connection.readTimeout = 60_000
+                connection.instanceFollowRedirects = true
+                if (connection.responseCode !in 200..299) {
+                    val code = connection.responseCode
+                    connection.disconnect()
+                    throw IOException("Không tải được bài hát trực tuyến (HTTP $code)")
+                }
+                connection.inputStream
+            }
+            else -> context.contentResolver.openInputStream(uri)
+                ?: throw FileNotFoundException("Không mở được dữ liệu của ${song.title}")
+        }
+        input.use { source -> FileOutputStream(target).use { out -> source.copyTo(out, 128 * 1024) } }
+        if (target.length() <= 0L) {
+            target.delete()
+            throw IOException("File chuẩn bị cho Wi-Fi bị rỗng")
+        }
+        return target
+    }
+
+    private fun findLanIpv4Address(): String? {
+        val candidates = Collections.list(NetworkInterface.getNetworkInterfaces())
+            .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+            .flatMap { network ->
+                Collections.list(network.inetAddresses)
+                    .filterIsInstance<Inet4Address>()
+                    .filter { !it.isLoopbackAddress && it.isSiteLocalAddress }
+                    .map { address -> network.name.orEmpty() to address }
+            }
+        return candidates
+            .sortedByDescending { (name, _) ->
+                val normalized = name.lowercase(Locale.ROOT)
+                normalized.contains("wlan") || normalized.contains("wifi") || normalized.startsWith("ap")
+            }
+            .firstOrNull()
+            ?.second
+            ?.hostAddress
+    }
+
+    private fun stopWifiHostInternal(clearUserRequest: Boolean) {
+        wifiLanDiscovery.stopAdvertising()
+        localAudioServer?.stop()
+        localAudioServer = null
+        hostedSongId = null
+        wifiHostActive = false
+        wifiHostBusy = false
+        wifiHostUrl = null
+        wifiHostError = null
+        if (clearUserRequest) {
+            wifiHostRequestedByUser = false
+            wifiAppShareRequested = false
+            wifiAppShareEnabled = false
+        }
+    }
+
+    private fun onCastSessionReady(session: CastSession) {
+        castConnecting = false
+        castConnected = true
+        castDeviceName = session.castDevice?.friendlyName
+        session.remoteMediaClient?.let(::bindRemoteMediaClient)
+        castCurrentSong()
+    }
+
+    private fun onCastSessionClosed() {
+        val remotePosition = positionMs
+        val resumeLocally = isPlaying
+        unbindRemoteMediaClient()
+        castConnecting = false
+        castConnected = false
+        castDeviceName = null
+        if (!wifiHostRequestedByUser) stopWifiHostInternal(clearUserRequest = false)
+        currentSong?.takeIf { it.source != SongSource.MOVIE }?.let {
+            prepareCurrent(autoPlay = false)
+            scope.launch {
+                delay(350L)
+                player.seekTo(remotePosition.coerceAtLeast(0L))
+                if (resumeLocally) player.play()
+            }
+        }
+    }
+
+    private fun bindRemoteMediaClient(remote: RemoteMediaClient) {
+        unbindRemoteMediaClient()
+        remoteMediaCallback = object : RemoteMediaClient.Callback() {
+            override fun onStatusUpdated() {
+                isPlaying = remote.isPlaying
+                isLoading = remote.isBuffering
+                val remoteDuration = remote.streamDuration
+                if (remoteDuration > 0L) durationMs = remoteDuration
+            }
+        }.also(remote::registerCallback)
+        remoteProgressListener = RemoteMediaClient.ProgressListener { progress, duration ->
+            positionMs = progress.coerceAtLeast(0L)
+            if (duration > 0L) durationMs = duration
+        }.also { remote.addProgressListener(it, 500L) }
+    }
+
+    private fun unbindRemoteMediaClient() {
+        val remote = castContext?.sessionManager?.currentCastSession?.remoteMediaClient
+        remoteMediaCallback?.let { callback -> runCatching { remote?.unregisterCallback(callback) } }
+        remoteProgressListener?.let { listener -> runCatching { remote?.removeProgressListener(listener) } }
+        remoteMediaCallback = null
+        remoteProgressListener = null
+    }
+
+    private fun unregisterCastListeners() {
+        unbindRemoteMediaClient()
+        val shared = castContext ?: return
+        castSessionListener?.let { listener ->
+            runCatching { shared.sessionManager.removeSessionManagerListener(listener, CastSession::class.java) }
+        }
+        castStateListener?.let { listener -> runCatching { shared.removeCastStateListener(listener) } }
+        castSessionListener = null
+        castStateListener = null
+        castContext = null
+    }
+
+    private fun mimeForExtension(extension: String): String = when (extension.lowercase(Locale.ROOT)) {
+        "mp3" -> "audio/mpeg"
+        "m4a", "mp4" -> "audio/mp4"
+        "aac" -> "audio/aac"
+        "flac" -> "audio/flac"
+        "wav", "wave" -> "audio/wav"
+        "ogg", "oga" -> "audio/ogg"
+        "opus" -> "audio/opus"
+        "webm" -> "audio/webm"
+        else -> "application/octet-stream"
     }
 
     private fun addRecent(song: SongItem) {
@@ -1863,6 +2924,7 @@ internal class MusicController(private val context: Context) {
         queue.addAll(loadSongList(KEY_QUEUE))
         recentSongs.addAll(loadSongList(KEY_RECENTS))
         publicDriveSongs.addAll(loadSongList(KEY_PUBLIC_SONGS))
+        personalDriveSongs.addAll(loadSongList(KEY_PERSONAL_DRIVE_SONGS))
         currentIndex = prefs.getInt(KEY_CURRENT_INDEX, if (queue.isEmpty()) -1 else 0)
             .coerceIn(if (queue.isEmpty()) -1 else 0, max(queue.lastIndex, 0))
         val restoredPublic = queue.filter { it.source == SongSource.PUBLIC_DRIVE }
@@ -1871,7 +2933,7 @@ internal class MusicController(private val context: Context) {
             publicDriveSongs.clear()
             publicDriveSongs.addAll(merged)
         }
-        val allRestored = (queue + recentSongs + publicDriveSongs).distinctBy { it.id }
+        val allRestored = (queue + recentSongs + publicDriveSongs + personalDriveSongs).distinctBy { it.id }
         allRestored.forEach { song ->
             val saved = prefs.getString("art_${song.id.sha256().take(32)}", null)
             if (!saved.isNullOrBlank()) artworkById[song.id] = saved
@@ -1915,7 +2977,7 @@ internal class MusicController(private val context: Context) {
                         "PUBLIC_DRIVE" -> SongSource.PUBLIC_DRIVE
                         "DOWNLOADED" -> SongSource.DOWNLOADED
                         "ONLINE_HTTP" -> SongSource.ONLINE_HTTP
-                        "YOUTUBE" -> SongSource.YOUTUBE
+                        "YOUTUBE", "MOVIE" -> SongSource.MOVIE
                         "APP_RESOURCE" -> SongSource.APP_RESOURCE
                         else -> SongSource.LOCAL_MEDIASTORE
                     }
@@ -1924,9 +2986,15 @@ internal class MusicController(private val context: Context) {
                     val song = SongItem(
                         id = item.optString("id"),
                         title = item.optString("title", "Bài hát không tên"),
-                        artist = item.optString("artist", "Nghệ sĩ chưa biết"),
-                        album = item.optString("album"),
-                        folderName = item.optString("folderName"),
+                        artist = item.optString("artist", "Nghệ sĩ chưa biết").let {
+                            if (source == SongSource.MOVIE && it.equals("YouTube", ignoreCase = true)) "Movie" else it
+                        },
+                        album = item.optString("album").let {
+                            if (source == SongSource.MOVIE && it.equals("YouTube", ignoreCase = true)) "Movie" else it
+                        },
+                        folderName = item.optString("folderName").let {
+                            if (source == SongSource.MOVIE && it.equals("YouTube", ignoreCase = true)) "Movie" else it
+                        },
                         uri = Uri.parse(item.optString("uri")),
                         durationMs = duration,
                         source = source,
@@ -1966,8 +3034,218 @@ internal class MusicController(private val context: Context) {
         private const val KEY_CURRENT_INDEX = "current_index"
         private const val KEY_FAVORITES = "favorites"
         private const val KEY_PERSONAL_DRIVE_ACCOUNT = "google_drive_oauth_account"
+        private const val KEY_PERSONAL_DRIVE_SONGS = "personal_drive_picker_songs"
         private const val KEY_PUBLIC_LINK = "public_drive_last_link"
+        private const val KEY_EQ_BASS = "equalizer_bass"
+        private const val KEY_EQ_MID = "equalizer_mid"
+        private const val KEY_EQ_TREBLE = "equalizer_treble"
+        private const val KEY_EQ_BAND_60 = "equalizer_band_60"
+        private const val KEY_EQ_BAND_230 = "equalizer_band_230"
+        private const val KEY_EQ_BAND_910 = "equalizer_band_910"
+        private const val KEY_EQ_BAND_3600 = "equalizer_band_3600"
+        private const val KEY_EQ_BAND_14000 = "equalizer_band_14000"
+        private const val KEY_EQ_PRESET = "equalizer_preset"
+        private const val KEY_EQ_ADVANCED = "equalizer_advanced"
+        private const val KEY_EQ_LOUDNESS = "equalizer_loudness"
+        private const val KEY_EQ_ENABLED = "equalizer_enabled"
         private const val DRIVE_CACHE_DIR = "tunertools_drive_cache"
+    }
+}
+
+
+private data class AudioFxAttachResult(
+    val ready: Boolean,
+    val hasControl: Boolean,
+    val error: String? = null
+)
+
+private class PersistentAudioFxEngine {
+    private var equalizer: AndroidEqualizer? = null
+    private var loudnessEnhancer: LoudnessEnhancer? = null
+    private var bassBoost: BassBoost? = null
+    private var sessionId: Int = 0
+
+    fun attach(newSessionId: Int, force: Boolean = false): AudioFxAttachResult {
+        if (newSessionId <= 0 || newSessionId == C.AUDIO_SESSION_ID_UNSET) {
+            release()
+            return AudioFxAttachResult(false, false, "Phiên âm thanh chưa sẵn sàng.")
+        }
+
+        val currentEqualizer = equalizer
+        if (!force && newSessionId == sessionId && currentEqualizer != null) {
+            val control = runCatching { currentEqualizer.hasControl() }.getOrDefault(false)
+            return if (control) {
+                AudioFxAttachResult(true, true)
+            } else {
+                AudioFxAttachResult(
+                    false,
+                    false,
+                    "Equalizer đang bị hệ thống hoặc ứng dụng âm thanh khác kiểm soát."
+                )
+            }
+        }
+
+        release()
+        sessionId = newSessionId
+
+        val createdEqualizer = try {
+            AndroidEqualizer(1000, newSessionId).apply { enabled = true }
+        } catch (error: Throwable) {
+            sessionId = 0
+            return AudioFxAttachResult(
+                false,
+                false,
+                "Thiết bị không khởi tạo được Equalizer: ${error.localizedMessage ?: error.javaClass.simpleName}"
+            )
+        }
+
+        equalizer = createdEqualizer
+        val hasControl = runCatching { createdEqualizer.hasControl() }.getOrDefault(false)
+        if (!hasControl) {
+            return AudioFxAttachResult(
+                false,
+                false,
+                "Equalizer đang bị hệ thống hoặc ứng dụng âm thanh khác kiểm soát."
+            )
+        }
+
+        loudnessEnhancer = runCatching {
+            LoudnessEnhancer(newSessionId).apply {
+                setTargetGain(600)
+                enabled = false
+            }
+        }.getOrNull()
+
+        bassBoost = runCatching {
+            BassBoost(1000, newSessionId).apply { enabled = false }
+        }.getOrNull()
+
+        return AudioFxAttachResult(true, true)
+    }
+
+    fun applyThreeBand(bass: Int, mid: Int, treble: Int): String? {
+        applyHardwareBass(bass)
+        val effect = equalizer ?: return "Equalizer chưa được gắn vào phiên âm thanh."
+        if (!runCatching { effect.hasControl() }.getOrDefault(false)) {
+            return "MeloWare không có quyền điều khiển Equalizer trên thiết bị này."
+        }
+
+        val range = runCatching { effect.bandLevelRange }.getOrNull()
+            ?: return "Không đọc được dải điều chỉnh Equalizer."
+        if (range.size < 2) return "Thiết bị trả dải Equalizer không hợp lệ."
+        val minLevel = range[0].toInt()
+        val maxLevel = range[1].toInt()
+        val bandCount = runCatching { effect.numberOfBands.toInt() }.getOrDefault(0)
+        if (bandCount <= 0) return "Thiết bị không cung cấp băng tần Equalizer."
+
+        var applied = 0
+        var lastError: Throwable? = null
+        for (bandIndex in 0 until bandCount) {
+            val band = bandIndex.toShort()
+            val centerHz = runCatching { effect.getCenterFreq(band) / 1000f }.getOrDefault(0f)
+            val desiredDb = when {
+                centerHz < 300f -> bass
+                centerHz < 4000f -> mid
+                else -> treble
+            }
+            val desiredMillibels = (desiredDb.coerceIn(-6, 6) * 100).coerceIn(minLevel, maxLevel)
+            runCatching {
+                effect.setBandLevel(band, desiredMillibels.toShort())
+            }.onSuccess {
+                applied++
+            }.onFailure {
+                lastError = it
+            }
+        }
+
+        return if (applied > 0) null else {
+            "Không áp dụng được Equalizer: ${lastError?.localizedMessage ?: "thiết bị từ chối AudioEffect"}"
+        }
+    }
+
+    fun applyFiveBand(values: IntArray): String? {
+        if (values.size < 5) return "Cấu hình Equalizer 5 băng tần không hợp lệ."
+        applyHardwareBass(values[0])
+        val effect = equalizer ?: return "Equalizer chưa được gắn vào phiên âm thanh."
+        if (!runCatching { effect.hasControl() }.getOrDefault(false)) {
+            return "MeloWare không có quyền điều khiển Equalizer trên thiết bị này."
+        }
+
+        val range = runCatching { effect.bandLevelRange }.getOrNull()
+            ?: return "Không đọc được dải điều chỉnh Equalizer."
+        if (range.size < 2) return "Thiết bị trả dải Equalizer không hợp lệ."
+        val minLevel = range[0].toInt()
+        val maxLevel = range[1].toInt()
+        val targetFrequencies = floatArrayOf(60f, 230f, 910f, 3600f, 14000f)
+        val bandCount = runCatching { effect.numberOfBands.toInt() }.getOrDefault(0)
+        if (bandCount <= 0) return "Thiết bị không cung cấp băng tần Equalizer."
+
+        var applied = 0
+        var lastError: Throwable? = null
+        for (bandIndex in 0 until bandCount) {
+            val band = bandIndex.toShort()
+            val centerHz = runCatching { effect.getCenterFreq(band) / 1000f }.getOrDefault(1f)
+            val closestTarget = targetFrequencies.indices.minByOrNull { targetIndex ->
+                kotlin.math.abs(
+                    kotlin.math.ln(
+                        kotlin.math.max(centerHz, 1f).toDouble() /
+                                targetFrequencies[targetIndex].toDouble()
+                    )
+                )
+            } ?: 0
+            val desiredMillibels = (values[closestTarget].coerceIn(-6, 6) * 100)
+                .coerceIn(minLevel, maxLevel)
+            runCatching {
+                effect.setBandLevel(band, desiredMillibels.toShort())
+            }.onSuccess {
+                applied++
+            }.onFailure {
+                lastError = it
+            }
+        }
+
+        return if (applied > 0) null else {
+            "Không áp dụng được Equalizer: ${lastError?.localizedMessage ?: "thiết bị từ chối AudioEffect"}"
+        }
+    }
+
+    fun setLoudness(enabled: Boolean): String? {
+        val effect = loudnessEnhancer ?: return null
+        return runCatching {
+            effect.setTargetGain(600)
+            effect.enabled = enabled
+        }.exceptionOrNull()?.let {
+            "Không bật được Loudness: ${it.localizedMessage ?: it.javaClass.simpleName}"
+        }
+    }
+
+    private fun applyHardwareBass(bassValue: Int) {
+        val effect = bassBoost ?: return
+        runCatching {
+            if (bassValue > 0) {
+                val strength = ((bassValue.coerceIn(0, 6) / 6f) * 1000f)
+                    .toInt()
+                    .coerceIn(0, 1000)
+                    .toShort()
+                effect.setStrength(strength)
+                effect.enabled = true
+            } else {
+                effect.enabled = false
+            }
+        }
+    }
+
+    fun release() {
+        runCatching { equalizer?.enabled = false }
+        runCatching { loudnessEnhancer?.enabled = false }
+        runCatching { bassBoost?.enabled = false }
+        runCatching { equalizer?.release() }
+        runCatching { loudnessEnhancer?.release() }
+        runCatching { bassBoost?.release() }
+        equalizer = null
+        loudnessEnhancer = null
+        bassBoost = null
+        sessionId = 0
     }
 }
 
@@ -2066,6 +3344,52 @@ private object PersonalDriveApi {
     private const val MAX_PER_FOLDER = 10_000
     private const val MAX_PLAYLIST = 2_000
     private const val MAX_AUDIO_BYTES = 512L * 1024L * 1024L
+
+    fun importPickerSelection(
+        accessToken: String,
+        pickedIds: List<String>
+    ): List<SongItem> {
+        val songs = linkedMapOf<String, SongItem>()
+        var firstFailure: Throwable? = null
+        pickedIds.forEach { fileId ->
+            runCatching {
+                val entry = getEntry(accessToken, fileId)
+                if (entry.isFolder) {
+                    collectAudioRecursively(
+                        accessToken = accessToken,
+                        selectedFolder = PersonalDriveFolder(entry.id, entry.name)
+                    ).forEach { songs[it.id] = it }
+                } else if (isPlayable(entry)) {
+                    songs[entry.id] = toSong(entry, "Google Picker")
+                }
+            }.onFailure { error ->
+                if (firstFailure == null) firstFailure = error
+            }
+            if (songs.size > MAX_PLAYLIST) {
+                throw IOException("Bạn đã chọn trên $MAX_PLAYLIST bài. Hãy chọn ít nội dung hơn.")
+            }
+        }
+        if (songs.isEmpty() && firstFailure != null) throw firstFailure as Throwable
+        return songs.values.toList()
+    }
+
+    private fun getEntry(accessToken: String, fileId: String): PersonalDriveEntry {
+        val fields = urlEncode("id,name,mimeType,size,capabilities(canDownload)")
+        val url = "$BASE/$fileId?fields=$fields&supportsAllDrives=true"
+        val item = getJson(accessToken, url)
+        val id = item.optString("id")
+        if (id.isBlank()) throw FileNotFoundException("Google Picker không trả File ID hợp lệ")
+        val mime = item.optString("mimeType")
+        return PersonalDriveEntry(
+            id = id,
+            name = item.optString("name", "Chưa có tên"),
+            mimeType = mime,
+            isFolder = mime == FOLDER_MIME,
+            canDownload = item.optJSONObject("capabilities")
+                ?.optBoolean("canDownload", true) ?: true,
+            size = item.optLong("size", 0L)
+        )
+    }
 
     fun listChildren(
         accessToken: String,
@@ -2245,7 +3569,7 @@ private object PersonalDriveApi {
                 "Phiên Google Drive đã hết hạn hoặc bị thu hồi. Hãy cấp lại quyền."
             )
             403 -> IOException(
-                "Google Drive từ chối quyền truy cập. Kiểm tra Drive API, OAuth scope drive.readonly và tài khoản Google. $message"
+                "Google Drive từ chối quyền truy cập. Kiểm tra Drive API, OAuth scope drive.file và quyền file đã chọn bằng Google Picker. $message"
             )
             404 -> FileNotFoundException("Không tìm thấy file hoặc thư mục Google Drive. $message")
             429 -> IOException("Google Drive API đang vượt giới hạn. Hãy thử lại sau.")
@@ -2520,6 +3844,625 @@ private object SharedDriveApi {
     }.getOrNull()
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
+}
+
+private class LocalAudioHttpServer(
+    file: File,
+    contentType: String,
+    displayName: String,
+    artist: String = "",
+    album: String = "",
+    durationMs: Long = 0L,
+    songKey: String = ""
+) {
+    private data class ServedSong(
+        val file: File,
+        val mimeType: String,
+        val title: String,
+        val artist: String,
+        val album: String,
+        val durationMs: Long,
+        val key: String
+    )
+    @Volatile private var current = ServedSong(file, contentType, displayName, artist, album, durationMs, songKey)
+
+    fun updateSong(
+        file: File, mimeType: String, title: String, artist: String, album: String,
+        durationMs: Long, key: String
+    ) {
+        current = ServedSong(file, mimeType, title, artist, album, durationMs, key)
+    }
+    private val serverSocket = ServerSocket(0)
+    private val executor: ExecutorService = Executors.newCachedThreadPool()
+    @Volatile private var running = false
+    val token: String = UUID.randomUUID().toString().replace("-", "")
+    val port: Int get() = serverSocket.localPort
+
+    fun start() {
+        if (running) return
+        running = true
+        executor.execute {
+            while (running) {
+                val socket = runCatching { serverSocket.accept() }.getOrNull() ?: break
+                executor.execute { handle(socket) }
+            }
+        }
+    }
+
+    fun stop() {
+        running = false
+        runCatching { serverSocket.close() }
+        executor.shutdownNow()
+    }
+
+    private fun handle(socket: Socket) {
+        socket.use { client ->
+            client.soTimeout = 15_000
+            val reader = BufferedReader(InputStreamReader(client.getInputStream(), Charsets.US_ASCII))
+            val requestLine = reader.readLine() ?: return
+            val parts = requestLine.split(' ')
+            if (parts.size < 2) return
+            val method = parts[0].uppercase(Locale.ROOT)
+            val path = parts[1].substringBefore('?')
+            val headers = linkedMapOf<String, String>()
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) break
+                val index = line.indexOf(':')
+                if (index > 0) headers[line.substring(0, index).trim().lowercase(Locale.ROOT)] = line.substring(index + 1).trim()
+            }
+            if (!path.contains("/$token/")) {
+                writeSimpleResponse(client, 404, "Not Found")
+                return
+            }
+            if (method == "OPTIONS") {
+                val output = client.getOutputStream()
+                output.write(
+                    ("HTTP/1.1 204 No Content\r\n" +
+                            "Access-Control-Allow-Origin: *\r\n" +
+                            "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n" +
+                            "Access-Control-Allow-Headers: Range, Content-Type\r\n" +
+                            "Access-Control-Max-Age: 600\r\n" +
+                            "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+                )
+                output.flush()
+                return
+            }
+            if (method !in setOf("GET", "HEAD")) {
+                writeSimpleResponse(client, 405, "Method Not Allowed")
+                return
+            }
+            // App-to-app protocol: authenticated JSON metadata for the shared track.
+            if (path == "/$token/info") {
+                val song = current
+                val body = JSONObject().apply {
+                    put("app", "MeloWare")
+                    put("version", 1)
+                    put("key", song.key)
+                    put("title", song.title)
+                    put("artist", song.artist)
+                    put("album", song.album)
+                    put("durationMs", song.durationMs)
+                    put("mimeType", song.mimeType)
+                }.toString().toByteArray(Charsets.UTF_8)
+                val out = client.getOutputStream()
+                out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n" +
+                    "Content-Length: ${body.size}\r\nCache-Control: no-store\r\n" +
+                    "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
+                if (method == "GET") out.write(body)
+                out.flush()
+                return
+            }
+            val song = current  // Keep a consistent file snapshot while this client streams.
+            val file = song.file
+            val contentType = song.mimeType
+            val displayName = song.title
+            val total = file.length()
+            if (total <= 0L) {
+                writeSimpleResponse(client, 404, "Empty file")
+                return
+            }
+            val range = parseRange(headers["range"], total)
+            if (range == null && !headers["range"].isNullOrBlank()) {
+                val out = client.getOutputStream()
+                out.write(("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$total\r\nConnection: close\r\n\r\n").toByteArray())
+                out.flush()
+                return
+            }
+            val start = range?.first ?: 0L
+            val end = range?.second ?: (total - 1L)
+            val length = end - start + 1L
+            val status = if (range != null) "206 Partial Content" else "200 OK"
+            val safeName = displayName.replace(Regex("[\\r\\n\\\"]"), "_")
+            val response = buildString {
+                append("HTTP/1.1 $status\r\n")
+                append("Content-Type: $contentType\r\n")
+                append("Content-Length: $length\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Access-Control-Allow-Origin: *\r\n")
+                append("Access-Control-Allow-Headers: Range, Content-Type\r\n")
+                append("Cache-Control: no-store\r\n")
+                append("Content-Disposition: inline; filename=\"$safeName\"\r\n")
+                if (range != null) append("Content-Range: bytes $start-$end/$total\r\n")
+                append("Connection: close\r\n\r\n")
+            }
+            val output = client.getOutputStream()
+            output.write(response.toByteArray(Charsets.US_ASCII))
+            if (method == "HEAD") {
+                output.flush()
+                return
+            }
+            RandomAccessFile(file, "r").use { source ->
+                source.seek(start)
+                val buffer = ByteArray(128 * 1024)
+                var remaining = length
+                while (remaining > 0L) {
+                    val read = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                    remaining -= read
+                }
+            }
+            output.flush()
+        }
+    }
+
+    private fun parseRange(value: String?, total: Long): Pair<Long, Long>? {
+        if (value.isNullOrBlank()) return null
+        val match = Regex("bytes=(\\d*)-(\\d*)", RegexOption.IGNORE_CASE).find(value) ?: return null
+        val startText = match.groupValues[1]
+        val endText = match.groupValues[2]
+        val start: Long
+        val end: Long
+        if (startText.isBlank()) {
+            val suffix = endText.toLongOrNull()?.coerceAtLeast(1L) ?: return null
+            start = (total - suffix).coerceAtLeast(0L)
+            end = total - 1L
+        } else {
+            start = startText.toLongOrNull() ?: return null
+            end = endText.toLongOrNull()?.coerceAtMost(total - 1L) ?: (total - 1L)
+        }
+        if (start !in 0 until total || end < start) return null
+        return start to end
+    }
+
+    private fun writeSimpleResponse(socket: Socket, code: Int, message: String) {
+        val body = message.toByteArray(Charsets.UTF_8)
+        socket.getOutputStream().apply {
+            write(("HTTP/1.1 $code $message\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n").toByteArray())
+            write(body)
+            flush()
+        }
+    }
+}
+
+
+/** Android Network Service Discovery: MeloWare devices on the SAME local Wi-Fi. */
+internal class MeloWareLanDiscovery(context: Context) {
+    companion object {
+        private const val SERVICE_TYPE = "_meloware._tcp."
+    }
+
+    private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+    private val handler = Handler(Looper.getMainLooper())
+    val peers = mutableStateListOf<MeloWareLanPeer>()
+    var isSearching by mutableStateOf(false)
+        private set
+    var isAdvertising by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+
+    private var publisher: NsdManager.RegistrationListener? = null
+    private var publishPort = -1
+    private var publishToken: String? = null
+    private var browser: NsdManager.DiscoveryListener? = null
+    private val resolving = ConcurrentHashMap.newKeySet<String>()
+
+    fun advertise(port: Int, token: String) {
+        if (port <= 0 || token.length != 32) return
+        if (publisher != null && publishPort == port && publishToken == token) return
+        stopAdvertising()
+        publishPort = port
+        publishToken = token
+        error = null
+        val registration = object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+                handler.post { if (publisher === this) isAdvertising = true }
+            }
+            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                handler.post {
+                    if (publisher === this) {
+                        publisher = null
+                        publishPort = -1
+                        publishToken = null
+                        isAdvertising = false
+                        error = "Không thể công bố MeloWare trên mạng (mã $errorCode)."
+                    }
+                }
+            }
+            override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {
+                handler.post { if (publisher === this) isAdvertising = false }
+            }
+            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                handler.post { error = "Lỗi ngừng chia sẻ (mã $errorCode)" }
+            }
+        }
+        publisher = registration
+        val service = NsdServiceInfo().apply {
+            serviceName = "MeloWare - ${Build.MODEL.take(22)}"
+            serviceType = SERVICE_TYPE
+            this.port = port
+            setAttribute("token", token)
+        }
+        runCatching { nsd.registerService(service, NsdManager.PROTOCOL_DNS_SD, registration) }
+            .onFailure { ex ->
+                publisher = null
+                publishPort = -1
+                publishToken = null
+                error = "Không thể bật tìm kiếm MeloWare: ${ex.localizedMessage}"
+            }
+    }
+
+    fun stopAdvertising() {
+        val listener = publisher ?: return
+        publisher = null
+        publishPort = -1
+        publishToken = null
+        isAdvertising = false
+        runCatching { nsd.unregisterService(listener) }
+    }
+
+    fun startDiscovery() {
+        if (browser != null) return
+        peers.clear()
+        error = null
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {
+                handler.post { if (browser === this) isSearching = true }
+            }
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                handler.post {
+                    if (browser === this) {
+                        browser = null
+                        isSearching = false
+                        error = "Không thể quét mạng Wi-Fi (mã $errorCode)."
+                    }
+                }
+                runCatching { nsd.stopServiceDiscovery(this) }
+            }
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                val name = serviceInfo.serviceName.orEmpty()
+                if (!resolving.add(name)) return
+                val activeBrowser = this
+                @Suppress("DEPRECATION")
+                runCatching {
+                    nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(service: NsdServiceInfo, errorCode: Int) {
+                            resolving.remove(name)
+                        }
+                        override fun onServiceResolved(service: NsdServiceInfo) {
+                            resolving.remove(name)
+                            val host = (service.host as? Inet4Address)?.hostAddress.orEmpty()
+                            val token = service.attributes["token"]?.toString(Charsets.UTF_8).orEmpty()
+                            if (host.isBlank() || !Regex("[0-9a-fA-F]{32}").matches(token) || service.port <= 0) return
+                            val peer = MeloWareLanPeer(service.serviceName, host, service.port, token)
+                            handler.post {
+                                if (browser === activeBrowser && peer.token != publishToken) {
+                                    peers.removeAll { it.name == peer.name }
+                                    peers.add(peer)
+                                }
+                            }
+                        }
+                    })
+                }.onFailure { resolving.remove(name) }
+            }
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                handler.post { peers.removeAll { it.name == serviceInfo.serviceName } }
+            }
+            override fun onDiscoveryStopped(serviceType: String) {
+                handler.post { if (browser === this) isSearching = false }
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                handler.post { error = "Lỗi khi dừng quét (mã $errorCode)" }
+            }
+        }
+        browser = listener
+        runCatching { nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener) }
+            .onFailure { ex ->
+                browser = null
+                isSearching = false
+                error = "Không thể tìm MeloWare: ${ex.localizedMessage}"
+            }
+    }
+
+    fun stopDiscovery() {
+        val listener = browser ?: return
+        browser = null
+        isSearching = false
+        resolving.clear()
+        runCatching { nsd.stopServiceDiscovery(listener) }
+    }
+}
+
+class MeloWareCastOptionsProvider : OptionsProvider {
+    override fun getCastOptions(context: Context): CastOptions =
+        CastOptions.Builder()
+            .setReceiverApplicationId(CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID)
+            .setCastMediaOptions(CastMediaOptions.Builder().build())
+            .setResumeSavedSession(true)
+            .setEnableReconnectionService(true)
+            .build()
+
+    override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
+}
+
+private object LrclibLyricsRepository {
+    private const val BASE_URL = "https://lrclib.net"
+    private const val CLIENT_ID = "MeloWare/12.6 (https://tunertools.top)"
+    private const val CACHE_DIR = "meloware_lyrics"
+
+    fun findLyrics(
+        context: Context,
+        song: SongItem,
+        knownDurationMs: Long,
+        forceRefresh: Boolean
+    ): LyricsContent {
+        val title = cleanTrackName(song.title)
+        val artist = cleanArtistName(song.artist)
+        val album = song.album.trim()
+        val durationSeconds = (knownDurationMs / 1000L)
+            .takeIf { it in 1L..3600L }
+
+        if (title.isBlank()) throw IOException("Tên bài hát đang trống nên không thể tìm lời.")
+
+        val cacheFile = lyricsCacheFile(context, title, artist)
+        if (!forceRefresh) {
+            readCached(cacheFile)?.let { return it }
+        }
+
+        val candidates = linkedMapOf<Long, JSONObject>()
+
+        if (artist.isNotBlank() && !isUnknownArtist(artist)) {
+            durationSeconds?.let { seconds ->
+                requestDirect(title, artist, album, seconds)?.let { json ->
+                    candidates[json.optLong("id", -1L)] = json
+                }
+            }
+            if (candidates.isEmpty()) {
+                requestDirect(title, artist, album, null)?.let { json ->
+                    candidates[json.optLong("id", -1L)] = json
+                }
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            requestSearch(title, artist).forEach { json ->
+                candidates[json.optLong("id", -1L)] = json
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            requestSearch(title, "").forEach { json ->
+                candidates[json.optLong("id", -1L)] = json
+            }
+        }
+
+        val best = chooseBestMatch(
+            records = candidates.values.toList(),
+            expectedTitle = title,
+            expectedArtist = artist,
+            expectedDurationSeconds = durationSeconds
+        ) ?: throw IOException("Không tìm thấy lời cho “${song.title}” trên LRCLIB.")
+
+        val content = parseRecord(best)
+        writeCached(cacheFile, best)
+        return content
+    }
+
+    private fun requestDirect(
+        trackName: String,
+        artistName: String,
+        albumName: String,
+        durationSeconds: Long?
+    ): JSONObject? {
+        val params = linkedMapOf(
+            "track_name" to trackName,
+            "artist_name" to artistName
+        )
+        if (albumName.isNotBlank()) params["album_name"] = albumName
+        durationSeconds?.let { params["duration"] = it.toString() }
+        val response = request("$BASE_URL/api/get?${encodeParams(params)}")
+        return when (response.first) {
+            in 200..299 -> JSONObject(response.second)
+            404 -> null
+            429 -> throw IOException("LRCLIB đang giới hạn tần suất. Hãy thử lại sau.")
+            else -> throw IOException("LRCLIB HTTP ${response.first}: ${errorMessage(response.second)}")
+        }
+    }
+
+    private fun requestSearch(trackName: String, artistName: String): List<JSONObject> {
+        val params = linkedMapOf("track_name" to trackName)
+        if (artistName.isNotBlank() && !isUnknownArtist(artistName)) {
+            params["artist_name"] = artistName
+        }
+        val response = request("$BASE_URL/api/search?${encodeParams(params)}")
+        if (response.first == 429) {
+            throw IOException("LRCLIB đang giới hạn tần suất. Hãy thử lại sau.")
+        }
+        if (response.first !in 200..299) {
+            throw IOException("LRCLIB HTTP ${response.first}: ${errorMessage(response.second)}")
+        }
+        val array = JSONArray(response.second)
+        return buildList {
+            for (index in 0 until array.length()) {
+                array.optJSONObject(index)?.let(::add)
+            }
+        }
+    }
+
+    private fun request(url: String): Pair<Int, String> {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 18_000
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", CLIENT_ID)
+        connection.setRequestProperty("Lrclib-Client", CLIENT_ID)
+        return try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            code to body
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun chooseBestMatch(
+        records: List<JSONObject>,
+        expectedTitle: String,
+        expectedArtist: String,
+        expectedDurationSeconds: Long?
+    ): JSONObject? {
+        return records.maxByOrNull { record ->
+            val title = record.optString("trackName", record.optString("name"))
+            val artist = record.optString("artistName")
+            val duration = record.optDouble("duration", 0.0)
+            var score = textSimilarity(expectedTitle, title) * 62.0
+            if (expectedArtist.isNotBlank() && !isUnknownArtist(expectedArtist)) {
+                score += textSimilarity(expectedArtist, artist) * 30.0
+            }
+            if (expectedDurationSeconds != null && duration > 0.0) {
+                val difference = kotlin.math.abs(duration - expectedDurationSeconds)
+                score += when {
+                    difference <= 2.0 -> 12.0
+                    difference <= 5.0 -> 8.0
+                    difference <= 15.0 -> 3.0
+                    else -> 0.0
+                }
+            }
+            if (!record.optString("syncedLyrics").isNullOrBlank()) score += 5.0
+            score
+        }?.takeIf { record ->
+            textSimilarity(expectedTitle, record.optString("trackName", record.optString("name"))) >= 0.42
+        }
+    }
+
+    private fun parseRecord(record: JSONObject): LyricsContent {
+        val instrumental = record.optBoolean("instrumental", false)
+        val syncedLyrics = record.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
+        val plainLyrics = record.optString("plainLyrics").takeIf { it.isNotBlank() && it != "null" }
+        val syncedLines = syncedLyrics?.let(::parseSyncedLyrics).orEmpty()
+        val plainLines = plainLyrics?.lineSequence()
+            ?.map(String::trim)
+            ?.filter(String::isNotBlank)
+            ?.map { LyricLine(null, it) }
+            ?.toList()
+            .orEmpty()
+        val lines = when {
+            instrumental -> emptyList()
+            syncedLines.isNotEmpty() -> syncedLines
+            plainLines.isNotEmpty() -> plainLines
+            else -> emptyList()
+        }
+        return LyricsContent(
+            recordId = record.optLong("id", -1L),
+            trackName = record.optString("trackName", record.optString("name")),
+            artistName = record.optString("artistName"),
+            albumName = record.optString("albumName"),
+            durationMs = (record.optDouble("duration", 0.0) * 1000.0).toLong(),
+            instrumental = instrumental,
+            synced = lines.any { it.timestampMs != null },
+            lines = lines
+        )
+    }
+
+    private fun parseSyncedLyrics(raw: String): List<LyricLine> {
+        val timestampRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?]")
+        val output = mutableListOf<LyricLine>()
+        raw.lineSequence().forEach { sourceLine ->
+            val matches = timestampRegex.findAll(sourceLine).toList()
+            if (matches.isEmpty()) return@forEach
+            val text = sourceLine.substringAfterLast(']').trim()
+            if (text.isBlank()) return@forEach
+            matches.forEach { match ->
+                val minutes = match.groupValues[1].toLongOrNull()
+                val seconds = match.groupValues[2].toLongOrNull()
+                if (minutes != null && seconds != null) {
+                    val fraction = match.groupValues.getOrNull(3).orEmpty()
+                    val fractionMs = when (fraction.length) {
+                        1 -> fraction.toLongOrNull()?.times(100L) ?: 0L
+                        2 -> fraction.toLongOrNull()?.times(10L) ?: 0L
+                        else -> fraction.take(3).padEnd(3, '0').toLongOrNull() ?: 0L
+                    }
+                    output += LyricLine((minutes * 60L + seconds) * 1000L + fractionMs, text)
+                }
+            }
+        }
+        return output.sortedBy { it.timestampMs ?: Long.MAX_VALUE }
+    }
+
+    private fun cleanTrackName(value: String): String = value
+        .substringBeforeLast('.', value)
+        .replace(Regex("""^\s*\d{1,3}\s*[.)_\-]+\s*"""), "")
+        .replace(Regex("""(?i)\s*(?:\[|\()(official\s*)?(music\s*)?(video|audio|lyrics?|lyric video|mv|visualizer|karaoke)(?:\]|\))\s*"""), " ")
+        .replace(Regex("""(?i)\s*[-|]\s*(official\s*)?(video|audio|lyrics?|mv|karaoke)\s*$"""), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    private fun cleanArtistName(value: String): String = value
+        .replace(Regex("""(?i)\s*[-–—]\s*topic\s*$"""), "")
+        .replace(Regex("""(?i)\s+(official|music)\s*$"""), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    private fun isUnknownArtist(value: String): Boolean {
+        val normalized = normalizeText(value)
+        return normalized.isBlank() || normalized in setOf(
+            "nghe si chua biet", "unknown artist", "google drive", "movie", "youtube"
+        )
+    }
+
+    private fun textSimilarity(first: String, second: String): Double {
+        val left = normalizeText(first)
+        val right = normalizeText(second)
+        if (left.isBlank() || right.isBlank()) return 0.0
+        if (left == right) return 1.0
+        if (left.length >= 4 && right.contains(left)) return 0.91
+        if (right.length >= 4 && left.contains(right)) return 0.86
+        val leftTokens = left.split(' ').filter(String::isNotBlank).toSet()
+        val rightTokens = right.split(' ').filter(String::isNotBlank).toSet()
+        if (leftTokens.isEmpty() || rightTokens.isEmpty()) return 0.0
+        return 2.0 * leftTokens.intersect(rightTokens).size / (leftTokens.size + rightTokens.size)
+    }
+
+    private fun encodeParams(params: Map<String, String>): String = params.entries.joinToString("&") {
+        "${URLEncoder.encode(it.key, "UTF-8") }=${URLEncoder.encode(it.value, "UTF-8") }"
+    }
+
+    private fun errorMessage(body: String): String = runCatching {
+        JSONObject(body).optString("message")
+    }.getOrDefault(body.take(220)).ifBlank { "Không xác định" }
+
+    private fun lyricsCacheFile(context: Context, title: String, artist: String): File {
+        val key = MessageDigest.getInstance("SHA-256")
+            .digest("${normalizeText(title)}|${normalizeText(artist)}".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            .take(32)
+        val directory = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
+        return File(directory, "$key.json")
+    }
+
+    private fun readCached(file: File): LyricsContent? = runCatching {
+        if (!file.isFile || file.length() <= 0L) return null
+        parseRecord(JSONObject(file.readText(Charsets.UTF_8)))
+    }.getOrNull()
+
+    private fun writeCached(file: File, record: JSONObject) {
+        runCatching { file.writeText(record.toString(), Charsets.UTF_8) }
+    }
 }
 
 private object ArtworkResolver {
