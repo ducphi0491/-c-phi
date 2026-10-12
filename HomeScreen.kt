@@ -1,6 +1,19 @@
 package duc_phi.music
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.os.SystemClock
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,11 +23,17 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,48 +41,71 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import java.util.Locale
 
 @Composable
 internal fun HomeScreen(
     controller: MusicController,
     onScanLocal: () -> Unit,
-    onPickPersonalDrive: () -> Unit,
+    onOpenLocalFolders: () -> Unit,
+    onOpenPersonalDrive: () -> Unit,
+    onOpenPublicDrive: () -> Unit,
     onSettings: () -> Unit
 ) {
     val colors = LocalMusicColors.current
     val recent = controller.recentForHome()
     val recommended = controller.recommendations()
     val driveSongs = controller.newlyAddedFromDrive()
+    var showOnlineSearch by remember { mutableStateOf(false) }
+    var showLaptopMusic by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -83,13 +125,14 @@ internal fun HomeScreen(
                     )
                 )
                 .padding(padding)
-                .statusBarsPadding(),
+                .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             item {
                 HomeHeader(
-                    onSearch = { controller.openLibrary(LibrarySource.ALL) },
+                    onLogoFiveTap = { showOnlineSearch = true },
                     onSettings = onSettings
                 )
             }
@@ -98,56 +141,43 @@ internal fun HomeScreen(
                 HomeSearchBar(
                     initialQuery = controller.libraryQuery,
                     onSearch = { query ->
-                        controller.libraryQuery = query
-                        controller.openLibrary(LibrarySource.ALL)
+                        val cleanQuery = query.trim()
+                        if (cleanQuery.isNotBlank()) {
+                            controller.libraryQuery = cleanQuery
+                            controller.libraryTab = LibraryTab.SONGS
+                            controller.openLibrary(LibrarySource.ALL)
+                        }
                     }
                 )
             }
 
             item {
                 HeroMusicCard(
-                    onClick = { controller.openLibrary(LibrarySource.ALL) }
+                    onOpenLocalFolders = onOpenLocalFolders,
+                    onOpenPersonalDrive = onOpenPersonalDrive,
+                    onOpenPublicDrive = onOpenPublicDrive
                 )
             }
 
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable { showLaptopMusic = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.card,
+                    border = BorderStroke(1.dp, colors.border)
                 ) {
-                    SourceCard(
-                        title = "Nhạc trên máy",
-                        subtitle = "${controller.sourceCount(LibrarySource.LOCAL) + controller.sourceCount(LibrarySource.DOWNLOADED)} bài",
-                        icon = Icons.Rounded.Smartphone,
-                        colorsGradient = listOf(Color(0xFF073A64), Color(0xFF06243E)),
-                        onClick = {
-                            onScanLocal()
-                            controller.openLibrary(LibrarySource.LOCAL)
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    SourceCard(
-                        title = "Google Drive",
-                        subtitle = controller.personalDriveName.ifBlank { "Drive của tôi" },
-                        icon = Icons.Rounded.Cloud,
-                        colorsGradient = listOf(Color(0xFF3D176B), Color(0xFF20103F)),
-                        onClick = {
-                            if (controller.personalDriveUriText.isBlank()) onPickPersonalDrive()
-                            controller.openLibrary(LibrarySource.PERSONAL_DRIVE)
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    SourceCard(
-                        title = "Link Drive",
-                        subtitle = "Drive chia sẻ",
-                        icon = Icons.Rounded.Link,
-                        colorsGradient = listOf(Color(0xFF6A173C), Color(0xFF341126)),
-                        onClick = {
-                            controller.showPublicDriveDialog = true
-                            controller.openLibrary(LibrarySource.PUBLIC_DRIVE)
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Computer, null, tint = colors.purpleBright,
+                            modifier = Modifier.size(26.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Nhạc từ máy tính qua Wi-Fi", fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary)
+                            Text("Mở Chrome trên PC · Nghe online hoặc tải bài hát",
+                                fontSize = 11.sp, color = colors.textSecondary)
+                        }
+                        Icon(Icons.Rounded.PlayArrow, null, tint = colors.purpleBright)
+                    }
                 }
             }
 
@@ -234,33 +264,89 @@ internal fun HomeScreen(
             }
         }
     }
+
+    if (showLaptopMusic) {
+        MeloWareLaptopDialog(controller = controller, onDismiss = { showLaptopMusic = false })
+    }
+
+    if (showOnlineSearch) {
+        OnlineSearchDialog(
+            controller = controller,
+            onDismiss = { showOnlineSearch = false }
+        )
+    }
 }
 
 @Composable
 private fun HomeHeader(
-    onSearch: () -> Unit,
+    onLogoFiveTap: () -> Unit,
     onSettings: () -> Unit
 ) {
     val colors = LocalMusicColors.current
+    var logoTapCount by remember { mutableIntStateOf(0) }
+    var lastLogoTapAt by remember { mutableLongStateOf(0L) }
+
+    fun registerLogoTap() {
+        val now = SystemClock.elapsedRealtime()
+        logoTapCount = if (now - lastLogoTapAt <= 1_800L) {
+            logoTapCount + 1
+        } else {
+            1
+        }
+        lastLogoTapAt = now
+
+        if (logoTapCount >= 5) {
+            logoTapCount = 0
+            lastLogoTapAt = 0L
+            onLogoFiveTap()
+        }
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            GradientText(
-                text = "TUNERTOOLS",
-                brush = Brush.horizontalGradient(listOf(colors.purpleBright, colors.magenta)),
-                fontSize = 26.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-            Text(
-                text = "Âm nhạc của bạn",
-                color = colors.textSecondary,
-                fontSize = 16.sp
-            )
-        }
-        IconButton(onClick = onSearch) {
-            Icon(Icons.Rounded.Search, contentDescription = "Tìm kiếm", tint = colors.textPrimary)
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clickable(onClick = ::registerLogoTap),
+                shape = RoundedCornerShape(14.dp),
+                color = Color.Black,
+                border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.62f)),
+                shadowElevation = 7.dp
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(Color.Black)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.logo),
+                        contentDescription = "Logo MeloWare",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            Spacer(Modifier.width(11.dp))
+            Column {
+                GradientText(
+                    text = "MeloWare",
+                    brush = Brush.horizontalGradient(listOf(colors.purpleBright, colors.magenta)),
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "Âm nhạc của bạn",
+                    color = colors.textSecondary,
+                    fontSize = 16.sp
+                )
+            }
         }
         IconButton(onClick = onSettings) {
             Icon(Icons.Rounded.Settings, contentDescription = "Cài đặt", tint = colors.textPrimary)
@@ -274,7 +360,49 @@ private fun HomeSearchBar(
     onSearch: (String) -> Unit
 ) {
     val colors = LocalMusicColors.current
+    val context = LocalContext.current
+    val currentOnSearch by rememberUpdatedState(onSearch)
     var query by remember(initialQuery) { mutableStateOf(initialQuery) }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenText = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+
+            if (spokenText.isNotBlank()) {
+                query = spokenText
+                currentOnSearch(spokenText)
+            }
+        }
+    }
+
+    fun startVoiceSearch() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Nói tên bài hát, ca sĩ hoặc album")
+        }
+
+        try {
+            speechLauncher.launch(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(
+                context,
+                "Thiết bị chưa có dịch vụ nhận dạng giọng nói.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -282,16 +410,9 @@ private fun HomeSearchBar(
         border = BorderStroke(1.dp, colors.border)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 7.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.Rounded.Search,
-                contentDescription = null,
-                tint = colors.textSecondary,
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(Modifier.width(10.dp))
             BasicTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -299,6 +420,12 @@ private fun HomeSearchBar(
                 textStyle = TextStyle(color = colors.textPrimary, fontSize = 14.sp),
                 singleLine = true,
                 cursorBrush = SolidColor(colors.purpleBright),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = {
+                        if (query.isNotBlank()) currentOnSearch(query)
+                    }
+                ),
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (query.isBlank()) {
@@ -312,21 +439,40 @@ private fun HomeSearchBar(
                     }
                 }
             )
-            IconButton(onClick = { onSearch(query) }, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Rounded.Mic, contentDescription = "Tìm", tint = colors.textSecondary)
+            IconButton(onClick = ::startVoiceSearch, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Rounded.Mic,
+                    contentDescription = "Tìm kiếm bằng giọng nói",
+                    tint = colors.purpleBright,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+            IconButton(
+                onClick = { if (query.isNotBlank()) currentOnSearch(query) },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Rounded.Search,
+                    contentDescription = "Tìm",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(21.dp)
+                )
             }
         }
     }
 }
 
 @Composable
-private fun HeroMusicCard(onClick: () -> Unit) {
+private fun HeroMusicCard(
+    onOpenLocalFolders: () -> Unit,
+    onOpenPersonalDrive: () -> Unit,
+    onOpenPublicDrive: () -> Unit
+) {
     val colors = LocalMusicColors.current
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(185.dp)
-            .clickable(onClick = onClick),
+            .height(224.dp),
         shape = RoundedCornerShape(24.dp),
         color = Color.Transparent,
         border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.55f))
@@ -336,18 +482,22 @@ private fun HeroMusicCard(onClick: () -> Unit) {
                 .fillMaxSize()
                 .background(
                     Brush.linearGradient(
-                        listOf(
-                            Color(0xFF15115B),
-                            Color(0xFF3A145D),
-                            Color(0xFF0C4B70)
-                        )
+                        if (colors.purple == (if (colors.isDark) DarkMusicColors.purple else LightMusicColors.purple)) {
+                            listOf(Color(0xFF15115B), Color(0xFF3A145D), Color(0xFF0C4B70))
+                        } else {
+                            listOf(
+                                androidx.compose.ui.graphics.lerp(colors.purple, Color.Black, 0.60f),
+                                androidx.compose.ui.graphics.lerp(colors.magenta, Color.Black, 0.65f),
+                                androidx.compose.ui.graphics.lerp(colors.blue, Color.Black, 0.70f)
+                            )
+                        }
                     )
                 )
-                .padding(22.dp)
+                .padding(horizontal = 18.dp, vertical = 17.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(180.dp)
+                    .size(190.dp)
                     .align(Alignment.CenterEnd)
                     .clip(CircleShape)
                     .background(
@@ -356,40 +506,261 @@ private fun HeroMusicCard(onClick: () -> Unit) {
                         )
                     )
             )
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center
-            ) {
+
+            Column(modifier = Modifier.fillMaxSize()) {
                 Text(
                     text = "Nhạc không\ngiới hạn",
                     color = Color.White,
-                    fontSize = 30.sp,
+                    fontSize = 28.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    lineHeight = 32.sp
+                    lineHeight = 30.sp
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(7.dp))
                 Text(
                     text = "Nghe nhạc Offline và Google Drive\nchất lượng cao",
                     color = Color.White.copy(alpha = 0.78f),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
                 )
-                Spacer(Modifier.height(16.dp))
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = colors.purpleBright
+                Spacer(Modifier.weight(1f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Khám phá ngay", color = Color.White, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(6.dp))
-                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = Color.White)
-                    }
+                    HeroSourceAction(
+                        title = "Nhạc máy",
+                        subtitle = "Thư mục âm thanh",
+                        sourceType = HeroSourceType.LOCAL_FOLDER,
+                        onClick = onOpenLocalFolders,
+                        modifier = Modifier.weight(1f)
+                    )
+                    HeroSourceAction(
+                        title = "Google Drive",
+                        subtitle = "Drive của tôi",
+                        sourceType = HeroSourceType.PERSONAL_DRIVE,
+                        onClick = onOpenPersonalDrive,
+                        modifier = Modifier.weight(1f)
+                    )
+                    HeroSourceAction(
+                        title = "Link Drive",
+                        subtitle = "Thư mục chia sẻ",
+                        sourceType = HeroSourceType.PUBLIC_LINK,
+                        onClick = onOpenPublicDrive,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
+    }
+}
+
+private enum class HeroSourceType {
+    LOCAL_FOLDER,
+    PERSONAL_DRIVE,
+    PUBLIC_LINK
+}
+
+@Composable
+private fun HeroSourceAction(
+    title: String,
+    subtitle: String,
+    sourceType: HeroSourceType,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalMusicColors.current
+    Surface(
+        modifier = modifier
+            .height(66.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(15.dp),
+        color = Color(0xFF050B18).copy(alpha = 0.68f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier.size(31.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                when (sourceType) {
+                    HeroSourceType.LOCAL_FOLDER -> {
+                        Surface(
+                            modifier = Modifier.size(29.dp),
+                            shape = RoundedCornerShape(9.dp),
+                            color = Color(0xFF123B5E),
+                            border = BorderStroke(1.dp, Color(0xFF39BDF8).copy(alpha = 0.55f))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Folder,
+                                    contentDescription = null,
+                                    tint = Color(0xFF67D8FF),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    HeroSourceType.PERSONAL_DRIVE -> {
+                        GoogleDriveLogo(modifier = Modifier.size(29.dp))
+                    }
+
+                    HeroSourceType.PUBLIC_LINK -> {
+                        GoogleDriveLogo(modifier = Modifier.size(29.dp))
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(14.dp),
+                            shape = CircleShape,
+                            color = colors.magenta,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.72f))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Link,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(9.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                color = Color.White.copy(alpha = 0.62f),
+                fontSize = 7.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * Google Drive logo: hai cạnh ngoài xiên THẲNG liên tục qua chỗ chuyển màu.
+ * Chỉ bo cong ở đỉnh trên và hai góc đáy; tam giác rỗng ở giữa hướng xuống 6 giờ.
+ * Vẽ trực tiếp trong Canvas, không cần thêm drawable/image.
+ */
+@Composable
+private fun GoogleDriveLogo(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        if (w <= 0f || h <= 0f) return@Canvas
+
+        // Ba điểm trên mỗi cạnh xiên nằm trên CÙNG MỘT ĐƯỜNG THẲNG:
+        // trái: (0.29, 0.14) -> (0.12, 0.48) -> (0.04, 0.64)
+        // phải: (0.71, 0.14) -> (0.88, 0.48) -> (0.96, 0.64)
+        // Vì vậy hai cạnh không bị cong hay gãy ở ranh giới giữa các dải màu.
+        val seamY = h * 0.48f
+        val leftSeam = w * 0.12f
+        val rightSeam = w * 0.88f
+        val cutLeft = w * 0.36f
+        val cutRight = w * 0.64f
+        val cutTipY = h * 0.705f
+        val bottom = h * 0.98f
+        val bottomJoin = w * 0.615f
+
+        // Xanh lá: phần vòm đỉnh và hai cạnh xiên thẳng tới ranh giới màu.
+        val greenPath = Path().apply {
+            moveTo(leftSeam, seamY)
+            lineTo(w * 0.29f, h * 0.14f)
+            cubicTo(
+                w * 0.33f, h * 0.05f,
+                w * 0.42f, h * 0.025f,
+                w * 0.50f, h * 0.025f
+            )
+            cubicTo(
+                w * 0.58f, h * 0.025f,
+                w * 0.67f, h * 0.05f,
+                w * 0.71f, h * 0.14f
+            )
+            lineTo(rightSeam, seamY)
+            lineTo(cutRight, seamY)
+            lineTo(cutLeft, seamY)
+            close()
+        }
+        drawPath(
+            path = greenPath,
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF49C8D7),
+                    Color(0xFF10BE6B),
+                    Color(0xFF0FBE69)
+                ),
+                start = androidx.compose.ui.geometry.Offset(w * 0.12f, h * 0.48f),
+                end = androidx.compose.ui.geometry.Offset(w * 0.70f, h * 0.025f)
+            )
+        )
+
+        // Xanh dương: cạnh ngoài bên trái là đường THẲNG từ mối nối
+        // tới (0.04w, 0.64h); chỉ dùng Bézier tại góc đáy trái.
+        val bluePath = Path().apply {
+            moveTo(leftSeam, seamY)
+            lineTo(cutLeft, seamY)
+            lineTo(w * 0.50f, cutTipY)
+            lineTo(bottomJoin, bottom)
+            lineTo(w * 0.18f, bottom)
+            cubicTo(
+                0f, bottom,
+                0f, h * 0.72f,
+                w * 0.04f, h * 0.64f
+            )
+            close()
+        }
+        drawPath(
+            path = bluePath,
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF4285F4),
+                    Color(0xFF3B7FF4),
+                    Color(0xFF8795FF)
+                ),
+                start = androidx.compose.ui.geometry.Offset(0f, h * 0.48f),
+                end = androidx.compose.ui.geometry.Offset(w * 0.65f, h)
+            )
+        )
+
+        // Vàng: đối xứng bên phải, cạnh xiên là đường THẲNG liên tục.
+        val yellowPath = Path().apply {
+            moveTo(cutRight, seamY)
+            lineTo(rightSeam, seamY)
+            lineTo(w * 0.96f, h * 0.64f)
+            cubicTo(
+                w, h * 0.72f,
+                w, bottom,
+                w * 0.82f, bottom
+            )
+            lineTo(bottomJoin, bottom)
+            lineTo(w * 0.50f, cutTipY)
+            close()
+        }
+        drawPath(
+            path = yellowPath,
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFFFFD21A),
+                    Color(0xFFFFCC00)
+                ),
+                start = androidx.compose.ui.geometry.Offset(w * 0.55f, h * 0.48f),
+                end = androidx.compose.ui.geometry.Offset(w, bottom)
+            )
+        )
     }
 }
 
@@ -499,6 +870,476 @@ private fun RecommendationCard(
     }
 }
 
+@Composable
+private fun OnlineSearchDialog(
+    controller: MusicController,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val context = LocalContext.current
+    var query by remember(controller.onlineSearchQuery) {
+        mutableStateOf(controller.onlineSearchQuery)
+    }
+
+    val onlineSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenText = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+
+            if (spokenText.isNotBlank()) {
+                query = spokenText
+                controller.onlineSearchQuery = spokenText
+                controller.searchOnline(spokenText)
+            }
+        }
+    }
+
+    fun startOnlineVoiceSearch() {
+        val sourceName = if (controller.onlineSearchMode == OnlineSearchMode.APPLE_MUSIC) {
+            "Music"
+        } else {
+            "Movie"
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            putExtra(
+                RecognizerIntent.EXTRA_PROMPT,
+                "Nói tên bài hát, ca sĩ hoặc video cần tìm trên $sourceName"
+            )
+        }
+
+        try {
+            onlineSpeechLauncher.launch(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(
+                context,
+                "Thiết bị chưa có dịch vụ nhận dạng giọng nói.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = { if (!controller.onlineSearchBusy) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.91f),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.backgroundSoft,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    .padding(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Tìm kiếm Music / Movie",
+                            color = colors.textPrimary,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "Nghe Music Preview hoặc xem Movie",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    IconButton(onClick = onDismiss, enabled = !controller.onlineSearchBusy) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+
+                // Hai nua Music / Movie chung mot vien thuoc, khong co khe ho.
+                // Vien ngoai co be mat toi lom sau, nua dang chon noi tim sang.
+                OnlineModeSelector(
+                    selectedMode = controller.onlineSearchMode,
+                    onSelectMusic = {
+                        controller.changeOnlineSearchMode(OnlineSearchMode.APPLE_MUSIC)
+                    },
+                    onSelectMovie = {
+                        controller.changeOnlineSearchMode(OnlineSearchMode.MOVIE)
+                    }
+                )
+
+                OnlineSearchInput(
+                    query = query,
+                    mode = controller.onlineSearchMode,
+                    busy = controller.onlineSearchBusy,
+                    onQueryChange = { value ->
+                        query = value
+                        controller.onlineSearchQuery = value
+                    },
+                    onVoiceSearch = ::startOnlineVoiceSearch,
+                    onClear = {
+                        query = ""
+                        controller.onlineSearchQuery = ""
+                    },
+                    onSearch = {
+                        if (query.isNotBlank()) controller.searchOnline(query)
+                    }
+                )
+
+                controller.onlineSearchError?.let { message ->
+                    Text(
+                        text = message,
+                        color = colors.red,
+                        fontSize = 12.sp
+                    )
+                }
+
+                if (controller.onlineSearchResults.isEmpty() && !controller.onlineSearchBusy) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (controller.onlineSearchMode == OnlineSearchMode.APPLE_MUSIC) {
+                                "Music sử dụng bản nghe thử từ iTunes Search."
+                            } else {
+                                "Kết quả Movie sẽ được phát tại màn hình Đang phát."
+                            },
+                            color = colors.textSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                        contentPadding = PaddingValues(bottom = 8.dp)
+                    ) {
+                        items(controller.onlineSearchResults, key = { it.id }) { song ->
+                            SongRow(
+                                song = song,
+                                artworkUrl = controller.artworkFor(song),
+                                isCurrent = controller.currentSong?.id == song.id,
+                                isFavorite = controller.isFavorite(song),
+                                onClick = {
+                                    controller.playOnlineResult(song)
+                                    onDismiss()
+                                },
+                                onFavorite = { controller.toggleFavorite(song) }
+                            )
+                        }
+                    }
+                }
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Đóng", color = colors.textSecondary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnlineSearchInput(
+    query: String,
+    mode: OnlineSearchMode,
+    busy: Boolean,
+    onQueryChange: (String) -> Unit,
+    onVoiceSearch: () -> Unit,
+    onClear: () -> Unit,
+    onSearch: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val isApple = mode == OnlineSearchMode.APPLE_MUSIC
+    val placeholder = if (isApple) {
+        "Tên bài hát, ca sĩ hoặc album..."
+    } else {
+        "Tên video, bài hát hoặc kênh..."
+    }
+    val helperText = if (isApple) {
+        "Tìm Music · Nhấn micro để tìm bằng giọng nói"
+    } else {
+        "Tìm Movie · Nhấn micro để tìm bằng giọng nói"
+    }
+    val modeIcon = if (isApple) Icons.Rounded.MusicNote else Icons.Rounded.Tv
+    val canSearch = query.isNotBlank() && !busy
+
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = colors.cardRaised,
+            border = BorderStroke(
+                1.dp,
+                if (query.isNotBlank()) colors.purpleBright.copy(alpha = 0.72f) else colors.border
+            )
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 13.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = modeIcon,
+                    contentDescription = null,
+                    tint = colors.purpleBright,
+                    modifier = Modifier.size(21.dp)
+                )
+
+                Spacer(Modifier.width(10.dp))
+
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    cursorBrush = SolidColor(colors.purpleBright),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { if (canSearch) onSearch() }
+                    ),
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (query.isBlank()) {
+                                Text(
+                                    text = placeholder,
+                                    color = colors.textMuted,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            innerTextField()
+                        }
+                    }
+                )
+
+                // Khi người dùng bắt đầu gõ, micro tự ẩn để dành chỗ cho xóa/tìm.
+                if (query.isBlank() && !busy) {
+                    IconButton(
+                        onClick = onVoiceSearch,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Mic,
+                            contentDescription = "Tìm kiếm bằng giọng nói",
+                            tint = colors.purpleBright,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+                }
+
+                if (query.isNotBlank() && !busy) {
+                    IconButton(
+                        onClick = onClear,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "Xóa từ khóa",
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onSearch,
+                    enabled = canSearch,
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(19.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.purpleBright
+                        )
+                    } else {
+                        Icon(
+                            Icons.Rounded.Search,
+                            contentDescription = "Tìm kiếm",
+                            tint = if (canSearch) colors.purpleBright else colors.textMuted,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Text(
+            text = helperText,
+            color = colors.textSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 5.dp)
+        )
+    }
+}
+
+/**
+ * Music / Movie segmented selector.
+ * One dark recessed outer capsule, two contiguous segments, one elevated purple active half.
+ * Search mode and actual online playback callbacks are not changed here.
+ */
+@Composable
+private fun OnlineModeSelector(
+    selectedMode: OnlineSearchMode,
+    onSelectMusic: () -> Unit,
+    onSelectMovie: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val outerShape = RoundedCornerShape(28.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .shadow(
+                elevation = 11.dp,
+                shape = outerShape,
+                ambientColor = Color.Black.copy(alpha = 0.52f),
+                spotColor = colors.purple.copy(alpha = 0.22f)
+            )
+            .clip(outerShape)
+            .background(
+                // Nền rãnh chìm phía ngoài hai nửa viên thuốc.
+                Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF01040D),
+                        Color(0xFF071020),
+                        Color(0xFF0F2138)
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    listOf(
+                        colors.purpleBright.copy(alpha = 0.36f),
+                        Color.White.copy(alpha = 0.09f),
+                        colors.purple.copy(alpha = 0.26f)
+                    )
+                ),
+                shape = outerShape
+            )
+            .padding(4.dp)
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            OnlineModeButton(
+                title = "Music",
+                icon = Icons.Rounded.MusicNote,
+                selected = selectedMode == OnlineSearchMode.APPLE_MUSIC,
+                onClick = onSelectMusic,
+                modifier = Modifier.weight(1f)
+            )
+            OnlineModeButton(
+                title = "Movie",
+                icon = Icons.Rounded.Tv,
+                selected = selectedMode == OnlineSearchMode.MOVIE,
+                onClick = onSelectMovie,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun OnlineModeButton(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val segmentShape = RoundedCornerShape(25.dp)
+    val colors = LocalMusicColors.current
+    val originalPurple = colors.purple == (if (colors.isDark) DarkMusicColors.purple else LightMusicColors.purple)
+    val activeTop by animateColorAsState(
+        targetValue = if (selected) (if (originalPurple) Color(0xFFAB40FB) else colors.purpleBright) else Color.Transparent,
+        animationSpec = tween(durationMillis = 220),
+        label = "onlineModeTop"
+    )
+    val activeBottom by animateColorAsState(
+        targetValue = if (selected) (if (originalPurple) Color(0xFF6223CE) else colors.purple) else Color.Transparent,
+        animationSpec = tween(durationMillis = 220),
+        label = "onlineModeBottom"
+    )
+    val labelColor by animateColorAsState(
+        targetValue = if (selected) Color.White else Color(0xFFAFBCD3),
+        animationSpec = tween(durationMillis = 220),
+        label = "onlineModeText"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .shadow(
+                elevation = if (selected) 7.dp else 0.dp,
+                shape = segmentShape,
+                ambientColor = (if (originalPurple) Color(0xFF902BF2) else colors.purple).copy(alpha = if (selected) 0.42f else 0f),
+                spotColor = (if (originalPurple) Color(0xFFAF4FFF) else colors.purpleBright).copy(alpha = if (selected) 0.56f else 0f)
+            )
+            .clip(segmentShape)
+            .background(Brush.verticalGradient(listOf(activeTop, activeBottom)))
+            .border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (selected) 0.55f else 0f),
+                        Color.White.copy(alpha = if (selected) 0.06f else 0f)
+                    )
+                ),
+                shape = segmentShape
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 9.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = labelColor,
+                modifier = Modifier.size(19.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = title,
+                color = labelColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
 private fun GradientText(
     text: String,
     brush: Brush,
