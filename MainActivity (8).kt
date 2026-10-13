@@ -11,19 +11,20 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.DocumentsContract
+import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,16 +48,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountCircle
-import androidx.compose.material.icons.rounded.Cached
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,19 +74,37 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.google.android.play.core.appupdate.AppUpdateInfo
+import com.google.android.play.core.appupdate.AppUpdateManager
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory
+import com.google.android.play.core.appupdate.AppUpdateOptions
+import com.google.android.play.core.install.model.AppUpdateType
+import com.google.android.play.core.install.model.UpdateAvailability
 import java.util.Calendar
 
 private const val MELOWARE_ADMIN_EMAIL = "ducphi0491@gmail.com"
+private const val GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+private const val GOOGLE_PICKER_FILE_IDS_PARAM = "picked_file_ids"
+private const val GOOGLE_PICKER_AUDIO_MIME_TYPES =
+    "application/vnd.google-apps.folder," +
+            "audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/flac,audio/x-flac," +
+            "audio/wav,audio/x-wav,audio/ogg,audio/opus,audio/amr,audio/3gpp," +
+            "audio/webm,audio/x-matroska,audio/ac3,audio/eac3,audio/ac4,video/mp2t"
 
 private data class AppLanguageOption(
     val code: String,
@@ -111,10 +129,210 @@ private val AppLanguageOptions = listOf(
     AppLanguageOption("it", "Italiano")
 )
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
+    private lateinit var appUpdateManager: AppUpdateManager
+    private var mainUiStarted = false
+    private var updateCheckInProgress = false
+    private var updateFlowLaunching = false
+    private var mandatoryUpdateDialog: android.app.AlertDialog? = null
+
+    private val mandatoryUpdateLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        updateFlowLaunching = false
+        if (result.resultCode == Activity.RESULT_OK) {
+            // Immediate Update normally restarts the app. Recheck defensively if it returns.
+            checkForMandatoryUpdate()
+        } else {
+            showMandatoryUpdateDialog(
+                message = "Bạn phải cập nhật MeloWare lên phiên bản mới nhất trước khi tiếp tục sử dụng.",
+                openPlayStoreDirectly = false
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        appUpdateManager = AppUpdateManagerFactory.create(this)
+        showUpdateCheckingScreen()
+        checkForMandatoryUpdate()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (
+            !::appUpdateManager.isInitialized ||
+            mainUiStarted ||
+            updateCheckInProgress ||
+            updateFlowLaunching
+        ) return
+        checkForMandatoryUpdate()
+    }
+
+    /**
+     * Checks Google Play before creating the main MeloWare UI.
+     * When an update is available, only the IMMEDIATE flow is accepted.
+     */
+    private fun checkForMandatoryUpdate() {
+        if (
+            mainUiStarted ||
+            updateCheckInProgress ||
+            updateFlowLaunching ||
+            isFinishing ||
+            isDestroyed
+        ) return
+
+        updateCheckInProgress = true
+        mandatoryUpdateDialog?.dismiss()
+        mandatoryUpdateDialog = null
+        showUpdateCheckingScreen()
+
+        appUpdateManager.appUpdateInfo
+            .addOnSuccessListener { info ->
+                updateCheckInProgress = false
+                when {
+                    info.updateAvailability() ==
+                        UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS -> {
+                        startImmediateUpdate(info)
+                    }
+
+                    info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE -> {
+                        if (info.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE)) {
+                            startImmediateUpdate(info)
+                        } else {
+                            showMandatoryUpdateDialog(
+                                message = "MeloWare đã có phiên bản mới. Thiết bị này cần mở Google Play để cập nhật trước khi tiếp tục.",
+                                openPlayStoreDirectly = true
+                            )
+                        }
+                    }
+
+                    else -> openMeloWareUi()
+                }
+            }
+            .addOnFailureListener {
+                updateCheckInProgress = false
+                // Preserve offline music playback when Google Play cannot be contacted.
+                // A real available update is still mandatory whenever Google Play reports it.
+                openMeloWareUi()
+            }
+    }
+
+    private fun startImmediateUpdate(info: AppUpdateInfo) {
+        if (updateFlowLaunching || mainUiStarted || isFinishing || isDestroyed) return
+        updateFlowLaunching = true
+
+        val started = runCatching {
+            appUpdateManager.startUpdateFlowForResult(
+                info,
+                mandatoryUpdateLauncher,
+                AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build()
+            )
+        }.getOrDefault(false)
+
+        if (!started) {
+            updateFlowLaunching = false
+            showMandatoryUpdateDialog(
+                message = "Không thể mở màn hình cập nhật tự động. Vui lòng cập nhật MeloWare trực tiếp trên Google Play.",
+                openPlayStoreDirectly = true
+            )
+        }
+    }
+
+    private fun showMandatoryUpdateDialog(
+        message: String,
+        openPlayStoreDirectly: Boolean
+    ) {
+        if (isFinishing || isDestroyed || mainUiStarted) return
+
+        mandatoryUpdateDialog?.dismiss()
+        mandatoryUpdateDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Cập nhật MeloWare bắt buộc")
+            .setMessage(message)
+            .setCancelable(false)
+            .setPositiveButton("Cập nhật ngay") { _, _ ->
+                if (openPlayStoreDirectly) {
+                    openMeloWareOnPlayStore()
+                } else {
+                    checkForMandatoryUpdate()
+                }
+            }
+            .setNegativeButton("Thoát ứng dụng") { _, _ ->
+                finishAffinity()
+            }
+            .create()
+            .also { dialog ->
+                dialog.setCanceledOnTouchOutside(false)
+                dialog.show()
+            }
+    }
+
+    private fun openMeloWareOnPlayStore() {
+        val marketIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("market://details?id=$packageName")
+        ).apply {
+            setPackage("com.android.vending")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        val webIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        runCatching { startActivity(marketIntent) }
+            .onFailure { runCatching { startActivity(webIntent) } }
+    }
+
+    private fun showUpdateCheckingScreen() {
+        if (mainUiStarted || isFinishing || isDestroyed) return
         enableEdgeToEdge()
+        configureSystemBars()
+        setContent {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color(0xFF020812)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator(color = Color(0xFF9A5CFF))
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = "Đang kiểm tra phiên bản MeloWare...",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+
+    private fun openMeloWareUi() {
+        if (mainUiStarted || isFinishing || isDestroyed) return
+        mainUiStarted = true
+        mandatoryUpdateDialog?.dismiss()
+        mandatoryUpdateDialog = null
+        enableEdgeToEdge()
+        configureSystemBars()
+        com.google.android.gms.cast.framework.CastContext.getSharedInstance(
+            applicationContext,
+            ContextCompat.getMainExecutor(this)
+        )
+
+        // Khoi tao Google Mobile Ads mot lan khi ung dung mo.
+        Thread {
+            com.google.android.gms.ads.MobileAds.initialize(this@MainActivity) { }
+        }.start()
 
         setContent {
             val context = LocalContext.current
@@ -138,10 +356,22 @@ class MainActivity : ComponentActivity() {
             var themeMode by remember {
                 mutableIntStateOf(prefs.getInt("app_theme_mode", 2))
             }
+            // Accent is stored locally. Existing installs start with the original purple.
+            var accentId by remember {
+                mutableStateOf(
+                    prefs.getString("app_accent_color", "purple")
+                        ?.takeIf { saved -> MusicAccentOptions.any { it.id == saved } }
+                        ?: "purple"
+                )
+            }
             var showSettings by remember { mutableStateOf(false) }
             var showLanguageDialog by remember { mutableStateOf(false) }
             var showThemeDialog by remember { mutableStateOf(false) }
+            var showAccentDialog by remember { mutableStateOf(false) }
             var showAdminDashboard by remember { mutableStateOf(false) }
+            var pendingOpenPersonalDrive by remember { mutableStateOf(false) }
+            var pendingDrivePickerAfterLogin by remember { mutableStateOf(true) }
+            var awaitingDrivePickerResult by remember { mutableStateOf(false) }
             // Chi hien nut Admin khi tai khoan Google dang nhap trung khop,
             // khong dua vao email ghi trong SharedPreferences.
             var verifiedAdmin by remember {
@@ -171,6 +401,63 @@ class MainActivity : ComponentActivity() {
                         ?: prefs.getString("logged_in_email", null)
                 )
             }
+            val driveScope = remember {
+                com.google.android.gms.common.api.Scope(GOOGLE_DRIVE_FILE_SCOPE)
+            }
+            val authorizationClient = remember {
+                com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(context)
+            }
+
+            fun pickerFileIds(
+                result: com.google.android.gms.auth.api.identity.AuthorizationResult
+            ): List<String> {
+                val raw = result.tokenResponseParams
+                    ?.get(GOOGLE_PICKER_FILE_IDS_PARAM)
+                    ?.toString()
+                    .orEmpty()
+                return raw.split(',')
+                    .map { it.trim() }
+                    .filter { it.matches(Regex("[A-Za-z0-9_-]{10,}")) }
+                    .distinct()
+            }
+
+            fun acceptDriveAuthorization(
+                result: com.google.android.gms.auth.api.identity.AuthorizationResult,
+                fromPicker: Boolean
+            ) {
+                val token = result.accessToken
+                val granted = result.grantedScopes.orEmpty()
+                if (GOOGLE_DRIVE_FILE_SCOPE !in granted || token.isNullOrBlank()) {
+                    controller.consumePersonalDriveAuthorizationRequest()
+                    Toast.makeText(
+                        context,
+                        "Bạn chưa cấp quyền drive.file cho MeloWare.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
+
+                controller.setPersonalDriveAuthorization(token, currentUserEmail)
+                if (!fromPicker) return
+
+                val pickedIds = pickerFileIds(result)
+                if (pickedIds.isEmpty()) {
+                    Toast.makeText(
+                        context,
+                        "Bạn chưa chọn file hoặc thư mục Google Drive nào.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return
+                }
+
+                controller.libraryTab = LibraryTab.SONGS
+                controller.openLibrary(LibrarySource.PERSONAL_DRIVE)
+                controller.importPersonalDrivePickerSelection(
+                    accessToken = token,
+                    accountEmail = currentUserEmail,
+                    pickedIds = pickedIds
+                )
+            }
             val googleAuthLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.StartActivityForResult()
             ) { result ->
@@ -186,13 +473,134 @@ class MainActivity : ComponentActivity() {
                         Toast.makeText(context, "Đăng nhập thành công", Toast.LENGTH_SHORT).show()
                     }
                 } catch (error: com.google.android.gms.common.api.ApiException) {
+                    pendingOpenPersonalDrive = false
                     Toast.makeText(
                         context,
                         "Lỗi Google Sign-In (${error.statusCode}): ${error.localizedMessage}",
                         Toast.LENGTH_LONG
                     ).show()
                 } catch (error: Exception) {
+                    pendingOpenPersonalDrive = false
                     Toast.makeText(context, "Không thể đăng nhập: ${error.localizedMessage}", Toast.LENGTH_LONG).show()
+                }
+            }
+
+            val driveAuthorizationLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartIntentSenderForResult()
+            ) { activityResult ->
+                val fromPicker = awaitingDrivePickerResult
+                awaitingDrivePickerResult = false
+                if (activityResult.resultCode != Activity.RESULT_OK || activityResult.data == null) {
+                    controller.consumePersonalDriveAuthorizationRequest()
+                    Toast.makeText(
+                        context,
+                        if (fromPicker) "Bạn đã đóng Google Picker." else "Bạn đã hủy cấp quyền Google Drive.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@rememberLauncherForActivityResult
+                }
+                try {
+                    val result = authorizationClient.getAuthorizationResultFromIntent(
+                        activityResult.data!!
+                    )
+                    acceptDriveAuthorization(result, fromPicker)
+                } catch (error: com.google.android.gms.common.api.ApiException) {
+                    controller.consumePersonalDriveAuthorizationRequest()
+                    Toast.makeText(
+                        context,
+                        "Không nhận được quyền Google Drive (${error.statusCode}).",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
+            fun requestDriveAuthorization(openPicker: Boolean) {
+                val signedIn = com.google.android.gms.auth.api.signin.GoogleSignIn
+                    .getLastSignedInAccount(context)
+                val account = signedIn?.account
+                if (account == null) {
+                    pendingOpenPersonalDrive = true
+                    pendingDrivePickerAfterLogin = openPicker
+                    googleAuthLauncher.launch(googleSignInClient.signInIntent)
+                    return
+                }
+
+                val requestBuilder = com.google.android.gms.auth.api.identity.AuthorizationRequest.builder()
+                    .setAccount(account)
+                    .setRequestedScopes(listOf(driveScope))
+                    .setOptOutIncludingGrantedScopes(true)
+                    .setPrompt(
+                        if (openPicker) {
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.Prompt.CONSENT
+                        } else {
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.Prompt.NOT_SET
+                        }
+                    )
+
+                if (openPicker) {
+                    requestBuilder
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_OAUTH_TRIGGER,
+                            "true"
+                        )
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_ALLOW_MULTIPLE,
+                            "true"
+                        )
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_ALLOW_FOLDER_SELECTION,
+                            "true"
+                        )
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_MIMETYPES,
+                            GOOGLE_PICKER_AUDIO_MIME_TYPES
+                        )
+                }
+                val request = requestBuilder.build()
+
+                fun authorizeNow() {
+                    authorizationClient.authorize(request)
+                        .addOnSuccessListener { result ->
+                            if (result.hasResolution()) {
+                                val pendingIntent = result.pendingIntent
+                                if (pendingIntent == null) {
+                                    controller.consumePersonalDriveAuthorizationRequest()
+                                    Toast.makeText(
+                                        context,
+                                        "Google không tạo được cửa sổ cấp quyền Drive.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    awaitingDrivePickerResult = openPicker
+                                    driveAuthorizationLauncher.launch(
+                                        IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                                    )
+                                }
+                            } else {
+                                acceptDriveAuthorization(result, openPicker)
+                            }
+                        }
+                        .addOnFailureListener { error ->
+                            controller.consumePersonalDriveAuthorizationRequest()
+                            Toast.makeText(
+                                context,
+                                "Không thể mở Google Picker: ${error.localizedMessage}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+
+                // Nếu Drive vừa trả 401, xóa token cũ khỏi cache trước khi xin token mới.
+                val rejectedToken = controller.consumePersonalDriveInvalidToken()
+                if (rejectedToken.isNullOrBlank()) {
+                    authorizeNow()
+                } else {
+                    val clearRequest = com.google.android.gms.auth.api.identity.ClearTokenRequest
+                        .builder()
+                        .setToken(rejectedToken)
+                        .build()
+                    authorizationClient.clearToken(clearRequest)
+                        .addOnCompleteListener { authorizeNow() }
                 }
             }
 
@@ -216,18 +624,6 @@ class MainActivity : ComponentActivity() {
                 if (granted) scheduleDailyReminder(context)
             }
 
-            val drivePickerLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.StartActivityForResult()
-            ) { result ->
-                if (result.resultCode == Activity.RESULT_OK) {
-                    val resultIntent = result.data
-                    val treeUri = resultIntent?.data
-                    if (treeUri != null) {
-                        controller.attachPersonalDrive(treeUri, resultIntent.flags)
-                    }
-                }
-            }
-
             val requestLocalScan: () -> Unit = {
                 val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     Manifest.permission.READ_MEDIA_AUDIO
@@ -244,24 +640,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            val pickPersonalDrive: () -> Unit = {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                    addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-                    if (
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                        controller.personalDriveUriText.isNotBlank()
-                    ) {
-                        runCatching {
-                            putExtra(
-                                DocumentsContract.EXTRA_INITIAL_URI,
-                                Uri.parse(controller.personalDriveUriText)
-                            )
-                        }
-                    }
+            // Sau khi đăng nhập thành công, yêu cầu riêng quyền OAuth Google Drive.
+            LaunchedEffect(currentUserEmail, pendingOpenPersonalDrive) {
+                if (pendingOpenPersonalDrive && !currentUserEmail.isNullOrBlank()) {
+                    val openPicker = pendingDrivePickerAfterLogin
+                    pendingOpenPersonalDrive = false
+                    requestDriveAuthorization(openPicker)
                 }
-                drivePickerLauncher.launch(intent)
+            }
+
+            // Access token chỉ giữ trong RAM. Khi hết hạn, Controller yêu cầu cấp lại.
+            LaunchedEffect(controller.personalDriveNeedsAuthorization) {
+                if (controller.personalDriveNeedsAuthorization) {
+                    controller.consumePersonalDriveAuthorizationRequest()
+                    requestDriveAuthorization(openPicker = false)
+                }
             }
 
             LaunchedEffect(Unit) {
@@ -320,7 +713,7 @@ class MainActivity : ComponentActivity() {
                 else -> systemDark
             }
 
-            TunertoolsTheme(isDark = isDark, language = language) {
+            TunertoolsTheme(isDark = isDark, language = language, accentId = accentId) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -338,17 +731,45 @@ class MainActivity : ComponentActivity() {
                         MusicScreen.HOME -> HomeScreen(
                             controller = controller,
                             onScanLocal = requestLocalScan,
+                            onOpenLocalFolders = {
+                                controller.libraryTab = LibraryTab.FOLDERS
+                                controller.openLibrary(LibrarySource.LOCAL)
+                                requestLocalScan()
+                            },
+                            onOpenPersonalDrive = {
+                                if (currentUserEmail.isNullOrBlank()) {
+                                    pendingOpenPersonalDrive = true
+                                    pendingDrivePickerAfterLogin = true
+                                    googleAuthLauncher.launch(googleSignInClient.signInIntent)
+                                } else {
+                                    requestDriveAuthorization(openPicker = true)
+                                }
+                            },
+                            onOpenPublicDrive = {
+                                controller.libraryTab = LibraryTab.FOLDERS
+                                controller.openLibrary(LibrarySource.PUBLIC_DRIVE)
+                                controller.showPublicDriveDialog = true
+                            },
                             onSettings = { showSettings = true }
                         )
 
                         MusicScreen.LIBRARY -> LibraryScreen(
                             controller = controller,
                             onScanLocal = requestLocalScan,
-                            onPickPersonalDrive = pickPersonalDrive,
+                            onAuthorizePersonalDrive = { requestDriveAuthorization(openPicker = true) },
                             onSettings = { showSettings = true }
                         )
 
-                        MusicScreen.NOW_PLAYING -> NowPlayingScreen(controller)
+                        MusicScreen.NOW_PLAYING -> Column(modifier = Modifier.fillMaxSize()) {
+                            // Player takes the available height; its own layout has no banner.
+                            Box(modifier = Modifier.weight(1f)) {
+                                NowPlayingScreen(controller)
+                            }
+                            // Exactly one banner, exclusively in the full player screen.
+                            if (controller.currentSong != null) {
+                                MeloWareNowPlayingBanner()
+                            }
+                        }
                     }
                 }
 
@@ -357,8 +778,7 @@ class MainActivity : ComponentActivity() {
                         controller = controller,
                         language = language,
                         themeMode = themeMode,
-                        onScanLocal = requestLocalScan,
-                        onPickDrive = pickPersonalDrive,
+                        accentId = accentId,
                         onOpenLanguage = {
                             showSettings = false
                             showLanguageDialog = true
@@ -367,15 +787,42 @@ class MainActivity : ComponentActivity() {
                             showSettings = false
                             showThemeDialog = true
                         },
+                        onOpenAccent = {
+                            showSettings = false
+                            showAccentDialog = true
+                        },
                         currentUserEmail = currentUserEmail,
                         isAdmin = verifiedAdmin,
                         onOpenAdmin = {
                             showSettings = false
                             showAdminDashboard = true
                         },
+                        onDisconnectDrive = {
+                            val account = com.google.android.gms.auth.api.signin.GoogleSignIn
+                                .getLastSignedInAccount(context)?.account
+                            if (account == null) {
+                                controller.disconnectPersonalDrive()
+                                showSettings = false
+                            } else {
+                                val revokeRequest = com.google.android.gms.auth.api.identity.RevokeAccessRequest
+                                    .builder()
+                                    .setAccount(account)
+                                    .setScopes(listOf(driveScope))
+                                    .build()
+                                authorizationClient.revokeAccess(revokeRequest)
+                                    .addOnCompleteListener {
+                                        controller.disconnectPersonalDrive()
+                                        showSettings = false
+                                    }
+                            }
+                        },
                         onLoginLogout = {
                             showSettings = false
                             if (currentUserEmail != null) {
+                                controller.clearPersonalDriveSession(
+                                    removeSongs = true,
+                                    forgetAccount = true
+                                )
                                 googleSignInClient.signOut().addOnCompleteListener {
                                     currentUserEmail = null
                                     verifiedAdmin = false
@@ -418,8 +865,79 @@ class MainActivity : ComponentActivity() {
                         onDismiss = { showThemeDialog = false }
                     )
                 }
+                if (showAccentDialog) {
+                    AccentColorDialog(
+                        selectedId = accentId,
+                        onSelect = { id ->
+                            accentId = id
+                            prefs.edit().putString("app_accent_color", id).apply()
+                            showAccentDialog = false
+                        },
+                        onDismiss = { showAccentDialog = false }
+                    )
+                }
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) configureSystemBars()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun configureSystemBars() {
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.rgb(2, 8, 18)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+}
+
+// This is the only AdMob view in MeloWare. Never create it in Home or Library.
+private const val MELOWARE_BANNER_AD_UNIT_ID =
+    "ca-app-pub-3940256099942544/6300978111"
+
+@Composable
+private fun MeloWareNowPlayingBanner() {
+    val context = LocalContext.current
+    val adView = remember(context) {
+        com.google.android.gms.ads.AdView(context).apply {
+            setAdSize(com.google.android.gms.ads.AdSize.BANNER)
+            adUnitId = MELOWARE_BANNER_AD_UNIT_ID
+            loadAd(com.google.android.gms.ads.AdRequest.Builder().build())
+        }
+    }
+
+    // Disposes the banner as soon as the user returns to Home or Library.
+    DisposableEffect(adView) {
+        onDispose { adView.destroy() }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF020812))
+            .navigationBarsPadding()
+            .height(50.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        AndroidView(
+            factory = { adView },
+            modifier = Modifier
+                .width(320.dp)
+                .height(50.dp)
+        )
     }
 }
 
@@ -525,13 +1043,14 @@ private fun QuickSettingsDialog(
     controller: MusicController,
     language: String,
     themeMode: Int,
-    onScanLocal: () -> Unit,
-    onPickDrive: () -> Unit,
+    accentId: String,
     onOpenLanguage: () -> Unit,
     onOpenTheme: () -> Unit,
+    onOpenAccent: () -> Unit,
     currentUserEmail: String?,
     isAdmin: Boolean,
     onOpenAdmin: () -> Unit,
+    onDisconnectDrive: () -> Unit,
     onLoginLogout: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -587,36 +1106,22 @@ private fun QuickSettingsDialog(
                 )
 
                 SettingRow(
-                    icon = Icons.Rounded.Cached,
-                    title = "Quét lại nhạc trên máy",
-                    subtitle = "Cập nhật các bài vừa thêm hoặc vừa xóa",
-                    onClick = {
-                        onScanLocal()
-                        onDismiss()
-                    }
+                    icon = Icons.Rounded.Palette,
+                    title = "Màu giao diện",
+                    subtitle = MusicAccentOptions.firstOrNull { it.id == accentId }?.title ?: "Tím",
+                    onClick = onOpenAccent
                 )
 
-                SettingRow(
-                    icon = Icons.Rounded.MusicNote,
-                    title = "Chọn lại Drive của tôi",
-                    subtitle = controller.personalDriveName.ifBlank {
-                        "Chưa kết nối thư mục Google Drive"
-                    },
-                    onClick = {
-                        onPickDrive()
-                        onDismiss()
-                    }
-                )
-
-                if (controller.personalDriveUriText.isNotBlank()) {
+                if (
+                    controller.personalDriveAccountEmail != null ||
+                    controller.hasPersonalDriveAuthorization ||
+                    controller.personalDriveSongs.isNotEmpty()
+                ) {
                     SettingRow(
                         icon = Icons.Rounded.CloudOff,
-                        title = "Ngắt Drive cá nhân",
-                        subtitle = "Không xóa file thật trên Google Drive",
-                        onClick = {
-                            controller.disconnectPersonalDrive()
-                            onDismiss()
-                        }
+                        title = "Ngắt quyền Google Drive",
+                        subtitle = "Ngắt quyền drive.file, không xóa file thật",
+                        onClick = onDisconnectDrive
                     )
                 }
 
@@ -633,25 +1138,15 @@ private fun QuickSettingsDialog(
                 SettingRow(
                     icon = Icons.Rounded.AccountCircle,
                     title = if (currentUserEmail.isNullOrBlank()) "Đăng nhập Google" else "Đăng xuất",
-                    subtitle = currentUserEmail ?: "Định danh tài khoản trong thống kê sử dụng",
-                    onClick = onLoginLogout
+                    subtitle = when {
+                        isAdmin -> "${currentUserEmail.orEmpty()} · Chạm biểu tượng để xem thống kê"
+                        currentUserEmail.isNullOrBlank() -> "Định danh tài khoản trong thống kê sử dụng"
+                        else -> currentUserEmail.orEmpty()
+                    },
+                    onClick = onLoginLogout,
+                    onIconClick = if (isAdmin) onOpenAdmin else null
                 )
 
-                if (isAdmin) {
-                    SettingRow(
-                        icon = Icons.Rounded.AccountCircle,
-                        title = "Thống kê Firebase (Admin)",
-                        subtitle = "Theo ngày, theo tháng và so sánh tháng",
-                        onClick = onOpenAdmin
-                    )
-                }
-
-                SettingRow(
-                    icon = Icons.Rounded.Info,
-                    title = "MeloWare",
-                    subtitle = "Nghe nhạc Offline, Google Drive và công cụ âm thanh",
-                    onClick = onDismiss
-                )
             }
         }
     }
@@ -1087,7 +1582,8 @@ private fun SettingRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onIconClick: (() -> Unit)? = null
 ) {
     val colors = LocalMusicColors.current
     Row(
@@ -1098,12 +1594,29 @@ private fun SettingRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier
+                .size(44.dp)
+                .then(
+                    if (onIconClick != null) {
+                        Modifier.clickable(onClick = onIconClick)
+                    } else {
+                        Modifier
+                    }
+                ),
             shape = CircleShape,
-            color = colors.purple.copy(alpha = 0.13f)
+            color = colors.purple.copy(alpha = if (onIconClick != null) 0.22f else 0.13f),
+            border = if (onIconClick != null) {
+                BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.75f))
+            } else {
+                null
+            }
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = colors.purpleBright)
+                Icon(
+                    imageVector = icon,
+                    contentDescription = if (onIconClick != null) "Mở thống kê Firebase" else null,
+                    tint = colors.purpleBright
+                )
             }
         }
         Spacer(Modifier.width(13.dp))
@@ -1177,6 +1690,104 @@ private fun LanguageDialog(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Accent only: the existing dark/light switch and all player behavior are untouched. */
+@Composable
+private fun AccentColorDialog(
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Màu giao diện",
+                        color = colors.textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+                Text(
+                    "Chọn màu chủ đạo cho MeloWare",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                MusicAccentOptions.chunked(4).forEach { rowOptions ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        rowOptions.forEach { option ->
+                            val isSelected = option.id == selectedId
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onSelect(option.id) }
+                                    .padding(vertical = 9.dp, horizontal = 1.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .background(option.preview, CircleShape)
+                                        .border(
+                                            width = if (isSelected) 3.dp else 1.dp,
+                                            color = if (isSelected) colors.textPrimary else colors.border,
+                                            shape = CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = "Đang chọn",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(25.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    option.title,
+                                    color = if (isSelected) colors.textPrimary else colors.textSecondary,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2
+                                )
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "Màu tím là mặc định · Lựa chọn được lưu tự động",
+                    color = colors.textMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
             }
         }
     }
