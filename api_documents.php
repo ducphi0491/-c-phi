@@ -68,7 +68,7 @@ header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Accept, Range, X-Requested-With, Authorization, X-Document-Token');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
-header('X-TunerTools-Documents-Version: 2026-10-09-navigation-health-v10');
+header('X-TunerTools-Documents-Version: 2026-10-09-video-switch-v11');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);
@@ -1760,25 +1760,29 @@ function humanFileSize(int $bytes): string
 
 function detectMimeType(string $filePath): string
 {
-    if (class_exists('finfo')) {
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->file($filePath);
-        if (is_string($mime) && $mime !== '') {
-            return $mime;
-        }
-    }
-
     $extension = strtolower((string)pathinfo($filePath, PATHINFO_EXTENSION));
     $fallback = [
         'json' => 'application/json',
         'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
         'webp' => 'image/webp', 'gif' => 'image/gif', 'bmp' => 'image/bmp',
         'pdf' => 'application/pdf', 'mp4' => 'video/mp4', 'webm' => 'video/webm',
-        'mov' => 'video/quicktime', 'm4v' => 'video/x-m4v',
+        'mov' => 'video/quicktime', 'm4v' => 'video/mp4',
         'mkv' => 'video/x-matroska', 'avi' => 'video/x-msvideo',
         'mp3' => 'audio/mpeg', 'm4a' => 'audio/mp4', 'aac' => 'audio/aac',
         'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 'vtt' => 'text/vtt; charset=utf-8',
     ];
+
+    if (class_exists('finfo')) {
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $mime = $finfo->file($filePath);
+        // Some MP4 files created by phones/editors are reported as a generic binary
+        // stream. In that case use the known extension so Media3 receives video/mp4.
+        if (is_string($mime) && $mime !== '' &&
+            !in_array(strtolower($mime), ['application/octet-stream', 'application/x-empty'], true)) {
+            return $mime;
+        }
+    }
+
     return $fallback[$extension] ?? 'application/octet-stream';
 }
 
@@ -2174,7 +2178,14 @@ function streamGuitarCourseAsset(string $filePath): void
 
 function streamFile(string $filePath, bool $download): void
 {
+    // A document video is served by PHP only after its signed ticket is checked.
+    // Stop as soon as Android closes VideoView and keep each video Range response
+    // small so an abandoned stream cannot occupy an IIS/FastCGI worker for long.
     @set_time_limit(0);
+    @ignore_user_abort(false);
+    @ini_set('output_buffering', '0');
+    @ini_set('zlib.output_compression', '0');
+
     while (ob_get_level() > 0) {
         @ob_end_clean();
     }
@@ -2183,34 +2194,55 @@ function streamFile(string $filePath, bool $download): void
         sendJson(['success' => false, 'message' => 'Không thể đọc tệp tài liệu.'], 404);
     }
 
+    clearstatcache(true, $filePath);
     $size = (int)filesize($filePath);
     $fileName = basename($filePath);
     $mime = detectMimeType($filePath);
+    $isVideo = strncmp($mime, 'video/', 6) === 0;
     $start = 0;
     $end = max(0, $size - 1);
     $statusCode = 200;
 
     $rangeHeader = (string)($_SERVER['HTTP_RANGE'] ?? '');
     if ($rangeHeader !== '' && preg_match('/bytes=(\d*)-(\d*)/i', $rangeHeader, $matches)) {
-        if ($matches[1] !== '') {
-            $start = max(0, (int)$matches[1]);
+        $requestedStart = (string)($matches[1] ?? '');
+        $requestedEnd = (string)($matches[2] ?? '');
+
+        if ($requestedStart === '' && $requestedEnd !== '') {
+            // Suffix range: bytes=-500 means the final 500 bytes.
+            $suffixLength = max(0, (int)$requestedEnd);
+            $start = max(0, $size - $suffixLength);
+            $end = max(0, $size - 1);
+        } else {
+            if ($requestedStart !== '') {
+                $start = max(0, (int)$requestedStart);
+            }
+            if ($requestedEnd !== '') {
+                $end = min($end, (int)$requestedEnd);
+            }
         }
-        if ($matches[2] !== '') {
-            $end = min($end, (int)$matches[2]);
-        }
+
         if ($start > $end || $start >= $size) {
             header('Content-Range: bytes */' . $size);
             http_response_code(416);
             exit;
         }
         $statusCode = 206;
+
+        // Honor the requested byte range exactly. Truncating an open-ended or
+        // explicit range can break Media3/ExoPlayer, especially for MP4 files whose
+        // metadata (moov atom) is located near the end of the file. Client aborts are
+        // handled in the streaming loop below, so a stopped video still releases the
+        // PHP worker early without returning an incomplete Content-Range response.
     }
 
     $length = $end - $start + 1;
     http_response_code($statusCode);
     header('Content-Type: ' . $mime);
+    header('Content-Encoding: identity');
     header('Accept-Ranges: bytes');
     header('Content-Length: ' . $length);
+    header('X-Accel-Buffering: no');
     if ($statusCode === 206) {
         header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
     }
@@ -2233,17 +2265,31 @@ function streamFile(string $filePath, bool $download): void
     }
 
     $remaining = $length;
-    while ($remaining > 0 && !feof($handle)) {
-        $chunkSize = min(1024 * 1024, $remaining);
-        $buffer = fread($handle, $chunkSize);
-        if ($buffer === false || $buffer === '') {
-            break;
+    try {
+        while ($remaining > 0 && !feof($handle)) {
+            if (connection_aborted() || connection_status() !== CONNECTION_NORMAL) {
+                break;
+            }
+
+            // Small writes let IIS detect a closed Android socket much earlier.
+            $chunkSize = min(64 * 1024, $remaining);
+            $buffer = fread($handle, $chunkSize);
+            if ($buffer === false || $buffer === '') {
+                break;
+            }
+
+            echo $buffer;
+            $remaining -= strlen($buffer);
+            @ob_flush();
+            @flush();
+
+            if (connection_aborted() || connection_status() !== CONNECTION_NORMAL) {
+                break;
+            }
         }
-        echo $buffer;
-        flush();
-        $remaining -= strlen($buffer);
+    } finally {
+        @fclose($handle);
     }
-    fclose($handle);
     exit;
 }
 
@@ -2303,7 +2349,7 @@ try {
         sendJson([
             'success' => true,
             'service' => 'tunertools_documents',
-            'version' => '2026-10-09-navigation-health-v10',
+            'version' => '2026-10-09-video-switch-v11',
             'time' => gmdate('c'),
         ]);
     }
@@ -2324,7 +2370,7 @@ try {
 
         sendJson([
             'success' => true,
-            'api_version' => '2026-10-09-navigation-health-v10',
+            'api_version' => '2026-10-09-video-switch-v11',
             'course' => 'guitar_accompaniment_basic',
             'public_read_only' => true,
             'root_folder' => 'guitar_HD',
@@ -2408,7 +2454,7 @@ try {
 
         sendJson([
             'success' => true,
-            'api_version' => '2026-10-09-navigation-health-v10',
+            'api_version' => '2026-10-09-video-switch-v11',
             'auth_mode' => 'google_email_scope_split_documents_plus_songtab_trial',
             'contribution_folder' => contributionFolderPath(),
             'regular_user_write_scope' => 'contribution_folder_only',
