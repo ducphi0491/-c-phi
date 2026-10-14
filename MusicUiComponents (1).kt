@@ -1,8 +1,18 @@
 package duc_phi.music
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -17,32 +27,45 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -51,21 +74,37 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import android.content.Context
+import android.util.Log
+import org.json.JSONObject
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 
@@ -112,16 +151,452 @@ internal val LightMusicColors = MusicColors(
     isDark = false
 )
 
+// Accent palette is independent of dark/light mode. Keep purple identical to the legacy theme.
+// Internal IDs are saved in SharedPreferences; changing display names does not reset a selection.
+internal data class MusicAccentOption(
+    val id: String,
+    val title: String,
+    val preview: Color,
+    val darkPrimary: Color,
+    val darkBright: Color,
+    val darkHighlight: Color,
+    val lightPrimary: Color,
+    val lightBright: Color,
+    val lightHighlight: Color
+)
+
+internal val MusicAccentOptions = listOf(
+    MusicAccentOption(
+        "purple", "Tím", Color(0xFF8D35FF),
+        Color(0xFF8D35FF), Color(0xFFB64DFF), Color(0xFFF22EDB),
+        Color(0xFF7929E8), Color(0xFF8D35FF), Color(0xFFD921C5)
+    ),
+    MusicAccentOption(
+        "blue", "Xanh dương", Color(0xFF2563EB),
+        Color(0xFF2563EB), Color(0xFF60A5FA), Color(0xFF38BDF8),
+        Color(0xFF1D4ED8), Color(0xFF2563EB), Color(0xFF0284C7)
+    ),
+    MusicAccentOption(
+        "teal", "Xanh ngọc", Color(0xFF0D9488),
+        Color(0xFF0F766E), Color(0xFF2DD4BF), Color(0xFF06B6D4),
+        Color(0xFF0F766E), Color(0xFF0D9488), Color(0xFF0891B2)
+    ),
+    MusicAccentOption(
+        "green", "Xanh lá", Color(0xFF16A34A),
+        Color(0xFF15803D), Color(0xFF4ADE80), Color(0xFF22C55E),
+        Color(0xFF15803D), Color(0xFF16A34A), Color(0xFF16A34A)
+    ),
+    MusicAccentOption(
+        "orange", "Cam", Color(0xFFEA580C),
+        Color(0xFFC2410C), Color(0xFFFB923C), Color(0xFFF59E0B),
+        Color(0xFF9A3412), Color(0xFFEA580C), Color(0xFFD97706)
+    ),
+    MusicAccentOption(
+        "pink", "Hồng", Color(0xFFDB2777),
+        Color(0xFFBE185D), Color(0xFFF472B6), Color(0xFFEC4899),
+        Color(0xFFBE185D), Color(0xFFDB2777), Color(0xFFBE185D)
+    ),
+    MusicAccentOption(
+        "red", "Đỏ", Color(0xFFDC2626),
+        Color(0xFFB91C1C), Color(0xFFF87171), Color(0xFFFB7185),
+        Color(0xFFB91C1C), Color(0xFFDC2626), Color(0xFFBE123C)
+    ),
+    MusicAccentOption(
+        "amber", "Hổ phách", Color(0xFFB45309),
+        Color(0xFF92400E), Color(0xFFFBBF24), Color(0xFFF59E0B),
+        Color(0xFF92400E), Color(0xFFB45309), Color(0xFFD97706)
+    )
+)
+
+internal data class MeloWareLanguageOption(
+    val code: String,
+    val nativeName: String
+)
+
+/**
+ * Loads all UI translations from app/src/main/assets/meloware_languages.json.
+ * Missing keys always fall back to Vietnamese text supplied by the caller,
+ * so a damaged or incomplete JSON file can never prevent MeloWare from opening.
+ */
+internal class MeloWareTranslationCatalog private constructor(
+    val defaultLanguage: String,
+    val languages: List<MeloWareLanguageOption>,
+    private val values: Map<String, Map<String, String>>
+) {
+    fun isSupported(code: String?): Boolean = resolveLanguage(code) != null
+
+    fun resolveLanguage(rawCode: String?): String? {
+        if (rawCode.isNullOrBlank()) return null
+        val primary = rawCode.replace('_', '-').substringBefore('-').lowercase()
+        val normalized = when (primary) {
+            "in" -> "id" // Android legacy Indonesian code
+            else -> primary
+        }
+        return languages.firstOrNull { it.code == normalized }?.code
+    }
+
+    fun text(
+        language: String,
+        key: String,
+        fallback: String,
+        replacements: Map<String, Any?> = emptyMap()
+    ): String {
+        val resolved = resolveLanguage(language) ?: defaultLanguage
+        var result: String = values[resolved]?.get(key)
+            ?: (if (resolved != defaultLanguage) values["en"]?.get(key) else null)
+            ?: values[defaultLanguage]?.get(key)
+            ?: fallback
+        replacements.forEach { (name, value) ->
+            result = result.replace("{$name}", value?.toString().orEmpty())
+        }
+        return result
+    }
+
+    companion object {
+        private const val TAG = "MeloWareI18n"
+        private const val ASSET_NAME = "meloware_languages.json"
+        @Volatile private var cached: MeloWareTranslationCatalog? = null
+
+        fun load(context: Context): MeloWareTranslationCatalog {
+            cached?.let { return it }
+            return synchronized(this) {
+                cached ?: runCatching {
+                    val json = context.assets.open(ASSET_NAME).bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    parse(json)
+                }.onFailure {
+                    Log.w(TAG, "Cannot load $ASSET_NAME; Vietnamese fallback will be used", it)
+                }.getOrElse { fallbackCatalog() }.also { cached = it }
+            }
+        }
+
+        private fun parse(json: String): MeloWareTranslationCatalog {
+            val root = JSONObject(json)
+            val defaultLanguage: String = root
+                .optString("defaultLanguage", "vi")
+                .orEmpty()
+                .trim()
+                .lowercase()
+                .ifBlank { "vi" }
+            val languageArray = root.optJSONArray("languages")
+            val languages: List<MeloWareLanguageOption> = buildList<MeloWareLanguageOption> {
+                if (languageArray != null) {
+                    for (index in 0 until languageArray.length()) {
+                        val item = languageArray.optJSONObject(index) ?: continue
+                        val code: String = item.optString("code").orEmpty().trim().lowercase()
+                        val name: String = item.optString("name").orEmpty().trim()
+                        val alreadyAdded = this.any { option: MeloWareLanguageOption ->
+                            option.code == code
+                        }
+                        if (code.isNotBlank() && name.isNotBlank() && !alreadyAdded) {
+                            add(MeloWareLanguageOption(code = code, nativeName = name))
+                        }
+                    }
+                }
+            }.ifEmpty { fallbackLanguages() }
+
+            val translations = linkedMapOf<String, Map<String, String>>()
+            val translationRoot = root.optJSONObject("translations")
+            if (translationRoot != null) {
+                val languageKeys = translationRoot.keys()
+                while (languageKeys.hasNext()) {
+                    val code = languageKeys.next().orEmpty().lowercase()
+                    val objectForLanguage = translationRoot.optJSONObject(code) ?: continue
+                    val map = linkedMapOf<String, String>()
+                    val keys = objectForLanguage.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next().orEmpty()
+                        val value = objectForLanguage.optString(key).orEmpty()
+                        if (value.isNotBlank()) map[key] = value
+                    }
+                    translations[code] = map
+                }
+            }
+            return MeloWareTranslationCatalog(defaultLanguage, languages, translations)
+        }
+
+        private fun fallbackLanguages() = listOf(
+            MeloWareLanguageOption("vi", "Tiếng Việt"),
+            MeloWareLanguageOption("en", "English"),
+            MeloWareLanguageOption("zh", "简体中文"),
+            MeloWareLanguageOption("ja", "日本語"),
+            MeloWareLanguageOption("ko", "한국어"),
+            MeloWareLanguageOption("es", "Español"),
+            MeloWareLanguageOption("fr", "Français"),
+            MeloWareLanguageOption("de", "Deutsch"),
+            MeloWareLanguageOption("ru", "Русский"),
+            MeloWareLanguageOption("pt", "Português"),
+            MeloWareLanguageOption("id", "Bahasa Indonesia"),
+            MeloWareLanguageOption("hi", "हिन्दी"),
+            MeloWareLanguageOption("ar", "العربية"),
+            MeloWareLanguageOption("th", "ไทย"),
+            MeloWareLanguageOption("it", "Italiano")
+        )
+
+        fun fallbackCatalog() = MeloWareTranslationCatalog(
+            defaultLanguage = "vi",
+            languages = fallbackLanguages(),
+            values = emptyMap()
+        )
+    }
+}
+
 internal val LocalMusicColors = compositionLocalOf { DarkMusicColors }
 internal val LocalAppLanguage = compositionLocalOf { "vi" }
+internal val LocalMeloWareTranslations = compositionLocalOf {
+    MeloWareTranslationCatalog.fallbackCatalog()
+}
+
+@Composable
+internal fun mwString(
+    key: String,
+    fallback: String,
+    vararg replacements: Pair<String, Any?>
+): String = LocalMeloWareTranslations.current.text(
+    language = LocalAppLanguage.current,
+    key = key,
+    fallback = fallback,
+    replacements = replacements.toMap()
+)
+
+internal enum class ShareGuideType {
+    PHONE_COMPUTER,
+    PHONE_PHONE,
+    LINK_ANY_DEVICE,
+    INTERNET
+}
+
+private data class ShareGuideStep(
+    val icon: ImageVector,
+    val key: String,
+    val fallback: String
+)
+
+private data class ShareGuideSpec(
+    val titleKey: String,
+    val titleFallback: String,
+    val introKey: String,
+    val introFallback: String,
+    val steps: List<ShareGuideStep>,
+    val noteKey: String,
+    val noteFallback: String
+)
+
+private fun shareGuideSpec(type: ShareGuideType): ShareGuideSpec = when (type) {
+    ShareGuideType.PHONE_COMPUTER -> ShareGuideSpec(
+        titleKey = "guide.phone_pc.title",
+        titleFallback = "Hướng dẫn điện thoại ↔ máy tính",
+        introKey = "guide.phone_pc.intro",
+        introFallback = "Điện thoại tạo đường dẫn, máy tính mở bằng Chrome và chọn thư mục nhạc.",
+        steps = listOf(
+            ShareGuideStep(Icons.Rounded.Wifi, "guide.phone_pc.step1", "Kết nối điện thoại và máy tính vào cùng một mạng Wi-Fi."),
+            ShareGuideStep(Icons.Rounded.Smartphone, "guide.phone_pc.step2", "Trên điện thoại nhấn Tạo link MeloWare."),
+            ShareGuideStep(Icons.Rounded.Computer, "guide.phone_pc.step3", "Trên máy tính mở đường dẫn được hiển thị bằng Chrome hoặc Edge."),
+            ShareGuideStep(Icons.Rounded.Folder, "guide.phone_pc.step4", "Trên trình duyệt nhấn Chọn thư mục nhạc và giữ tab trình duyệt đang mở."),
+            ShareGuideStep(Icons.Rounded.PlayArrow, "guide.phone_pc.step5", "Quay lại điện thoại để duyệt, nghe online hoặc tải từng bài hát.")
+        ),
+        noteKey = "guide.phone_pc.note",
+        noteFallback = "Nếu không mở được link, hãy kiểm tra hai thiết bị cùng Wi-Fi và không dùng mạng có chặn thiết bị nội bộ."
+    )
+
+    ShareGuideType.PHONE_PHONE -> ShareGuideSpec(
+        titleKey = "guide.phone_phone.title",
+        titleFallback = "Hướng dẫn điện thoại ↔ điện thoại",
+        introKey = "guide.phone_phone.intro",
+        introFallback = "Hai điện thoại cài MeloWare chia sẻ thư mục nhạc trực tiếp trong mạng Wi-Fi nội bộ.",
+        steps = listOf(
+            ShareGuideStep(Icons.Rounded.Wifi, "guide.phone_phone.step1", "Kết nối cả hai điện thoại vào cùng một mạng Wi-Fi."),
+            ShareGuideStep(Icons.Rounded.Smartphone, "guide.phone_phone.step2", "Máy A chọn Máy gửi, chọn thư mục được phép chia sẻ rồi bật chia sẻ."),
+            ShareGuideStep(Icons.Rounded.Search, "guide.phone_phone.step3", "Máy B chọn Máy nhận và nhấn Quét lại để tìm máy A."),
+            ShareGuideStep(Icons.Rounded.Link, "guide.phone_phone.step4", "Chọn máy A, sau đó Duyệt thư mục hoặc Nghe đồng bộ."),
+            ShareGuideStep(Icons.Rounded.Close, "guide.phone_phone.step5", "Khi kết thúc, nhấn Ngắt kết nối hoặc Dừng chia sẻ trên máy A.")
+        ),
+        noteKey = "guide.phone_phone.note",
+        noteFallback = "Không nên dùng Wi-Fi công cộng. Nếu không thấy máy A, mạng có thể đang bật AP isolation."
+    )
+
+    ShareGuideType.LINK_ANY_DEVICE -> ShareGuideSpec(
+        titleKey = "guide.link.title",
+        titleFallback = "Hướng dẫn chia sẻ link",
+        introKey = "guide.link.intro",
+        introFallback = "MeloWare tạo một URL nội bộ để trình duyệt, VLC hoặc thiết bị khác mở bài nhạc.",
+        steps = listOf(
+            ShareGuideStep(Icons.Rounded.Smartphone, "guide.link.step1", "Trên điện thoại nhấn Bắt đầu phát qua Wi-Fi để tạo đường dẫn."),
+            ShareGuideStep(Icons.Rounded.Wifi, "guide.link.step2", "Thiết bị nhận phải kết nối cùng mạng Wi-Fi với điện thoại."),
+            ShareGuideStep(Icons.Rounded.ContentCopy, "guide.link.step3", "Nhấn Sao chép hoặc Chia sẻ để gửi URL cho thiết bị nhận."),
+            ShareGuideStep(Icons.Rounded.Link, "guide.link.step4", "Mở URL bằng trình duyệt, VLC hoặc thiết bị âm thanh hỗ trợ URL mạng."),
+            ShareGuideStep(Icons.Rounded.Close, "guide.link.step5", "Sau khi dùng xong, nhấn Dừng máy chủ Wi-Fi.")
+        ),
+        noteKey = "guide.link.note",
+        noteFallback = "Đường dẫn chỉ hoạt động khi MeloWare còn mở máy chủ và hai thiết bị vẫn ở cùng mạng."
+    )
+
+    ShareGuideType.INTERNET -> ShareGuideSpec(
+        titleKey = "guide.internet.title",
+        titleFallback = "Hướng dẫn kết nối qua Internet",
+        introKey = "guide.internet.intro",
+        introFallback = "Hai người dùng MeloWare ở hai mạng khác nhau ghép nối bằng mã phòng WebRTC P2P.",
+        steps = listOf(
+            ShareGuideStep(Icons.Rounded.Public, "guide.internet.step1", "Máy A chọn Chia sẻ và nhấn Tạo mã kết nối."),
+            ShareGuideStep(Icons.Rounded.Share, "guide.internet.step2", "Gửi riêng mã phòng qua Zalo, Messenger, email hoặc ứng dụng khác."),
+            ShareGuideStep(Icons.Rounded.Link, "guide.internet.step3", "Máy B chọn Nghe, nhập mã nhận từ máy A và tham gia phòng."),
+            ShareGuideStep(Icons.Rounded.CheckCircle, "guide.internet.step4", "Máy A chấp nhận máy B, sau đó chọn thư mục nhạc được phép chia sẻ."),
+            ShareGuideStep(Icons.Rounded.Download, "guide.internet.step5", "Máy B có thể duyệt, phát online hoặc tải từng bài hay toàn bộ thư mục.")
+        ),
+        noteKey = "guide.internet.note",
+        noteFallback = "P2P phụ thuộc loại mạng/NAT. Nếu ICE FAILED, hãy thử đổi Wi-Fi hoặc dữ liệu di động rồi tạo phòng mới."
+    )
+}
+
+@Composable
+internal fun ShareGuideButton(
+    type: ShareGuideType,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalMusicColors.current
+    var showGuide by rememberSaveable { mutableStateOf(false) }
+    IconButton(onClick = { showGuide = true }, modifier = modifier) {
+        Icon(
+            imageVector = Icons.Rounded.HelpOutline,
+            contentDescription = mwString("common.help", "Hướng dẫn"),
+            tint = colors.purpleBright
+        )
+    }
+    if (showGuide) {
+        ShareGuideDialog(type = type, onDismiss = { showGuide = false })
+    }
+}
+
+@Composable
+private fun ShareGuideDialog(
+    type: ShareGuideType,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val spec = remember(type) { shareGuideSpec(type) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.92f).heightIn(max = 690.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.5f))
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(13.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = CircleShape, color = colors.purple.copy(alpha = 0.16f)) {
+                        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.HelpOutline, null, tint = colors.purpleBright)
+                        }
+                    }
+                    Spacer(Modifier.width(11.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            mwString(spec.titleKey, spec.titleFallback),
+                            color = colors.textPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            mwString(spec.introKey, spec.introFallback),
+                            color = colors.textSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, mwString("common.close", "Đóng"), tint = colors.textSecondary)
+                    }
+                }
+
+                spec.steps.forEachIndexed { index, step ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(15.dp),
+                        color = colors.backgroundSoft,
+                        border = BorderStroke(1.dp, colors.border)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                modifier = Modifier.size(40.dp),
+                                shape = CircleShape,
+                                color = colors.purple.copy(alpha = 0.18f)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(step.icon, null, tint = colors.purpleBright, modifier = Modifier.size(21.dp))
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "${index + 1}",
+                                    color = colors.purpleBright,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    mwString(step.key, step.fallback),
+                                    color = colors.textPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = colors.purple.copy(alpha = 0.11f),
+                    border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.35f))
+                ) {
+                    Text(
+                        mwString(spec.noteKey, spec.noteFallback),
+                        modifier = Modifier.padding(12.dp),
+                        color = colors.textSecondary,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Start
+                    )
+                }
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                ) {
+                    Text(mwString("common.understood", "Đã hiểu"))
+                }
+            }
+        }
+    }
+}
 
 @Composable
 internal fun TunertoolsTheme(
     isDark: Boolean = true,
     language: String = "vi",
+    accentId: String = "purple",
     content: @Composable () -> Unit
 ) {
-    val colors = if (isDark) DarkMusicColors else LightMusicColors
+    val context = LocalContext.current
+    val translationCatalog = remember(context.applicationContext) {
+        MeloWareTranslationCatalog.load(context.applicationContext)
+    }
+    val base = if (isDark) DarkMusicColors else LightMusicColors
+    val accent = MusicAccentOptions.firstOrNull { it.id == accentId }
+    // No preference (or an invalid one) uses the original purple palette exactly.
+    val colors = if (accent == null || accent.id == "purple") base else base.copy(
+        purple = if (isDark) accent.darkPrimary else accent.lightPrimary,
+        purpleBright = if (isDark) accent.darkBright else accent.lightBright,
+        magenta = if (isDark) accent.darkHighlight else accent.lightHighlight
+    )
     val material = if (isDark) {
         darkColorScheme(
             primary = colors.purple,
@@ -145,7 +620,8 @@ internal fun TunertoolsTheme(
     }
     CompositionLocalProvider(
         LocalMusicColors provides colors,
-        LocalAppLanguage provides language
+        LocalAppLanguage provides language,
+        LocalMeloWareTranslations provides translationCatalog
     ) {
         MaterialTheme(colorScheme = material, content = content)
     }
@@ -159,17 +635,150 @@ internal fun ArtworkImage(
     cornerRadius: Int = 16
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    AsyncImage(
-        model = ImageRequest.Builder(context)
-            .data(artworkUrl ?: R.drawable.album_cover)
-            .crossfade(true)
-            .placeholder(R.drawable.album_cover)
-            .error(R.drawable.album_cover)
-            .build(),
-        contentDescription = "Ảnh bìa ${song.title}",
-        contentScale = ContentScale.Crop,
-        modifier = modifier.clip(RoundedCornerShape(cornerRadius.dp))
-    )
+    val shape = RoundedCornerShape(cornerRadius.dp)
+
+    // Luon co anh du phong hai not nhac: khi chua co anh, dang tai hoac link anh loi.
+    // Anh that (neu co) nam phia tren va phu kin placeholder sau khi Coil tai thanh cong.
+    Box(modifier = modifier.clip(shape)) {
+        DoubleNoteArtworkPlaceholder(modifier = Modifier.fillMaxSize())
+        if (!artworkUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(artworkUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Ảnh bìa ${song.title}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+@Composable
+private fun DoubleNoteArtworkPlaceholder(modifier: Modifier = Modifier) {
+    val colors = LocalMusicColors.current
+    val originalPurple = colors.purple == (if (colors.isDark) DarkMusicColors.purple else LightMusicColors.purple)
+    Box(
+        modifier = modifier.background(
+            Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF05091A),
+                    if (originalPurple) Color(0xFF171039) else androidx.compose.ui.graphics.lerp(colors.purple, Color.Black, 0.80f),
+                    Color(0xFF071429)
+                )
+            )
+        ),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val unit = size.minDimension
+            if (unit <= 0f) return@Canvas
+
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val noteBrush = Brush.linearGradient(
+                colors = if (originalPurple) {
+                    listOf(Color(0xFFFF46C7), Color(0xFFB43EFF), Color(0xFF3DAEFF))
+                } else {
+                    listOf(colors.magenta, colors.purpleBright, colors.purple)
+                },
+                start = Offset(center.x - unit * 0.32f, center.y + unit * 0.24f),
+                end = Offset(center.x + unit * 0.30f, center.y - unit * 0.30f)
+            )
+
+            // Glow nhe phia sau, khong lam bien dang bieu tuong.
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        (if (originalPurple) Color(0xFF9E3BFF) else colors.purpleBright).copy(alpha = 0.30f),
+                        (if (originalPurple) Color(0xFF246BFF) else colors.magenta).copy(alpha = 0.09f),
+                        Color.Transparent
+                    ),
+                    center = center,
+                    radius = unit * 0.50f
+                ),
+                radius = unit * 0.50f,
+                center = center
+            )
+
+            // Ty le cua cap not moc kep: dau not thap, than cao va beam nghieng nhe.
+            val leftHeadCenter = Offset(center.x - unit * 0.205f, center.y + unit * 0.170f)
+            val rightHeadCenter = Offset(center.x + unit * 0.165f, center.y + unit * 0.075f)
+            val headWidth = unit * 0.245f
+            val headHeight = unit * 0.155f
+            val stemWidth = (unit * 0.047f).coerceAtLeast(1.5f)
+
+            val leftStemX = leftHeadCenter.x + headWidth * 0.37f
+            val rightStemX = rightHeadCenter.x + headWidth * 0.37f
+            val leftStemTop = center.y - unit * 0.245f
+            val rightStemTop = center.y - unit * 0.340f
+
+            // Than not dung thang, cham vao mep phai dau not.
+            drawLine(
+                brush = noteBrush,
+                start = Offset(leftStemX, leftHeadCenter.y - headHeight * 0.08f),
+                end = Offset(leftStemX, leftStemTop),
+                strokeWidth = stemWidth,
+                cap = androidx.compose.ui.graphics.StrokeCap.Round
+            )
+            drawLine(
+                brush = noteBrush,
+                start = Offset(rightStemX, rightHeadCenter.y - headHeight * 0.08f),
+                end = Offset(rightStemX, rightStemTop),
+                strokeWidth = stemWidth,
+                cap = androidx.compose.ui.graphics.StrokeCap.Round
+            )
+
+            // Beam day va mem, noi hai than theo dung do nghieng cua not kep.
+            val beamPath = Path().apply {
+                moveTo(leftStemX - stemWidth * 0.52f, leftStemTop - unit * 0.008f)
+                cubicTo(
+                    leftStemX + unit * 0.105f,
+                    leftStemTop - unit * 0.022f,
+                    rightStemX - unit * 0.100f,
+                    rightStemTop - unit * 0.012f,
+                    rightStemX + stemWidth * 0.55f,
+                    rightStemTop - unit * 0.004f
+                )
+                lineTo(rightStemX + stemWidth * 0.55f, rightStemTop + unit * 0.086f)
+                cubicTo(
+                    rightStemX - unit * 0.100f,
+                    rightStemTop + unit * 0.076f,
+                    leftStemX + unit * 0.105f,
+                    leftStemTop + unit * 0.067f,
+                    leftStemX - stemWidth * 0.52f,
+                    leftStemTop + unit * 0.080f
+                )
+                close()
+            }
+            drawPath(beamPath, brush = noteBrush)
+
+            // Dau not ellipse xoay nhe, khong ve thanh hinh tron.
+            fun drawNoteHead(centerPoint: Offset) {
+                withTransform({ rotate(-18f, pivot = centerPoint) }) {
+                    drawOval(
+                        brush = noteBrush,
+                        topLeft = Offset(
+                            centerPoint.x - headWidth / 2f,
+                            centerPoint.y - headHeight / 2f
+                        ),
+                        size = Size(headWidth, headHeight)
+                    )
+                }
+            }
+            drawNoteHead(leftHeadCenter)
+            drawNoteHead(rightHeadCenter)
+
+            // Vet sang rat mong giup icon ro net o kich thuoc nho.
+            drawLine(
+                color = Color.White.copy(alpha = 0.20f),
+                start = Offset(leftStemX + stemWidth * 0.12f, leftStemTop + unit * 0.010f),
+                end = Offset(rightStemX + stemWidth * 0.12f, rightStemTop + unit * 0.010f),
+                strokeWidth = (unit * 0.010f).coerceAtLeast(0.8f),
+                cap = androidx.compose.ui.graphics.StrokeCap.Round
+            )
+        }
+    }
 }
 
 @Composable
@@ -341,72 +950,249 @@ internal fun MiniPlayer(
     isFavorite: Boolean,
     onClick: () -> Unit,
     onFavorite: () -> Unit,
+    onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMusicColors.current
-    val progress = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
-    Surface(
+    val shape = RoundedCornerShape(24.dp)
+    val progress = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val shownPosition = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L))
+    var isSeeking by remember(song.id) { mutableStateOf(false) }
+    var seekFraction by remember(song.id) { mutableFloatStateOf(progress) }
+    val displayedProgress = if (isSeeking) seekFraction else progress
+    val displayedPosition = if (isSeeking && durationMs > 0L) {
+        (durationMs.toDouble() * seekFraction.toDouble()).toLong()
+            .coerceIn(0L, durationMs)
+    } else {
+        shownPosition
+    }
+    val glassOverlay = if (colors.isDark) {
+        if (colors.purple == DarkMusicColors.purple) {
+            listOf(
+                Color(0xFF06101D).copy(alpha = 0.91f),
+                Color(0xFF17152E).copy(alpha = 0.66f),
+                Color(0xFF071726).copy(alpha = 0.84f)
+            )
+        } else {
+            listOf(
+                colors.backgroundSoft.copy(alpha = 0.91f),
+                androidx.compose.ui.graphics.lerp(colors.purple, colors.card, 0.88f).copy(alpha = 0.66f),
+                colors.background.copy(alpha = 0.84f)
+            )
+        }
+    } else {
+        listOf(
+            Color.White.copy(alpha = 0.90f),
+            colors.card.copy(alpha = 0.74f),
+            Color.White.copy(alpha = 0.84f)
+        )
+    }
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
-        color = colors.card.copy(alpha = 0.98f),
-        border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.45f)),
-        shadowElevation = 8.dp
+            .height(116.dp)
+            .clip(shape)
+            .background(colors.card, shape)
+            .border(
+                width = 1.dp,
+                brush = Brush.linearGradient(
+                    listOf(
+                        colors.purpleBright.copy(alpha = 0.88f),
+                        colors.blue.copy(alpha = 0.52f),
+                        colors.purple.copy(alpha = 0.78f)
+                    )
+                ),
+                shape = shape
+            )
+            .clickable(onClick = onClick)
     ) {
+        // The card stays a complete rounded rectangle. The raised Play button is
+        // drawn later on top of its lower edge, matching the approved reference.
+        if (!artworkUrl.isNullOrBlank()) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(artworkUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = if (colors.isDark) 0.40f else 0.22f
+                        scaleX = 1.10f
+                        scaleY = 1.10f
+                    }
+            )
+        } else {
+            DoubleNoteArtworkPlaceholder(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = 0.34f }
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.horizontalGradient(glassOverlay))
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = if (colors.isDark) 0.08f else 0.20f),
+                            Color.Transparent,
+                            Color.Black.copy(alpha = if (colors.isDark) 0.25f else 0.05f)
+                        )
+                    )
+                )
+        )
+
         Row(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 12.dp, top = 8.dp, end = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             ArtworkImage(
                 song = song,
                 artworkUrl = artworkUrl,
-                modifier = Modifier.size(58.dp),
-                cornerRadius = 13
+                modifier = Modifier.size(72.dp),
+                cornerRadius = 15
             )
             Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = song.title,
-                    color = colors.textPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = song.artist,
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(7.dp))
-                Box(
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = song.title,
+                            color = colors.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = song.artist,
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = onFavorite,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = "Yêu thích",
+                            tint = if (isFavorite) colors.magenta else colors.textPrimary.copy(alpha = 0.92f),
+                            modifier = Modifier.size(25.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(5.dp))
+                // Keep the seek timeline inside the measured bounds of the card.
+                // The previous negative offset only moved the drawing, not its layout slot,
+                // which caused the time labels to be clipped by the card bottom edge.
+                Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(CircleShape)
-                        .background(colors.borderSoft)
+                        .height(16.dp)
+                        .pointerInput(song.id, durationMs) {
+                            if (durationMs <= 0L) return@pointerInput
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                isSeeking = true
+
+                                fun updateSeekFraction(x: Float) {
+                                    val width = size.width.toFloat().coerceAtLeast(1f)
+                                    seekFraction = (x / width).coerceIn(0f, 1f)
+                                }
+
+                                updateSeekFraction(down.position.x)
+                                var pointerPressed = true
+                                while (pointerPressed) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                        ?: break
+                                    updateSeekFraction(change.position.x)
+                                    pointerPressed = change.pressed
+                                    change.consume()
+                                }
+
+                                val targetPosition =
+                                    (durationMs.toDouble() * seekFraction.toDouble()).toLong()
+                                        .coerceIn(0L, durationMs)
+                                isSeeking = false
+                                onSeek(targetPosition)
+                            }
+                        }
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(progress)
-                            .height(4.dp)
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(colors.purple, colors.magenta)
-                                )
-                            )
+                    val y = size.height / 2f
+                    val stroke = 3.5.dp.toPx()
+                    val thumbRadius = 4.5.dp.toPx()
+                    val thumbX = (size.width * displayedProgress)
+                        .coerceIn(thumbRadius, (size.width - thumbRadius).coerceAtLeast(thumbRadius))
+                    drawLine(
+                        color = colors.borderSoft.copy(alpha = 0.96f),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                    drawLine(
+                        brush = Brush.horizontalGradient(
+                            listOf(colors.purple, colors.magenta, colors.blue)
+                        ),
+                        start = Offset(0f, y),
+                        end = Offset(thumbX, y),
+                        strokeWidth = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = thumbRadius,
+                        center = Offset(thumbX, y)
                     )
                 }
-            }
-            IconButton(onClick = onFavorite) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                    contentDescription = "Yêu thích",
-                    tint = if (isFavorite) colors.magenta else colors.textSecondary
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 1.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = formatDuration(displayedPosition),
+                        color = colors.textSecondary,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = formatDuration(durationMs.coerceAtLeast(0L)),
+                        color = colors.textPrimary.copy(alpha = 0.92f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
     }
@@ -418,19 +1204,19 @@ internal fun PlayerBottomArea(
     selectedScreen: MusicScreen,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    val song = controller.currentSong
+
+    // Two independent layers: a complete glass song card and a detached black dock.
+    // The circular Play control is painted after both layers and overlaps the card,
+    // creating the visual indentation without cutting the card itself.
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.Transparent, LocalMusicColors.current.background.copy(alpha = 0.98f))
-                )
-            )
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .navigationBarsPadding(),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
+            .navigationBarsPadding()
+            .padding(start = 12.dp, top = 3.dp, end = 12.dp, bottom = 4.dp)
+            .height(if (song != null) 202.dp else 100.dp)
     ) {
-        controller.currentSong?.let { song ->
+        if (song != null) {
             MiniPlayer(
                 song = song,
                 artworkUrl = controller.artworkFor(song),
@@ -438,9 +1224,12 @@ internal fun PlayerBottomArea(
                 durationMs = controller.durationMs,
                 isFavorite = controller.isFavorite(song),
                 onClick = controller::openNowPlaying,
-                onFavorite = { controller.toggleFavorite(song) }
+                onFavorite = { controller.toggleFavorite(song) },
+                onSeek = controller::seekTo,
+                modifier = Modifier.align(Alignment.TopCenter)
             )
         }
+
         BottomPlayerBar(
             selectedScreen = selectedScreen,
             isPlaying = controller.isPlaying,
@@ -448,7 +1237,8 @@ internal fun PlayerBottomArea(
             onPrevious = controller::previous,
             onPlayPause = controller::togglePlayback,
             onNext = controller::next,
-            onLibrary = { controller.openLibrary() }
+            onLibrary = { controller.openLibrary() },
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 }
@@ -471,26 +1261,34 @@ internal fun BottomPlayerBar(
         targetValue = if (playPressed) 0.90f else 1f,
         animationSpec = spring(dampingRatio = 0.70f, stiffness = 520f)
     )
+    val ringTransition = rememberInfiniteTransition()
+    val ringRotation by ringTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3_200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        )
+    )
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(92.dp)
+            .height(100.dp)
     ) {
+        // Detached black control dock, matching the reference image.
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(70.dp)
                 .align(Alignment.BottomCenter),
             shape = RoundedCornerShape(35.dp),
-            color = Color(0xFF151326).copy(alpha = 0.98f),
-            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.62f)),
-            shadowElevation = 12.dp
+            color = if (colors.isDark) Color(0xFF020611) else colors.card,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.66f)),
+            shadowElevation = 10.dp
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 8.dp),
+                modifier = Modifier.fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 BottomNavItem(
@@ -498,6 +1296,7 @@ internal fun BottomPlayerBar(
                     label = "Trang chủ",
                     selected = selectedScreen == MusicScreen.HOME,
                     onClick = onHome,
+                    edge = NavEnd.START,
                     modifier = Modifier.weight(1f)
                 )
                 BottomControlIcon(
@@ -518,22 +1317,63 @@ internal fun BottomPlayerBar(
                     label = "Thư viện",
                     selected = selectedScreen == MusicScreen.LIBRARY,
                     onClick = onLibrary,
+                    edge = NavEnd.END,
                     modifier = Modifier.weight(1f)
                 )
             }
         }
 
+        // Animated spectrum ring at the exact intersection between the song card
+        // and the black dock. The ring rotates continuously while the inner dark
+        // halo keeps the Play/Pause button visually separated from both layers.
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .size(82.dp)
+                .size(98.dp)
+                .graphicsLayer {
+                    rotationZ = ringRotation
+                    alpha = if (playPressed) 0.78f else 1f
+                }
+                .shadow(if (playPressed) 10.dp else 20.dp, CircleShape)
+                .background(
+                    Brush.sweepGradient(
+                        listOf(
+                            colors.purpleBright,
+                            colors.magenta,
+                            colors.cyan,
+                            colors.blue,
+                            colors.purple,
+                            colors.purpleBright
+                        )
+                    ),
+                    CircleShape
+                )
+                .padding(4.dp)
+                .background(
+                    if (colors.isDark) Color(0xFF01040B) else colors.background,
+                    CircleShape
+                )
+                .border(
+                    1.dp,
+                    Color.White.copy(alpha = if (colors.isDark) 0.10f else 0.24f),
+                    CircleShape
+                )
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 11.dp)
+                .size(76.dp)
                 .graphicsLayer {
                     scaleX = playScale
                     scaleY = playScale
                 }
-                .shadow(if (playPressed) 10.dp else 20.dp, CircleShape)
-                .background(Color(0xFF100C22), CircleShape)
-                .padding(5.dp)
+                .shadow(if (playPressed) 10.dp else 18.dp, CircleShape)
+                .background(
+                    if (colors.purple == (if (colors.isDark) DarkMusicColors.purple else LightMusicColors.purple)) Color(0xFF100C22) else colors.backgroundSoft,
+                    CircleShape
+                )
+                .padding(4.dp)
                 .background(
                     Brush.linearGradient(
                         listOf(colors.purpleBright, colors.purple, colors.magenta)
@@ -551,11 +1391,13 @@ internal fun BottomPlayerBar(
                 imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                 contentDescription = if (isPlaying) "Tạm dừng" else "Phát",
                 tint = Color.White,
-                modifier = Modifier.size(42.dp)
+                modifier = Modifier.size(40.dp)
             )
         }
     }
 }
+
+private enum class NavEnd { START, END }
 
 @Composable
 private fun BottomNavItem(
@@ -563,70 +1405,72 @@ private fun BottomNavItem(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    edge: NavEnd,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMusicColors.current
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.88f else 1f,
-        animationSpec = spring(dampingRatio = 0.68f, stiffness = 560f)
+    val iconScale by animateFloatAsState(
+        targetValue = if (pressed) 0.85f else if (selected) 1.06f else 1f,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = 540f)
     )
-    val itemBackground = when {
-        selected -> colors.purple.copy(alpha = 0.16f)
-        pressed -> colors.purple.copy(alpha = 0.10f)
-        else -> Color.Transparent
+    val glow by animateFloatAsState(
+        targetValue = if (pressed) 1f else if (selected) 0.85f else 0f,
+        animationSpec = tween(durationMillis = 250)
+    )
+    // Hai nut dau/cuoi om sat cung bo tron ngoai cua thanh menu.
+    val itemShape = when (edge) {
+        NavEnd.START -> RoundedCornerShape(topStart = 35.dp, bottomStart = 35.dp, topEnd = 16.dp, bottomEnd = 16.dp)
+        NavEnd.END -> RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp, topEnd = 35.dp, bottomEnd = 35.dp)
     }
 
     Column(
         modifier = modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .clip(RoundedCornerShape(20.dp))
-            .background(itemBackground)
+            .fillMaxSize()
+            .clip(itemShape)
+            .background(colors.purple.copy(alpha = 0.43f * glow), itemShape)
+            .border(1.5.dp, colors.purpleBright.copy(alpha = 0.80f * glow), itemShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 4.dp, vertical = 6.dp),
+            .padding(horizontal = 2.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(1.dp)
+        verticalArrangement = Arrangement.Center
     ) {
         Box(
-            modifier = Modifier
-                .size(34.dp)
-                .background(
-                    if (selected) colors.purple.copy(alpha = 0.18f) else Color.Transparent,
-                    RoundedCornerShape(12.dp)
-                ),
+            modifier = Modifier.size(30.dp),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (selected) colors.purpleBright else colors.textSecondary,
-                modifier = Modifier.size(if (selected) 26.dp else 24.dp)
+                tint = if (selected) Color.White else colors.textSecondary,
+                modifier = Modifier
+                    .size(30.dp)
+                    .graphicsLayer {
+                        scaleX = iconScale
+                        scaleY = iconScale
+                    }
             )
         }
+        // Labels sit closer to the icons; preserve the indicator and click area.
         Text(
             text = label,
-            color = if (selected) colors.purpleBright else colors.textSecondary,
+            // Pull the label toward the icon without changing the dock height.
+            modifier = Modifier.offset(y = (-3).dp),
+            color = if (selected) Color.White else colors.textSecondary,
             fontSize = 10.sp,
+            lineHeight = 11.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
-        Box(
-            modifier = Modifier
-                .width(18.dp)
-                .height(3.dp)
-                .background(
-                    if (selected) colors.purpleBright else Color.Transparent,
-                    CircleShape
-                )
-        )
+        // Reserve the same space to keep icon/label alignment, but do not draw
+        // an underline below the Home or Library labels.
+        Spacer(modifier = Modifier.height(3.dp))
     }
 }
 
@@ -720,6 +1564,7 @@ internal fun sourceIcon(source: LibrarySource): ImageVector = when (source) {
     LibrarySource.LOCAL -> Icons.Rounded.Smartphone
     LibrarySource.PERSONAL_DRIVE -> Icons.Rounded.Cloud
     LibrarySource.PUBLIC_DRIVE -> Icons.Rounded.Link
+    LibrarySource.INTERNET -> Icons.Rounded.Link
     LibrarySource.DOWNLOADED -> Icons.Rounded.Download
     LibrarySource.FAVORITES -> Icons.Rounded.Favorite
     LibrarySource.ALL -> Icons.Rounded.MusicNote
