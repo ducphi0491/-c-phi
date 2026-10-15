@@ -1,2 +1,2 @@
-2026-10-15 16:51:24.003 18985-19262 Ads                     ducphi.tunnerinstrument              I  Use RequestConfiguration.Builder().setTestDeviceIds(Arrays.asList("15296D32E45E2F8F7E6B53F613E65A34")) to get test ads on this device.
-2026-10-15 16:51:34.734 18985-19262 Ads                     ducphi.tunnerinstrument              I  Use RequestConfiguration.Builder().setTestDeviceIds(Arrays.asList("15296D32E45E2F8F7E6B53F613E65A34")) to get test ads on this device.
+DEBUG_TEST_DEVICE_CONFIGURED
+AD_INSPECTOR_OPEN_REQUEST
