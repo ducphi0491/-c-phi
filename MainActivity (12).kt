@@ -13,16 +13,19 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -52,6 +56,8 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,51 +73,241 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.google.android.play.core.appupdate.AppUpdateInfo
+import com.google.android.play.core.appupdate.AppUpdateManager
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory
+import com.google.android.play.core.appupdate.AppUpdateOptions
+import com.google.android.play.core.install.model.AppUpdateType
+import com.google.android.play.core.install.model.UpdateAvailability
 import java.util.Calendar
 
+// Language mode is kept separate from app_language so automatic device language
+// does not overwrite the user's explicit selection. Legacy app_language stays valid.
+private const val MELOWARE_LANGUAGE_MODE_KEY = "app_language_mode"
+private const val MELOWARE_LANGUAGE_MODE_DEVICE = "device"
+private const val MELOWARE_LANGUAGE_MODE_MANUAL = "manual"
+
 private const val MELOWARE_ADMIN_EMAIL = "ducphi0491@gmail.com"
-private const val GOOGLE_DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+private const val GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+private const val GOOGLE_PICKER_FILE_IDS_PARAM = "picked_file_ids"
+private const val GOOGLE_PICKER_AUDIO_MIME_TYPES =
+    "application/vnd.google-apps.folder," +
+            "audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/flac,audio/x-flac," +
+            "audio/wav,audio/x-wav,audio/ogg,audio/opus,audio/amr,audio/3gpp," +
+            "audio/webm,audio/x-matroska,audio/ac3,audio/eac3,audio/ac4,video/mp2t"
 
-private data class AppLanguageOption(
-    val code: String,
-    val nativeName: String
-)
+class MainActivity : FragmentActivity() {
+    private lateinit var appUpdateManager: AppUpdateManager
+    private var mainUiStarted = false
+    private var updateCheckInProgress = false
+    private var updateFlowLaunching = false
+    // Chi kiem tra lai khi quay ve tu Google Play neu da biet ban cap nhat la bat buoc.
+    private var mandatoryUpdateRequired = false
+    private var mandatoryUpdateDialog: android.app.AlertDialog? = null
+    // Compose observes this when the user changes the device language.
+    private var systemLanguageTag by mutableStateOf(java.util.Locale.getDefault().toLanguageTag())
 
-private val AppLanguageOptions = listOf(
-    AppLanguageOption("vi", "Tiếng Việt"),
-    AppLanguageOption("en", "English"),
-    AppLanguageOption("zh", "简体中文"),
-    AppLanguageOption("ja", "日本語"),
-    AppLanguageOption("ko", "한국어"),
-    AppLanguageOption("es", "Español"),
-    AppLanguageOption("fr", "Français"),
-    AppLanguageOption("de", "Deutsch"),
-    AppLanguageOption("ru", "Русский"),
-    AppLanguageOption("pt", "Português"),
-    AppLanguageOption("id", "Bahasa Indonesia"),
-    AppLanguageOption("hi", "हिन्दी"),
-    AppLanguageOption("ar", "العربية"),
-    AppLanguageOption("th", "ไทย"),
-    AppLanguageOption("it", "Italiano")
-)
+    private val mandatoryUpdateLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        updateFlowLaunching = false
+        if (result.resultCode == Activity.RESULT_OK) {
+            // Immediate Update normally restarts the app. Recheck defensively if it returns.
+            checkForMandatoryUpdate()
+        } else {
+            showMandatoryUpdateDialog(
+                message = "Bạn phải cập nhật MeloWare lên phiên bản mới nhất trước khi tiếp tục sử dụng.",
+                openPlayStoreDirectly = false
+            )
+        }
+    }
 
-class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        appUpdateManager = AppUpdateManagerFactory.create(this)
+        // Hien giao dien ngay; Play In-App Update duoc kiem tra bat dong bo.
+        openMeloWareUi()
+        checkForMandatoryUpdate()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Refresh the language when coming back from Android Settings.
+        systemLanguageTag = java.util.Locale.getDefault().toLanguageTag()
+        // Khong kiem tra lap lai khi nguoi dung tro ve tu Drive, Cast, dang nhap...
+        // Neu dang bat buoc cap nhat, kiem tra lai khi tro ve tu Google Play.
+        if (
+            !::appUpdateManager.isInitialized ||
+            !mandatoryUpdateRequired ||
+            updateCheckInProgress ||
+            updateFlowLaunching ||
+            mandatoryUpdateDialog?.isShowing == true
+        ) return
+        checkForMandatoryUpdate()
+    }
+
+    /**
+     * Kiem tra Google Play am tham, khong chiem man hinh luc mo app.
+     * Khi Google Play bao co cap nhat, van yeu cau IMMEDIATE update.
+     */
+    private fun checkForMandatoryUpdate() {
+        if (
+            updateCheckInProgress ||
+            updateFlowLaunching ||
+            isFinishing ||
+            isDestroyed
+        ) return
+
+        updateCheckInProgress = true
+        appUpdateManager.appUpdateInfo
+            .addOnSuccessListener { info ->
+                updateCheckInProgress = false
+                when {
+                    info.updateAvailability() ==
+                            UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS -> {
+                        mandatoryUpdateRequired = true
+                        startImmediateUpdate(info)
+                    }
+
+                    info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE -> {
+                        mandatoryUpdateRequired = true
+                        if (info.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE)) {
+                            startImmediateUpdate(info)
+                        } else {
+                            showMandatoryUpdateDialog(
+                                message = "MeloWare đã có phiên bản mới. Thiết bị này cần mở Google Play để cập nhật trước khi tiếp tục.",
+                                openPlayStoreDirectly = true
+                            )
+                        }
+                    }
+
+                    else -> {
+                        mandatoryUpdateRequired = false
+                        mandatoryUpdateDialog?.dismiss()
+                        mandatoryUpdateDialog = null
+                    }
+                }
+            }
+            .addOnFailureListener {
+                updateCheckInProgress = false
+                // Loi mang/Google Play: khong che man hinh, van nghe nhac offline.
+                // Neu Play truoc do da xac nhan phai cap nhat, giu yeu cau cap nhat.
+                if (mandatoryUpdateRequired && mandatoryUpdateDialog?.isShowing != true) {
+                    showMandatoryUpdateDialog(
+                        message = "Không thể kiểm tra lại bản cập nhật. Vui lòng cập nhật MeloWare trên Google Play.",
+                        openPlayStoreDirectly = true
+                    )
+                }
+            }
+    }
+
+    private fun startImmediateUpdate(info: AppUpdateInfo) {
+        if (updateFlowLaunching || isFinishing || isDestroyed) return
+        updateFlowLaunching = true
+
+        val started = runCatching {
+            appUpdateManager.startUpdateFlowForResult(
+                info,
+                mandatoryUpdateLauncher,
+                AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build()
+            )
+        }.getOrDefault(false)
+
+        if (!started) {
+            updateFlowLaunching = false
+            showMandatoryUpdateDialog(
+                message = "Không thể mở màn hình cập nhật tự động. Vui lòng cập nhật MeloWare trực tiếp trên Google Play.",
+                openPlayStoreDirectly = true
+            )
+        }
+    }
+
+    private fun showMandatoryUpdateDialog(
+        message: String,
+        openPlayStoreDirectly: Boolean
+    ) {
+        if (isFinishing || isDestroyed) return
+
+        mandatoryUpdateDialog?.dismiss()
+        mandatoryUpdateDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Cập nhật MeloWare bắt buộc")
+            .setMessage(message)
+            .setCancelable(false)
+            .setPositiveButton("Cập nhật ngay") { _, _ ->
+                if (openPlayStoreDirectly) {
+                    openMeloWareOnPlayStore()
+                } else {
+                    checkForMandatoryUpdate()
+                }
+            }
+            .setNegativeButton("Thoát ứng dụng") { _, _ ->
+                finishAffinity()
+            }
+            .create()
+            .also { dialog ->
+                dialog.setCanceledOnTouchOutside(false)
+                dialog.show()
+            }
+    }
+
+    private fun openMeloWareOnPlayStore() {
+        val marketIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("market://details?id=$packageName")
+        ).apply {
+            setPackage("com.android.vending")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        val webIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        runCatching { startActivity(marketIntent) }
+            .onFailure { runCatching { startActivity(webIntent) } }
+    }
+
+    private fun openMeloWareUi() {
+        if (mainUiStarted || isFinishing || isDestroyed) return
+        mainUiStarted = true
+        mandatoryUpdateDialog?.dismiss()
+        mandatoryUpdateDialog = null
         enableEdgeToEdge()
+        configureSystemBars()
+        com.google.android.gms.cast.framework.CastContext.getSharedInstance(
+            applicationContext,
+            ContextCompat.getMainExecutor(this)
+        )
+
+        // Khoi tao Google Mobile Ads mot lan khi ung dung mo.
+        Thread {
+            com.google.android.gms.ads.MobileAds.initialize(this@MainActivity) { }
+        }.start()
 
         setContent {
             val context = LocalContext.current
@@ -122,24 +318,64 @@ class MainActivity : ComponentActivity() {
                 MusicController(context.applicationContext)
             }
 
-            var language by remember {
+            val translationCatalog = remember(context.applicationContext) {
+                MeloWareTranslationCatalog.load(context.applicationContext)
+            }
+            val languageOptions = translationCatalog.languages
+            val savedLanguage = remember(prefs) {
+                translationCatalog.resolveLanguage(prefs.getString("app_language", null))
+            }
+            // Older versions stored both an auto-detected and a manually selected code
+            // under app_language. Preserve that value as manual until the user opts
+            // into device-language mode; do not silently override existing choices.
+            var languageMode by remember(prefs) {
                 mutableStateOf(
-                    prefs.getString("app_language", null)
-                        ?: java.util.Locale.getDefault().language.takeIf { code ->
-                            AppLanguageOptions.any { it.code == code }
+                    when (prefs.getString(MELOWARE_LANGUAGE_MODE_KEY, null)) {
+                        MELOWARE_LANGUAGE_MODE_DEVICE -> MELOWARE_LANGUAGE_MODE_DEVICE
+                        MELOWARE_LANGUAGE_MODE_MANUAL -> {
+                            if (savedLanguage != null) MELOWARE_LANGUAGE_MODE_MANUAL
+                            else MELOWARE_LANGUAGE_MODE_DEVICE
                         }
-                        ?: "vi"
+                        else -> {
+                            if (savedLanguage != null) MELOWARE_LANGUAGE_MODE_MANUAL
+                            else MELOWARE_LANGUAGE_MODE_DEVICE
+                        }
+                    }
                 )
             }
+            var manualLanguage by remember(prefs) {
+                mutableStateOf(savedLanguage ?: translationCatalog.defaultLanguage)
+            }
+            // Update automatically after a system language change if Auto is selected.
+            val deviceLanguage = translationCatalog.resolveLanguage(systemLanguageTag)
+            val followDeviceLanguage = languageMode == MELOWARE_LANGUAGE_MODE_DEVICE
+            val language = if (followDeviceLanguage) {
+                deviceLanguage ?: translationCatalog.defaultLanguage
+            } else {
+                manualLanguage
+            }
+            val requireInitialLanguageChoice = followDeviceLanguage && deviceLanguage == null
             // 0: theo hệ thống, 1: sáng, 2: tối
             var themeMode by remember {
                 mutableIntStateOf(prefs.getInt("app_theme_mode", 2))
             }
+            // Accent is stored locally. Existing installs start with the original purple.
+            var accentId by remember {
+                mutableStateOf(
+                    prefs.getString("app_accent_color", "purple")
+                        ?.takeIf { saved -> MusicAccentOptions.any { it.id == saved } }
+                        ?: "purple"
+                )
+            }
             var showSettings by remember { mutableStateOf(false) }
+            var showPremiumDialog by remember { mutableStateOf(false) }
             var showLanguageDialog by remember { mutableStateOf(false) }
             var showThemeDialog by remember { mutableStateOf(false) }
+            var showAccentDialog by remember { mutableStateOf(false) }
             var showAdminDashboard by remember { mutableStateOf(false) }
             var pendingOpenPersonalDrive by remember { mutableStateOf(false) }
+            var pendingDrivePickerAfterLogin by remember { mutableStateOf(true) }
+            var awaitingDrivePickerResult by remember { mutableStateOf(false) }
             // Chi hien nut Admin khi tai khoan Google dang nhap trung khop,
             // khong dua vao email ghi trong SharedPreferences.
             var verifiedAdmin by remember {
@@ -169,32 +405,84 @@ class MainActivity : ComponentActivity() {
                         ?: prefs.getString("logged_in_email", null)
                 )
             }
+
+            // Keep BillingClient alive for the Activity (not just the Premium dialog).
+            // Otherwise purchases can complete after the dialog closes without verification.
+            val premiumBilling = remember(this@MainActivity) {
+                MeloWarePremiumBillingManager(this@MainActivity)
+            }
+            DisposableEffect(premiumBilling) {
+                premiumBilling.start()
+                onDispose { premiumBilling.close() }
+            }
+            val premiumLifecycle = LocalLifecycleOwner.current
+            DisposableEffect(premiumLifecycle, premiumBilling) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) premiumBilling.onResume()
+                }
+                premiumLifecycle.lifecycle.addObserver(observer)
+                onDispose { premiumLifecycle.lifecycle.removeObserver(observer) }
+            }
+            LaunchedEffect(currentUserEmail) {
+                // Re-check rights for sign-in, sign-out, and account switch.
+                premiumBilling.onAccountChanged()
+            }
             val driveScope = remember {
-                com.google.android.gms.common.api.Scope(GOOGLE_DRIVE_READONLY_SCOPE)
+                com.google.android.gms.common.api.Scope(GOOGLE_DRIVE_FILE_SCOPE)
             }
             val authorizationClient = remember {
                 com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(context)
             }
 
-            fun acceptDriveAuthorization(
+            fun pickerFileIds(
                 result: com.google.android.gms.auth.api.identity.AuthorizationResult
+            ): List<String> {
+                val raw = result.tokenResponseParams
+                    ?.get(GOOGLE_PICKER_FILE_IDS_PARAM)
+                    ?.toString()
+                    .orEmpty()
+                return raw.split(',')
+                    .map { it.trim() }
+                    .filter { it.matches(Regex("[A-Za-z0-9_-]{10,}")) }
+                    .distinct()
+            }
+
+            fun acceptDriveAuthorization(
+                result: com.google.android.gms.auth.api.identity.AuthorizationResult,
+                fromPicker: Boolean
             ) {
                 val token = result.accessToken
                 val granted = result.grantedScopes.orEmpty()
-                if (GOOGLE_DRIVE_READONLY_SCOPE !in granted || token.isNullOrBlank()) {
+                if (GOOGLE_DRIVE_FILE_SCOPE !in granted || token.isNullOrBlank()) {
                     controller.consumePersonalDriveAuthorizationRequest()
                     Toast.makeText(
                         context,
-                        "Bạn chưa cấp quyền đọc Google Drive cho MeloWare.",
+                        "Bạn chưa cấp quyền drive.file cho MeloWare.",
                         Toast.LENGTH_LONG
                     ).show()
                     return
                 }
+
                 controller.setPersonalDriveAuthorization(token, currentUserEmail)
-                controller.libraryTab = LibraryTab.FOLDERS
+                if (!fromPicker) return
+
+                val pickedIds = pickerFileIds(result)
+                if (pickedIds.isEmpty()) {
+                    Toast.makeText(
+                        context,
+                        "Bạn chưa chọn file hoặc thư mục Google Drive nào.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return
+                }
+
+                controller.libraryTab = LibraryTab.SONGS
                 controller.openLibrary(LibrarySource.PERSONAL_DRIVE)
-                controller.showPersonalDriveDialog = true
-                controller.openPersonalDriveRoot()
+                controller.importPersonalDrivePickerSelection(
+                    accessToken = token,
+                    accountEmail = currentUserEmail,
+                    pickedIds = pickedIds
+                )
             }
             val googleAuthLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.StartActivityForResult()
@@ -226,11 +514,13 @@ class MainActivity : ComponentActivity() {
             val driveAuthorizationLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.StartIntentSenderForResult()
             ) { activityResult ->
+                val fromPicker = awaitingDrivePickerResult
+                awaitingDrivePickerResult = false
                 if (activityResult.resultCode != Activity.RESULT_OK || activityResult.data == null) {
                     controller.consumePersonalDriveAuthorizationRequest()
                     Toast.makeText(
                         context,
-                        "Bạn đã hủy cấp quyền Google Drive.",
+                        if (fromPicker) "Bạn đã đóng Google Picker." else "Bạn đã hủy cấp quyền Google Drive.",
                         Toast.LENGTH_SHORT
                     ).show()
                     return@rememberLauncherForActivityResult
@@ -239,7 +529,7 @@ class MainActivity : ComponentActivity() {
                     val result = authorizationClient.getAuthorizationResultFromIntent(
                         activityResult.data!!
                     )
-                    acceptDriveAuthorization(result)
+                    acceptDriveAuthorization(result, fromPicker)
                 } catch (error: com.google.android.gms.common.api.ApiException) {
                     controller.consumePersonalDriveAuthorizationRequest()
                     Toast.makeText(
@@ -250,20 +540,49 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            val requestDriveAuthorization: () -> Unit = requestDriveAuthorization@{
+            fun requestDriveAuthorization(openPicker: Boolean) {
                 val signedIn = com.google.android.gms.auth.api.signin.GoogleSignIn
                     .getLastSignedInAccount(context)
                 val account = signedIn?.account
                 if (account == null) {
                     pendingOpenPersonalDrive = true
+                    pendingDrivePickerAfterLogin = openPicker
                     googleAuthLauncher.launch(googleSignInClient.signInIntent)
-                    return@requestDriveAuthorization
+                    return
                 }
 
-                val request = com.google.android.gms.auth.api.identity.AuthorizationRequest.builder()
+                val requestBuilder = com.google.android.gms.auth.api.identity.AuthorizationRequest.builder()
                     .setAccount(account)
                     .setRequestedScopes(listOf(driveScope))
-                    .build()
+                    .setOptOutIncludingGrantedScopes(true)
+                    .setPrompt(
+                        if (openPicker) {
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.Prompt.CONSENT
+                        } else {
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.Prompt.NOT_SET
+                        }
+                    )
+
+                if (openPicker) {
+                    requestBuilder
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_OAUTH_TRIGGER,
+                            "true"
+                        )
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_ALLOW_MULTIPLE,
+                            "true"
+                        )
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_ALLOW_FOLDER_SELECTION,
+                            "true"
+                        )
+                        .addResourceParameter(
+                            com.google.android.gms.auth.api.identity.AuthorizationRequest.ResourceParameter.PICKER_MIMETYPES,
+                            GOOGLE_PICKER_AUDIO_MIME_TYPES
+                        )
+                }
+                val request = requestBuilder.build()
 
                 fun authorizeNow() {
                     authorizationClient.authorize(request)
@@ -278,19 +597,20 @@ class MainActivity : ComponentActivity() {
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } else {
+                                    awaitingDrivePickerResult = openPicker
                                     driveAuthorizationLauncher.launch(
                                         IntentSenderRequest.Builder(pendingIntent.intentSender).build()
                                     )
                                 }
                             } else {
-                                acceptDriveAuthorization(result)
+                                acceptDriveAuthorization(result, openPicker)
                             }
                         }
                         .addOnFailureListener { error ->
                             controller.consumePersonalDriveAuthorizationRequest()
                             Toast.makeText(
                                 context,
-                                "Không thể yêu cầu quyền Google Drive: ${error.localizedMessage}",
+                                "Không thể mở Google Picker: ${error.localizedMessage}",
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -349,8 +669,9 @@ class MainActivity : ComponentActivity() {
             // Sau khi đăng nhập thành công, yêu cầu riêng quyền OAuth Google Drive.
             LaunchedEffect(currentUserEmail, pendingOpenPersonalDrive) {
                 if (pendingOpenPersonalDrive && !currentUserEmail.isNullOrBlank()) {
+                    val openPicker = pendingDrivePickerAfterLogin
                     pendingOpenPersonalDrive = false
-                    requestDriveAuthorization()
+                    requestDriveAuthorization(openPicker)
                 }
             }
 
@@ -358,7 +679,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(controller.personalDriveNeedsAuthorization) {
                 if (controller.personalDriveNeedsAuthorization) {
                     controller.consumePersonalDriveAuthorizationRequest()
-                    requestDriveAuthorization()
+                    requestDriveAuthorization(openPicker = false)
                 }
             }
 
@@ -418,7 +739,8 @@ class MainActivity : ComponentActivity() {
                 else -> systemDark
             }
 
-            TunertoolsTheme(isDark = isDark, language = language) {
+            TunertoolsTheme(isDark = isDark, language = language, accentId = accentId) {
+                val signedOutNotice = mwString("settings.signed_out", "Đã đăng xuất tài khoản")
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -442,18 +764,12 @@ class MainActivity : ComponentActivity() {
                                 requestLocalScan()
                             },
                             onOpenPersonalDrive = {
-                                if (controller.hasPersonalDriveAuthorization) {
-                                    controller.libraryTab = LibraryTab.FOLDERS
-                                    controller.openLibrary(LibrarySource.PERSONAL_DRIVE)
-                                    controller.showPersonalDriveDialog = true
-                                    if (controller.personalDrivePath.isEmpty() && !controller.personalDriveBusy) {
-                                        controller.openPersonalDriveRoot()
-                                    }
-                                } else if (currentUserEmail.isNullOrBlank()) {
+                                if (currentUserEmail.isNullOrBlank()) {
                                     pendingOpenPersonalDrive = true
+                                    pendingDrivePickerAfterLogin = true
                                     googleAuthLauncher.launch(googleSignInClient.signInIntent)
                                 } else {
-                                    requestDriveAuthorization()
+                                    requestDriveAuthorization(openPicker = true)
                                 }
                             },
                             onOpenPublicDrive = {
@@ -467,11 +783,20 @@ class MainActivity : ComponentActivity() {
                         MusicScreen.LIBRARY -> LibraryScreen(
                             controller = controller,
                             onScanLocal = requestLocalScan,
-                            onAuthorizePersonalDrive = requestDriveAuthorization,
+                            onAuthorizePersonalDrive = { requestDriveAuthorization(openPicker = true) },
                             onSettings = { showSettings = true }
                         )
 
-                        MusicScreen.NOW_PLAYING -> NowPlayingScreen(controller)
+                        MusicScreen.NOW_PLAYING -> Column(modifier = Modifier.fillMaxSize()) {
+                            // Player takes the available height; its own layout has no banner.
+                            Box(modifier = Modifier.weight(1f)) {
+                                NowPlayingScreen(controller, onOpenPremium = { showPremiumDialog = true })
+                            }
+                            // Exactly one banner, exclusively in the full player screen.
+                            if (controller.currentSong != null && !MeloWarePremiumAccess.canUsePaidFeatures) {
+                                MeloWareNowPlayingBanner()
+                            }
+                        }
                     }
                 }
 
@@ -479,14 +804,25 @@ class MainActivity : ComponentActivity() {
                     QuickSettingsDialog(
                         controller = controller,
                         language = language,
+                        languageOptions = languageOptions,
+                        followDeviceLanguage = followDeviceLanguage,
                         themeMode = themeMode,
+                        accentId = accentId,
                         onOpenLanguage = {
                             showSettings = false
                             showLanguageDialog = true
                         },
+                        onOpenPremium = {
+                            showSettings = false
+                            showPremiumDialog = true
+                        },
                         onOpenTheme = {
                             showSettings = false
                             showThemeDialog = true
+                        },
+                        onOpenAccent = {
+                            showSettings = false
+                            showAccentDialog = true
                         },
                         currentUserEmail = currentUserEmail,
                         isAdmin = verifiedAdmin,
@@ -525,7 +861,7 @@ class MainActivity : ComponentActivity() {
                                     verifiedAdmin = false
                                     showAdminDashboard = false
                                     prefs.edit().remove("logged_in_email").apply()
-                                    Toast.makeText(context, "Đã đăng xuất tài khoản", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, signedOutNotice, Toast.LENGTH_SHORT).show()
                                 }
                             } else {
                                 googleAuthLauncher.launch(googleSignInClient.signInIntent)
@@ -535,19 +871,50 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                if (showPremiumDialog) {
+                    MeloWarePremiumDialog(
+                        activity = this@MainActivity,
+                        billing = premiumBilling,
+                        onRequestGoogleLogin = { googleAuthLauncher.launch(googleSignInClient.signInIntent) },
+                        onDismiss = { showPremiumDialog = false }
+                    )
+                }
+
                 if (showAdminDashboard && verifiedAdmin) {
                     MeloWareAdminUsageDialog(onDismiss = { showAdminDashboard = false })
                 }
 
-                if (showLanguageDialog) {
+                if (showLanguageDialog || requireInitialLanguageChoice) {
                     LanguageDialog(
                         selectedCode = language,
+                        options = languageOptions,
+                        requiredSelection = requireInitialLanguageChoice,
+                        autoSelected = followDeviceLanguage,
+                        deviceLanguageCode = deviceLanguage,
+                        onSelectAuto = {
+                            // Re-enable following the device; do not pin a language code.
+                            if (deviceLanguage != null) {
+                                languageMode = MELOWARE_LANGUAGE_MODE_DEVICE
+                                prefs.edit()
+                                    .putString(MELOWARE_LANGUAGE_MODE_KEY, MELOWARE_LANGUAGE_MODE_DEVICE)
+                                    .remove("app_language")
+                                    .apply()
+                                showLanguageDialog = false
+                            }
+                        },
                         onSelect = { code ->
-                            language = code
-                            prefs.edit().putString("app_language", code).apply()
+                            // A user's manual choice always takes precedence on restart.
+                            manualLanguage = code
+                            languageMode = MELOWARE_LANGUAGE_MODE_MANUAL
+                            prefs.edit()
+                                .putString(MELOWARE_LANGUAGE_MODE_KEY, MELOWARE_LANGUAGE_MODE_MANUAL)
+                                .putString("app_language", code)
+                                .apply()
                             showLanguageDialog = false
                         },
-                        onDismiss = { showLanguageDialog = false }
+                        onDismiss = {
+                            if (!requireInitialLanguageChoice) showLanguageDialog = false
+                        }
                     )
                 }
 
@@ -562,8 +929,79 @@ class MainActivity : ComponentActivity() {
                         onDismiss = { showThemeDialog = false }
                     )
                 }
+                if (showAccentDialog) {
+                    AccentColorDialog(
+                        selectedId = accentId,
+                        onSelect = { id ->
+                            accentId = id
+                            prefs.edit().putString("app_accent_color", id).apply()
+                            showAccentDialog = false
+                        },
+                        onDismiss = { showAccentDialog = false }
+                    )
+                }
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) configureSystemBars()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun configureSystemBars() {
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.rgb(2, 8, 18)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+}
+
+// This is the only AdMob view in MeloWare. Never create it in Home or Library.
+private const val MELOWARE_BANNER_AD_UNIT_ID =
+    "ca-app-pub-3940256099942544/6300978111"
+
+@Composable
+private fun MeloWareNowPlayingBanner() {
+    val context = LocalContext.current
+    val adView = remember(context) {
+        com.google.android.gms.ads.AdView(context).apply {
+            setAdSize(com.google.android.gms.ads.AdSize.BANNER)
+            adUnitId = MELOWARE_BANNER_AD_UNIT_ID
+            loadAd(com.google.android.gms.ads.AdRequest.Builder().build())
+        }
+    }
+
+    // Disposes the banner as soon as the user returns to Home or Library.
+    DisposableEffect(adView) {
+        onDispose { adView.destroy() }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF020812))
+            .navigationBarsPadding()
+            .height(50.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        AndroidView(
+            factory = { adView },
+            modifier = Modifier
+                .width(320.dp)
+                .height(50.dp)
+        )
     }
 }
 
@@ -668,9 +1106,14 @@ private fun UserUsageTracker(currentUserEmail: String?) {
 private fun QuickSettingsDialog(
     controller: MusicController,
     language: String,
+    languageOptions: List<MeloWareLanguageOption>,
+    followDeviceLanguage: Boolean,
     themeMode: Int,
+    accentId: String,
     onOpenLanguage: () -> Unit,
+    onOpenPremium: () -> Unit,
     onOpenTheme: () -> Unit,
+    onOpenAccent: () -> Unit,
     currentUserEmail: String?,
     isAdmin: Boolean,
     onOpenAdmin: () -> Unit,
@@ -699,34 +1142,55 @@ private fun QuickSettingsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "Cài đặt",
+                        mwString("settings.title", "Cài đặt"),
                         color = colors.textPrimary,
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                        Icon(Icons.Rounded.Close, contentDescription = mwString("common.close", "Đóng"), tint = colors.textSecondary)
                     }
                 }
 
                 SettingRow(
+                    icon = Icons.Rounded.WorkspacePremium,
+                    title = mwString("premium.menu.title", "Kích hoạt MeloWare Premium"),
+                    subtitle = mwString("premium.menu.subtitle", "Gói 6 tháng / 12 tháng · Dùng thử 30 ngày"),
+                    onClick = onOpenPremium
+                )
+
+                SettingRow(
                     icon = Icons.Rounded.Language,
-                    title = "Ngôn ngữ",
-                    subtitle = AppLanguageOptions.firstOrNull { it.code == language }?.nativeName
-                        ?: language,
+                    title = mwString("settings.language", "Ngôn ngữ"),
+                    subtitle = if (followDeviceLanguage) {
+                        mwString("language.follow_device", "Theo ngôn ngữ điện thoại") + " · " +
+                            (languageOptions.firstOrNull { it.code == language }?.nativeName ?: language)
+                    } else {
+                        languageOptions.firstOrNull { it.code == language }?.nativeName ?: language
+                    },
                     onClick = onOpenLanguage
                 )
 
                 SettingRow(
                     icon = Icons.Rounded.SettingsBrightness,
-                    title = "Chế độ giao diện",
+                    title = mwString("settings.theme", "Chế độ giao diện"),
                     subtitle = when (themeMode) {
-                        1 -> "Sáng"
-                        2 -> "Tối"
-                        else -> "Theo hệ thống"
+                        1 -> mwString("theme.light", "Sáng")
+                        2 -> mwString("theme.dark", "Tối")
+                        else -> mwString("theme.system", "Theo hệ thống")
                     },
                     onClick = onOpenTheme
+                )
+
+                SettingRow(
+                    icon = Icons.Rounded.Palette,
+                    title = mwString("settings.accent", "Màu giao diện"),
+                    subtitle = mwString(
+                        "accent.$accentId",
+                        MusicAccentOptions.firstOrNull { it.id == accentId }?.title ?: "Tím"
+                    ),
+                    onClick = onOpenAccent
                 )
 
                 if (
@@ -736,28 +1200,45 @@ private fun QuickSettingsDialog(
                 ) {
                     SettingRow(
                         icon = Icons.Rounded.CloudOff,
-                        title = "Ngắt quyền Google Drive",
-                        subtitle = "Thu hồi scope Drive, không xóa file thật",
+                        title = mwString("settings.disconnect_drive", "Ngắt quyền Google Drive"),
+                        subtitle = mwString("settings.disconnect_drive_desc", "Ngắt quyền drive.file, không xóa file thật"),
                         onClick = onDisconnectDrive
                     )
                 }
 
                 SettingRow(
                     icon = Icons.Rounded.DeleteSweep,
-                    title = "Xóa cache Google Drive",
-                    subtitle = "Giải phóng file tạm, không xóa nhạc gốc",
+                    title = mwString("settings.clear_drive_cache", "Xóa cache Google Drive"),
+                    subtitle = mwString("settings.clear_drive_cache_desc", "Giải phóng file tạm, không xóa nhạc gốc"),
                     onClick = {
                         controller.clearDriveCache()
                         onDismiss()
                     }
                 )
 
+                // Display the gold Premium crown only for an entitlement validated by the server.
+                // Trial users are explicitly labeled to avoid presenting a trial as a purchase.
+                val accountPremiumBadge = when {
+                    currentUserEmail.isNullOrBlank() || !MeloWarePremiumAccess.canUsePaidFeatures -> null
+                    MeloWarePremiumAccess.accessKind == "paid" -> "PREMIUM"
+                    MeloWarePremiumAccess.accessKind == "trial" -> "PREMIUM TRIAL"
+                    else -> null
+                }
                 SettingRow(
                     icon = Icons.Rounded.AccountCircle,
-                    title = if (currentUserEmail.isNullOrBlank()) "Đăng nhập Google" else "Đăng xuất",
+                    premiumBadge = accountPremiumBadge,
+                    title = if (currentUserEmail.isNullOrBlank()) {
+                        mwString("settings.google_login", "Đăng nhập Google")
+                    } else {
+                        mwString("settings.google_logout", "Đăng xuất")
+                    },
                     subtitle = when {
-                        isAdmin -> "${currentUserEmail.orEmpty()} · Chạm biểu tượng để xem thống kê"
-                        currentUserEmail.isNullOrBlank() -> "Định danh tài khoản trong thống kê sử dụng"
+                        isAdmin -> "${currentUserEmail.orEmpty()} · " + mwString(
+                            "settings.admin_hint", "Chạm biểu tượng để xem thống kê"
+                        )
+                        currentUserEmail.isNullOrBlank() -> mwString(
+                            "settings.google_identity_desc", "Định danh tài khoản trong thống kê sử dụng"
+                        )
                         else -> currentUserEmail.orEmpty()
                     },
                     onClick = onLoginLogout,
@@ -1194,15 +1675,42 @@ private fun MeloWareUsageChart(points: List<Triple<String, Long, Long>>) {
     }
 }
 
+/** Simple vector crown so this visual doesn't depend on emoji fonts or external assets. */
+@Composable
+private fun MeloWarePremiumCrown() {
+    Canvas(modifier = Modifier.size(27.dp)) {
+        val w = size.width
+        val h = size.height
+        val crown = Path().apply {
+            moveTo(w * 0.10f, h * 0.30f)
+            lineTo(w * 0.30f, h * 0.49f)
+            lineTo(w * 0.50f, h * 0.12f)
+            lineTo(w * 0.70f, h * 0.49f)
+            lineTo(w * 0.90f, h * 0.30f)
+            lineTo(w * 0.79f, h * 0.75f)
+            lineTo(w * 0.21f, h * 0.75f)
+            close()
+            moveTo(w * 0.21f, h * 0.81f)
+            lineTo(w * 0.79f, h * 0.81f)
+            lineTo(w * 0.79f, h * 0.91f)
+            lineTo(w * 0.21f, h * 0.91f)
+            close()
+        }
+        drawPath(crown, color = Color(0xFFFFD54F))
+    }
+}
+
 @Composable
 private fun SettingRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
     onClick: () -> Unit,
-    onIconClick: (() -> Unit)? = null
+    onIconClick: (() -> Unit)? = null,
+    premiumBadge: String? = null
 ) {
     val colors = LocalMusicColors.current
+    val premiumGold = Color(0xFFFFD54F)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1221,24 +1729,42 @@ private fun SettingRow(
                     }
                 ),
             shape = CircleShape,
-            color = colors.purple.copy(alpha = if (onIconClick != null) 0.22f else 0.13f),
-            border = if (onIconClick != null) {
-                BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.75f))
-            } else {
-                null
+            color = if (premiumBadge != null) premiumGold.copy(alpha = 0.15f)
+                    else colors.purple.copy(alpha = if (onIconClick != null) 0.22f else 0.13f),
+            border = when {
+                premiumBadge != null -> BorderStroke(1.dp, premiumGold.copy(alpha = 0.80f))
+                onIconClick != null -> BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.75f))
+                else -> null
             }
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = if (onIconClick != null) "Mở thống kê Firebase" else null,
-                    tint = colors.purpleBright
-                )
+                if (premiumBadge != null) {
+                    MeloWarePremiumCrown()
+                } else {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = if (onIconClick != null) "Mở thống kê Firebase" else null,
+                        tint = colors.purpleBright
+                    )
+                }
             }
         }
         Spacer(Modifier.width(13.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = colors.textPrimary, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(title, color = colors.textPrimary, fontWeight = FontWeight.SemiBold)
+                if (premiumBadge != null) {
+                    Text(
+                        premiumBadge,
+                        color = premiumGold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .background(premiumGold.copy(alpha = 0.13f), RoundedCornerShape(7.dp))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    )
+                }
+            }
             Text(subtitle, color = colors.textSecondary, fontSize = 11.sp)
         }
     }
@@ -1247,13 +1773,24 @@ private fun SettingRow(
 @Composable
 private fun LanguageDialog(
     selectedCode: String,
+    options: List<MeloWareLanguageOption>,
+    requiredSelection: Boolean,
+    autoSelected: Boolean,
+    deviceLanguageCode: String?,
+    onSelectAuto: () -> Unit,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = LocalMusicColors.current
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = { if (!requiredSelection) onDismiss() },
+        properties = DialogProperties(
+            dismissOnBackPress = !requiredSelection,
+            dismissOnClickOutside = !requiredSelection
+        )
+    ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().heightIn(max = 650.dp),
             shape = RoundedCornerShape(22.dp),
             color = colors.card,
             border = BorderStroke(1.dp, colors.border)
@@ -1263,15 +1800,38 @@ private fun LanguageDialog(
                     modifier = Modifier.padding(horizontal = 18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "Ngôn ngữ",
-                        color = colors.textPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (requiredSelection) {
+                                mwString("language.first.title", "Chọn ngôn ngữ")
+                            } else {
+                                mwString("language.dialog.title", "Ngôn ngữ")
+                            },
+                            color = colors.textPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            if (requiredSelection) {
+                                mwString(
+                                    "language.first.subtitle",
+                                    "Ngôn ngữ của thiết bị chưa được hỗ trợ. Hãy chọn ngôn ngữ để tiếp tục."
+                                )
+                            } else {
+                                mwString("language.dialog.subtitle", "Chọn ngôn ngữ hiển thị cho MeloWare")
+                            },
+                            color = colors.textSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                    if (!requiredSelection) {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = mwString("common.close", "Đóng"),
+                                tint = colors.textSecondary
+                            )
+                        }
                     }
                 }
                 androidx.compose.foundation.lazy.LazyColumn(
@@ -1279,8 +1839,49 @@ private fun LanguageDialog(
                         .fillMaxWidth()
                         .padding(top = 4.dp)
                 ) {
-                    items(AppLanguageOptions.size) { index ->
-                        val item = AppLanguageOptions[index]
+                    // Auto is offered only when Android's current language is supported.
+                    if (!requiredSelection && deviceLanguageCode != null) {
+                        item {
+                            val systemLanguageName = options.firstOrNull {
+                                it.code == deviceLanguageCode
+                            }?.nativeName ?: deviceLanguageCode
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onSelectAuto)
+                                    .padding(horizontal = 20.dp, vertical = 13.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Language,
+                                    contentDescription = null,
+                                    tint = colors.purpleBright
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        mwString("language.follow_device", "Theo ngôn ngữ điện thoại"),
+                                        color = if (autoSelected) colors.purpleBright else colors.textPrimary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        systemLanguageName + " · " + mwString(
+                                            "language.follow_device_subtitle",
+                                            "Tự đổi khi bạn thay ngôn ngữ điện thoại"
+                                        ),
+                                        color = colors.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                if (autoSelected) {
+                                    Icon(Icons.Rounded.Check, contentDescription = null,
+                                        tint = colors.purpleBright)
+                                }
+                            }
+                        }
+                    }
+                    items(options.size) { index ->
+                        val item = options[index]
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1290,14 +1891,14 @@ private fun LanguageDialog(
                         ) {
                             Text(
                                 item.nativeName,
-                                color = if (item.code == selectedCode) {
+                                color = if (!autoSelected && item.code == selectedCode) {
                                     colors.purpleBright
                                 } else {
                                     colors.textPrimary
                                 },
                                 modifier = Modifier.weight(1f)
                             )
-                            if (item.code == selectedCode) {
+                            if (!autoSelected && item.code == selectedCode) {
                                 Icon(
                                     Icons.Rounded.Check,
                                     contentDescription = null,
@@ -1312,6 +1913,104 @@ private fun LanguageDialog(
     }
 }
 
+/** Accent only: the existing dark/light switch and all player behavior are untouched. */
+@Composable
+private fun AccentColorDialog(
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        mwString("settings.accent", "Màu giao diện"),
+                        color = colors.textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+                Text(
+                    mwString("accent.prompt", "Chọn màu chủ đạo cho MeloWare"),
+                    color = colors.textSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                MusicAccentOptions.chunked(4).forEach { rowOptions ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        rowOptions.forEach { option ->
+                            val isSelected = option.id == selectedId
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onSelect(option.id) }
+                                    .padding(vertical = 9.dp, horizontal = 1.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .background(option.preview, CircleShape)
+                                        .border(
+                                            width = if (isSelected) 3.dp else 1.dp,
+                                            color = if (isSelected) colors.textPrimary else colors.border,
+                                            shape = CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = "Đang chọn",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(25.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    mwString("accent.${option.id}", option.title),
+                                    color = if (isSelected) colors.textPrimary else colors.textSecondary,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2
+                                )
+                            }
+                        }
+                    }
+                }
+                Text(
+                    mwString("accent.default_note", "Màu tím là mặc định · Lựa chọn được lưu tự động"),
+                    color = colors.textMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ThemeModeDialog(
     selectedMode: Int,
@@ -1320,9 +2019,9 @@ private fun ThemeModeDialog(
 ) {
     val colors = LocalMusicColors.current
     val options = listOf(
-        Triple(2, Icons.Rounded.DarkMode, "Chế độ tối"),
-        Triple(1, Icons.Rounded.LightMode, "Chế độ sáng"),
-        Triple(0, Icons.Rounded.SettingsBrightness, "Theo hệ thống")
+        Triple(2, Icons.Rounded.DarkMode, mwString("theme.mode_dark", "Chế độ tối")),
+        Triple(1, Icons.Rounded.LightMode, mwString("theme.mode_light", "Chế độ sáng")),
+        Triple(0, Icons.Rounded.SettingsBrightness, mwString("theme.mode_system", "Theo hệ thống"))
     )
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -1337,7 +2036,7 @@ private fun ThemeModeDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "Chế độ giao diện",
+                        mwString("settings.theme", "Chế độ giao diện"),
                         color = colors.textPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -1351,7 +2050,7 @@ private fun ThemeModeDialog(
                     SettingRow(
                         icon = icon,
                         title = title,
-                        subtitle = if (mode == selectedMode) "Đang sử dụng" else "",
+                        subtitle = if (mode == selectedMode) mwString("theme.active", "Đang sử dụng") else "",
                         onClick = { onSelect(mode) }
                     )
                 }
