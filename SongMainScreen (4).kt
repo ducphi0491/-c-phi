@@ -124,10 +124,11 @@ private const val GP_PRIMARY_HEALTH_URL =
 private const val GP_BACKUP_HEALTH_URL =
     "https://tuner.alwaysdata.net/api_gp_drive.php?action=health"
 
-// Google test banner ID used only while developing this screen.
-// Replace this value with the real Song Detail banner ad unit ID before release.
+// Production AdMob banner ID for the Song Detail screen.
 private const val SONG_DETAIL_BANNER_AD_UNIT_ID =
-    "ca-app-pub-3940256099942544/9214589741"
+    "ca-app-pub-3156289270309336/4491022655"
+private const val SONG_DETAIL_BANNER_LOG_TAG = "SongDetailBanner"
+private const val SONG_DETAIL_BANNER_MAX_ATTEMPTS = 3
 
 private object SongDetailBannerAdsRuntime {
     @Volatile
@@ -811,6 +812,7 @@ private fun SongDetailBottomBannerAd(
 ) {
     val context = LocalContext.current
     val density = androidx.compose.ui.platform.LocalDensity.current
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
 
     Column(
         modifier = modifier
@@ -818,51 +820,26 @@ private fun SongDetailBottomBannerAd(
             .padding(top = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Keep the separator between the song content and the banner area.
         HorizontalDivider(
             color = textColor.copy(alpha = 0.10f),
             modifier = Modifier.padding(bottom = 10.dp)
         )
 
-        Text(
-            text = if (currentLang == "vi") "Quảng cáo" else "Advertisement",
-            color = textColor.copy(alpha = 0.46f),
-            fontSize = 9.sp,
-            lineHeight = 11.sp,
-            fontWeight = FontWeight.Medium
-        )
+        val adWidthDp = (configuration.screenWidthDp - 24).coerceAtLeast(1)
 
-        Spacer(modifier = Modifier.height(6.dp))
-
-        BoxWithConstraints(
+        Box(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
-            val adWidthDp = maxWidth.value
-                .roundToInt()
-                .coerceAtLeast(1)
-
             val adSize = remember(context, adWidthDp) {
                 com.google.android.gms.ads.AdSize
-                    .getCurrentOrientationAnchoredAdaptiveBannerAdSize(
-                        context,
-                        adWidthDp
-                    )
+                    .getCurrentOrientationAnchoredAdaptiveBannerAdSize(context, adWidthDp)
             }
-
             val adHeightDp = remember(context, adSize, density) {
-                with(density) {
-                    adSize.getHeightInPixels(context).toDp()
-                }.let { measuredHeight ->
-                    if (measuredHeight.value > 0f) measuredHeight else 50.dp
-                }
+                with(density) { adSize.getHeightInPixels(context).toDp() }
+                    .let { if (it.value > 0f) it else 50.dp }
             }
-
-            var adLoaded by remember(adWidthDp) { mutableStateOf(false) }
-            var adLoadFailed by remember(adWidthDp) { mutableStateOf(false) }
-            val loadRequested = remember(adWidthDp) {
-                java.util.concurrent.atomic.AtomicBoolean(false)
-            }
-
             val adView = remember(context, adWidthDp) {
                 com.google.android.gms.ads.AdView(context).apply {
                     adUnitId = SONG_DETAIL_BANNER_AD_UNIT_ID
@@ -870,52 +847,160 @@ private fun SongDetailBottomBannerAd(
                 }
             }
 
+            var adLoaded by remember(adView) { mutableStateOf(false) }
+            // True only after all bounded attempts fail; then collapse the banner area.
+            var adLoadFailed by remember(adView) { mutableStateOf(false) }
+            var attemptNumber by remember(adView) { mutableStateOf(1) }
+            var sdkReady by remember(adView) {
+                mutableStateOf(SongDetailBannerAdsRuntime.initialized)
+            }
+            val disposed = remember(adView) {
+                java.util.concurrent.atomic.AtomicBoolean(false)
+            }
+
             DisposableEffect(adView) {
+                Log.i(
+                    SONG_DETAIL_BANNER_LOG_TAG,
+                    "BANNER_CREATED unit=$SONG_DETAIL_BANNER_AD_UNIT_ID widthDp=$adWidthDp"
+                )
                 adView.adListener = object : com.google.android.gms.ads.AdListener() {
                     override fun onAdLoaded() {
+                        if (disposed.get()) return
                         adLoaded = true
                         adLoadFailed = false
+                        Log.i(
+                            SONG_DETAIL_BANNER_LOG_TAG,
+                            "LOADED attempt=$attemptNumber " +
+                                "responseId=${adView.responseInfo?.responseId ?: "none"}"
+                        )
+                    }
+
+                    override fun onAdImpression() {
+                        if (!disposed.get()) {
+                            Log.i(SONG_DETAIL_BANNER_LOG_TAG, "IMPRESSION attempt=$attemptNumber")
+                        }
                     }
 
                     override fun onAdFailedToLoad(
                         adError: com.google.android.gms.ads.LoadAdError
                     ) {
+                        if (disposed.get()) return
                         adLoaded = false
-                        adLoadFailed = true
                         Log.w(
-                            "SongDetailBanner",
-                            "Banner failed to load: ${adError.code} ${adError.message}"
+                            SONG_DETAIL_BANNER_LOG_TAG,
+                            "FAILED attempt=$attemptNumber/$SONG_DETAIL_BANNER_MAX_ATTEMPTS " +
+                                "code=${adError.code} domain=${adError.domain} " +
+                                "message=${adError.message} " +
+                                "cause=${adError.cause?.message ?: "none"} " +
+                                "responseInfo=${adError.responseInfo ?: "none"}"
                         )
+                        if (attemptNumber < SONG_DETAIL_BANNER_MAX_ATTEMPTS) {
+                            val nextAttempt = attemptNumber + 1
+                            val waitMs = if (nextAttempt == 2) 10_000L else 30_000L
+                            Log.i(
+                                SONG_DETAIL_BANNER_LOG_TAG,
+                                "RETRY_SCHEDULED attempt=$nextAttempt waitMs=$waitMs"
+                            )
+                            attemptNumber = nextAttempt
+                        } else {
+                            adLoadFailed = true
+                            Log.w(
+                                SONG_DETAIL_BANNER_LOG_TAG,
+                                "GIVE_UP after $SONG_DETAIL_BANNER_MAX_ATTEMPTS attempts; " +
+                                    "banner area hidden"
+                            )
+                        }
                     }
                 }
 
                 onDispose {
-                    adView.adListener = null
+                    disposed.set(true)
+                    Log.d(SONG_DETAIL_BANNER_LOG_TAG, "BANNER_DESTROYED")
                     adView.destroy()
                 }
             }
 
             LaunchedEffect(adView) {
-                fun requestBanner() {
-                    if (loadRequested.compareAndSet(false, true)) {
-                        adView.loadAd(
-                            com.google.android.gms.ads.AdRequest.Builder().build()
-                        )
-                    }
-                }
-
                 if (SongDetailBannerAdsRuntime.initialized) {
-                    requestBanner()
+                    Log.i(SONG_DETAIL_BANNER_LOG_TAG, "SDK_ALREADY_INITIALIZED")
+                    sdkReady = true
                 } else {
-                    com.google.android.gms.ads.MobileAds.initialize(
-                        context.applicationContext
-                    ) {
-                        SongDetailBannerAdsRuntime.initialized = true
-                        adView.post { requestBanner() }
+                    Log.i(SONG_DETAIL_BANNER_LOG_TAG, "SDK_INIT_START")
+                    try {
+                        com.google.android.gms.ads.MobileAds.initialize(
+                            context.applicationContext
+                        ) { status ->
+                            SongDetailBannerAdsRuntime.initialized = true
+                            Log.i(
+                                SONG_DETAIL_BANNER_LOG_TAG,
+                                "SDK_INIT_DONE adapters=" +
+                                    status.adapterStatusMap.entries.joinToString { (name, state) ->
+                                        "${name.substringAfterLast('.')}:${state.initializationState}"
+                                    }
+                            )
+                            // Initialization callbacks are marshalled to main before Compose state changes.
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                if (!disposed.get()) sdkReady = true
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(SONG_DETAIL_BANNER_LOG_TAG, "SDK_INIT_EXCEPTION", e)
+                        adLoadFailed = true
                     }
                 }
             }
 
+            LaunchedEffect(adView, sdkReady, attemptNumber) {
+                if (!sdkReady || adLoadFailed) return@LaunchedEffect
+
+                // Only retry while this banner is still on screen. Cancellation on leaving
+                // the screen avoids repeated requests in the background.
+                val waitMs = when (attemptNumber) {
+                    1 -> 0L
+                    2 -> 10_000L
+                    else -> 30_000L
+                }
+                if (waitMs > 0L) delay(waitMs)
+                if (disposed.get()) return@LaunchedEffect
+
+                Log.i(
+                    SONG_DETAIL_BANNER_LOG_TAG,
+                    "REQUEST attempt=$attemptNumber/$SONG_DETAIL_BANNER_MAX_ATTEMPTS " +
+                        "unit=$SONG_DETAIL_BANNER_AD_UNIT_ID widthDp=$adWidthDp " +
+                        "attached=${adView.isAttachedToWindow}"
+                )
+                val requestedAttempt = attemptNumber
+                try {
+                    adView.loadAd(com.google.android.gms.ads.AdRequest.Builder().build())
+                } catch (e: Exception) {
+                    Log.e(
+                        SONG_DETAIL_BANNER_LOG_TAG,
+                        "REQUEST_EXCEPTION attempt=$requestedAttempt",
+                        e
+                    )
+                    if (attemptNumber < SONG_DETAIL_BANNER_MAX_ATTEMPTS) {
+                        attemptNumber += 1
+                    } else {
+                        adLoadFailed = true
+                    }
+                    return@LaunchedEffect
+                }
+
+                // Diagnose a missing SDK callback without starting overlapping ad loads.
+                delay(30_000L)
+                if (!disposed.get() && !adLoaded && !adLoadFailed &&
+                    attemptNumber == requestedAttempt
+                ) {
+                    Log.w(
+                        SONG_DETAIL_BANNER_LOG_TAG,
+                        "CALLBACK_TIMEOUT attempt=$requestedAttempt: no SDK callback in 30s"
+                    )
+                    adLoadFailed = true
+                }
+            }
+
+            // Do not reserve a large empty space after the final failed request.
+            // While retrying, keep AdView attached so the SDK can complete its callbacks.
             if (!adLoadFailed) {
                 Box(
                     modifier = Modifier
@@ -931,7 +1016,6 @@ private fun SongDetailBottomBannerAd(
                             .fillMaxWidth()
                             .height(adHeightDp)
                     )
-
                     if (!adLoaded) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
@@ -939,6 +1023,60 @@ private fun SongDetailBottomBannerAd(
                             strokeWidth = 1.5.dp
                         )
                     }
+                }
+            }
+
+            // Diagnostic control is visible only in Android Studio Debug builds.
+            // It opens the Google SDK's Ad Inspector directly, avoiding the
+            // Xiaomi shake gesture that launches Xiaomi Feedback instead.
+            if (BuildConfig.DEBUG) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = {
+                        Log.i(SONG_DETAIL_BANNER_LOG_TAG, "AD_INSPECTOR_OPEN_REQUEST")
+                        try {
+                            com.google.android.gms.ads.MobileAds.openAdInspector(context) { error ->
+                                if (error == null) {
+                                    Log.i(SONG_DETAIL_BANNER_LOG_TAG, "AD_INSPECTOR_CLOSED")
+                                } else {
+                                    Log.e(
+                                        SONG_DETAIL_BANNER_LOG_TAG,
+                                        "AD_INSPECTOR_ERROR code=${error.code} " +
+                                            "domain=${error.domain} message=${error.message}"
+                                    )
+                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                        Toast.makeText(
+                                            context.applicationContext,
+                                            "Ad Inspector: ${error.message}",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(SONG_DETAIL_BANNER_LOG_TAG, "AD_INSPECTOR_OPEN_EXCEPTION", e)
+                            Toast.makeText(
+                                context,
+                                "Khong mo duoc Ad Inspector: ${e.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    },
+                    modifier = Modifier.height(40.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        textColor.copy(alpha = 0.4f)
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = textColor),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = "Ad Inspector (Debug)", fontSize = 12.sp)
                 }
             }
         }
@@ -2920,7 +3058,22 @@ fun SongTabScreen(
                                 // Banner nam trong noi dung cuon va chi xuat hien sau toan bo
                                 // loi bai hat + so do hop am. Khong hien khi dang full-screen,
                                 // phat media hoac dung che do Khong lam phien.
-                                if (!isFullScreen && !isMediaActive && !isDoNotDisturbMode) {
+                                val bannerAllowed =
+                                    !isFullScreen && !isMediaActive && !isDoNotDisturbMode
+                                LaunchedEffect(
+                                    bannerAllowed,
+                                    isFullScreen,
+                                    isMediaActive,
+                                    isDoNotDisturbMode
+                                ) {
+                                    Log.d(
+                                        SONG_DETAIL_BANNER_LOG_TAG,
+                                        "VISIBILITY allowed=$bannerAllowed " +
+                                            "fullScreen=$isFullScreen mediaActive=$isMediaActive " +
+                                            "doNotDisturb=$isDoNotDisturbMode"
+                                    )
+                                }
+                                if (bannerAllowed) {
                                     SongDetailBottomBannerAd(
                                         currentLang = currentLang,
                                         surfaceColor = surfaceColor,
