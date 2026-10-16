@@ -7,6 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.RectF
+import android.graphics.ImageDecoder
 import android.media.RingtoneManager
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer as AndroidEqualizer
@@ -22,6 +26,7 @@ import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.Toast
+import android.util.Log
 import android.webkit.WebView
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -79,12 +84,14 @@ import java.io.OutputStream
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.RandomAccessFile
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.text.Normalizer
@@ -96,6 +103,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 internal enum class MusicScreen {
     HOME,
@@ -116,6 +124,7 @@ internal enum class LibrarySource {
     LOCAL,
     PERSONAL_DRIVE,
     PUBLIC_DRIVE,
+    INTERNET,
     DOWNLOADED,
     FAVORITES
 }
@@ -137,8 +146,17 @@ internal enum class SongSource {
     PUBLIC_DRIVE,
     DOWNLOADED,
     ONLINE_HTTP,
+    INTERNET_P2P,
     MOVIE,
     APP_RESOURCE
+}
+
+/** Outcome of a MediaStore operation. Android may require a system permission prompt. */
+internal sealed class LocalSongMutationResult {
+    object Completed : LocalSongMutationResult()
+    object LibraryOnly : LocalSongMutationResult()
+    data class NeedsConsent(val intentSender: android.content.IntentSender) : LocalSongMutationResult()
+    data class Failed(val message: String) : LocalSongMutationResult()
 }
 
 internal data class SongItem(
@@ -173,6 +191,30 @@ internal data class MeloWareSharedTrack(
     val mimeType: String
 )
 
+/** Only audio folders selected explicitly on the sender are visible to the receiver. */
+internal data class MeloWareLanFolder(val path: String, val count: Int)
+
+internal data class MeloWareLanAudio(
+    val key: String,
+    val folder: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationMs: Long,
+    val mimeType: String
+)
+
+private data class LanSharedAudio(
+    val key: String,
+    val folder: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationMs: Long,
+    val mimeType: String,
+    val uri: Uri
+)
+
 internal data class AudioTechnicalInfo(
     val qualityLabel: String,
     val extensionLabel: String,
@@ -182,9 +224,16 @@ internal data class AudioTechnicalInfo(
     val sizeBytes: Long? = null
 )
 
+/** Word-level timestamps are available only in enhanced LRC (<mm:ss.xx> tags). */
+internal data class LyricWordTiming(
+    val offset: Int,
+    val timestampMs: Long
+)
+
 internal data class LyricLine(
     val timestampMs: Long?,
-    val text: String
+    val text: String,
+    val wordTimings: List<LyricWordTiming> = emptyList()
 )
 
 internal data class LyricsContent(
@@ -349,6 +398,165 @@ internal class MusicController(private val context: Context) {
     private val lyricsErrorBySongId = mutableStateMapOf<String, String>()
     private val lyricsJobs = mutableMapOf<String, Job>()
     private val audioFxEngine = PersistentAudioFxEngine()
+    private val laptopShareLazy = lazy { MeloWareLaptopClient(context.applicationContext) }
+    val laptopShare: MeloWareLaptopClient get() = laptopShareLazy.value
+
+    // Internet WebRTC belongs to the app controller, not to a transient dialog.
+    private val internetSessionLazy = lazy(LazyThreadSafetyMode.NONE) {
+        MeloWareInternetSession(context.applicationContext).apply {
+            onClosed = { reason -> onInternetSessionClosed(reason) }
+            onDownloaded = { scanLocalMusic() }
+            onRemoteListChanged = { reconcileInternetRemoteList() }
+        }
+    }
+    val internetSession: MeloWareInternetSession get() = internetSessionLazy.value
+    val internetLinkedFolders = mutableStateListOf<String>()
+    private var internetWasPlaying = false
+
+    /** Remote songs are only mounted while the approved P2P connection is alive. */
+    fun internetLibrarySongs(): List<SongItem> {
+        if (!internetSessionLazy.isInitialized()) return emptyList()
+        val session = internetSession
+        if (!session.dataChannelOpen || internetLinkedFolders.isEmpty()) return emptyList()
+        return session.remoteAudio.mapNotNull { audio ->
+            val selected = internetLinkedFolders.firstOrNull { audio.folder.startsWith(it) }
+                ?: return@mapNotNull null
+            val (title, artist) = parseTitleArtist(
+                audio.name.substringBeforeLast('.', audio.name), "Nhạc chia sẻ qua Internet"
+            )
+            SongItem(
+                id = "meloware_internet_${session.roomCode}_${audio.id}",
+                title = title,
+                artist = artist,
+                album = "MeloWare Internet",
+                folderName = "Internet · ${session.remoteRootFolder}" +
+                        if (selected.isBlank()) "" else " / ${selected.trimEnd('/')}",
+                uri = Uri.parse("meloware-internet://audio/${audio.id}/${Uri.encode(audio.name)}"),
+                source = SongSource.INTERNET_P2P,
+                mimeType = audio.mime
+            )
+        }
+    }
+
+    private fun reconcileInternetRemoteList() {
+        // A can refresh or replace its shared SAF folder without closing the room.
+        val keys = internetSession.remoteAudio.mapTo(mutableSetOf()) { it.id }
+        val playingId = currentSong?.id
+        val lostCurrent = currentSong?.source == SongSource.INTERNET_P2P &&
+                currentSong?.uri?.pathSegments?.firstOrNull() !in keys
+        if (lostCurrent) {
+            player.stop()
+            internetSession.stopOnline()
+            internetWasPlaying = false
+            isPlaying = false
+            isLoading = false
+            statusMessage = "Máy A đã đổi thư mục chia sẻ. Danh sách nhạc đã cập nhật."
+        }
+        val dropped = queue.removeAll {
+            it.source == SongSource.INTERNET_P2P && it.uri.pathSegments.firstOrNull() !in keys
+        }
+        if (dropped) {
+            currentIndex = if (queue.isEmpty()) -1 else
+                queue.indexOfFirst { it.id == playingId }.takeIf { it >= 0 } ?: 0
+            saveQueue()
+        }
+    }
+
+    fun addInternetFolderToLibrary(folder: String): Boolean {
+        val session = internetSession
+        if (!session.dataChannelOpen) {
+            statusMessage = "Hãy kết nối với máy A trước khi thêm thư mục Internet."
+            return false
+        }
+        if (session.remoteAudio.none { it.folder.startsWith(folder) }) {
+            statusMessage = "Thư mục được chọn chưa có file nhạc để phát."
+            return false
+        }
+        if (internetLinkedFolders.none { folder.startsWith(it) }) {
+            // A selected parent replaces redundant descendant folders.
+            internetLinkedFolders.removeAll { it.startsWith(folder) }
+            internetLinkedFolders.add(folder)
+        }
+        librarySource = LibrarySource.INTERNET
+        libraryTab = LibraryTab.FOLDERS
+        libraryQuery = ""
+        statusMessage = "Đã đưa thư mục nhạc Internet vào Thư viện."
+        return true
+    }
+
+    fun playInternetFolder(folder: String) {
+        if (!addInternetFolderToLibrary(folder)) return
+        val keys = internetSession.remoteAudio.filter { it.folder.startsWith(folder) }.map { it.id }.toSet()
+        val songs = internetLibrarySongs().filter { it.uri.pathSegments.firstOrNull() in keys }
+        if (songs.isNotEmpty()) playCollection(songs, 0)
+    }
+
+    fun playInternetAudio(audioId: String) {
+        val audio = internetSession.remoteAudio.firstOrNull { it.id == audioId } ?: return
+        if (!addInternetFolderToLibrary(audio.folder)) return
+        val collection = internetLibrarySongs()
+        val song = collection.firstOrNull { it.uri.pathSegments.firstOrNull() == audioId } ?: return
+        playSong(song, collection)
+    }
+
+    fun stopInternetPlayback() {
+        if (currentSong?.source != SongSource.INTERNET_P2P) return
+        player.stop()
+        internetSession.stopOnline()
+        internetWasPlaying = false
+        isPlaying = false
+        isLoading = false
+    }
+
+    private fun onInternetSessionClosed(reason: String?) {
+        internetLinkedFolders.clear()
+        val currentId = currentSong?.id
+        val currentWasInternet = currentSong?.source == SongSource.INTERNET_P2P
+        if (currentWasInternet) {
+            player.stop()
+            player.clearMediaItems()
+            isPlaying = false
+            isLoading = false
+            positionMs = 0L
+            durationMs = 1L
+        }
+        internetWasPlaying = false
+        queue.removeAll { it.source == SongSource.INTERNET_P2P }
+        recentSongs.removeAll { it.source == SongSource.INTERNET_P2P }
+        currentIndex = if (queue.isEmpty()) -1 else
+            queue.indexOfFirst { it.id == currentId }.takeIf { it >= 0 } ?: 0
+        if (librarySource == LibrarySource.INTERNET) librarySource = LibrarySource.ALL
+        saveQueue()
+        if (!reason.isNullOrBlank()) statusMessage = reason
+    }
+
+    /** Online playback from PC Chrome via the phone-hosted local HTTP browser bridge. */
+    fun playLaptopFile(selected: LaptopAudioEntry) {
+        if (castConnected) {
+            statusMessage = "Hãy ngắt Google Cast trước khi nghe nhạc máy tính trên điện thoại."
+            return
+        }
+        if (selected.isFolder || !laptopShare.connected) {
+            statusMessage = "Hãy kết nối máy tính trước khi phát nhạc."
+            return
+        }
+        val tracks = laptopShare.entries.filter { !it.isFolder && it.size > 0L }.map { entry ->
+            val titleArtist = parseTitleArtist(entry.name, "Máy tính")
+            SongItem(
+                id = "meloware_pc_" + entry.path.joinToString("/").sha256().take(32),
+                title = titleArtist.first,
+                artist = titleArtist.second,
+                folderName = "Máy tính / " + entry.path.dropLast(1).joinToString("/"),
+                uri = laptopShare.streamUrl(entry),
+                source = SongSource.ONLINE_HTTP,
+                mimeType = entry.mime
+            )
+        }
+        val song = tracks.firstOrNull { it.id == "meloware_pc_" + selected.path.joinToString("/").sha256().take(32) }
+        if (song == null) { statusMessage = "Không tìm thấy bài hát trong thư mục."; return }
+        playSong(song, tracks)
+    }
+
     val wifiLanDiscovery = MeloWareLanDiscovery(context.applicationContext)
     private var wifiAppShareRequested = false
     var wifiAppShareEnabled by mutableStateOf(false)
@@ -359,6 +567,30 @@ internal class MusicController(private val context: Context) {
         private set
     private var wifiPeerReceiveJob: Job? = null
     private var wifiLastRemoteKey: String? = null
+
+    // Selected MediaStore audio folders only. Nothing is shared without a choice on A.
+    val wifiSharedFolderPaths = mutableStateListOf<String>()
+    val wifiShareableFolders: List<MeloWareLanFolder>
+        get() = localSongs
+            .filter { it.source == SongSource.LOCAL_MEDIASTORE || it.source == SongSource.DOWNLOADED }
+            .groupingBy { it.folderName.trim('/').ifBlank { "Nhạc trên máy" } }
+            .eachCount()
+            .map { (path, count) -> MeloWareLanFolder(path, count) }
+            .sortedBy { it.path.lowercase(Locale.ROOT) }
+
+    var wifiLibraryPeer by mutableStateOf<MeloWareLanPeer?>(null)
+        private set
+    val wifiRemoteFolders = mutableStateListOf<MeloWareLanFolder>()
+    val wifiRemoteSongs = mutableStateListOf<MeloWareLanAudio>()
+    var wifiRemoteFolderPath by mutableStateOf<String?>(null)
+        private set
+    var wifiRemoteLoading by mutableStateOf(false)
+        private set
+    var wifiRemoteError by mutableStateOf<String?>(null)
+        private set
+    var wifiRemoteNextOffset by mutableIntStateOf(-1)
+        private set
+    private var wifiLibraryJob: Job? = null
 
     private var localAudioServer: LocalAudioHttpServer? = null
     private var hostedSongId: String? = null
@@ -400,6 +632,8 @@ internal class MusicController(private val context: Context) {
     val publicDriveSongs = mutableStateListOf<SongItem>()
     val recentSongs = mutableStateListOf<SongItem>()
     val artworkById = mutableStateMapOf<String, String>()
+    // Private, persistent covers selected by the user. This overrides Internet/embedded artwork.
+    private val customArtworkByKey = mutableStateMapOf<String, String>()
     val favoriteIds = mutableStateMapOf<String, Boolean>()
 
     var currentScreen by mutableStateOf(MusicScreen.HOME)
@@ -544,6 +778,14 @@ internal class MusicController(private val context: Context) {
         saveQueue()
         movieWebView = null
         activeTransformers.clear()
+        if (laptopShareLazy.isInitialized()) laptopShareLazy.value.release()
+        if (internetSessionLazy.isInitialized()) {
+            internetSession.onClosed = null
+            internetSession.onDownloaded = null
+            internetSession.onRemoteListChanged = null
+            internetSession.shutdown()
+        }
+        closeMeloWareLibrary()
         stopReceivingMeloWare()
         wifiLanDiscovery.stopDiscovery()
         stopWifiHostInternal(clearUserRequest = true)
@@ -582,22 +824,40 @@ internal class MusicController(private val context: Context) {
         }
 
         lyricsJobs[song.id] = scope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    LrclibLyricsRepository.findLyrics(
-                        context = context,
-                        song = song,
-                        knownDurationMs = knownDurationMs,
-                        forceRefresh = forceRefresh
-                    )
+            var finalResult: Result<LyricsContent>? = null
+            // A slow/unstable LRCLIB response should not appear as an immediate
+            // failure that requires the user to tap the karaoke icon twice.
+            // All retries remain on IO; the UI keeps showing the loading state.
+            for (attempt in 0..1) {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        LrclibLyricsRepository.findLyrics(
+                            context = context,
+                            song = song,
+                            knownDurationMs = knownDurationMs,
+                            forceRefresh = forceRefresh
+                        )
+                    }
                 }
+                val failure = result.exceptionOrNull()
+                if (failure is CancellationException) throw failure
+                finalResult = result
+                if (failure == null || attempt == 1) break
+                // Do not retry permanent input/configuration errors. A short
+                // delay helps with first-open network warm-up and LRCLIB latency.
+                if (failure !is IOException ||
+                    failure.message.orEmpty().startsWith("Tên bài hát đang trống") ||
+                    failure.message.orEmpty().contains("HTTP 400") ||
+                    failure.message.orEmpty().contains("HTTP 401") ||
+                    failure.message.orEmpty().contains("HTTP 403")) break
+                delay(if (failure.message.orEmpty().contains("429")) 2_000L else 1_200L)
             }
             lyricsLoadingBySongId[song.id] = false
             lyricsJobs.remove(song.id)
-            result.onSuccess { content ->
+            finalResult?.onSuccess { content ->
                 lyricsBySongId[song.id] = content
                 lyricsErrorBySongId.remove(song.id)
-            }.onFailure { error ->
+            }?.onFailure { error ->
                 lyricsErrorBySongId[song.id] = error.localizedMessage
                     ?: "Không tìm thấy lời bài hát phù hợp trên LRCLIB."
             }
@@ -877,14 +1137,52 @@ internal class MusicController(private val context: Context) {
             statusMessage = "Hãy ngắt Cast trước khi chia sẻ MeloWare tới điện thoại khác."
             return
         }
+        Log.i(MELOWARE_LAN_LOG_TAG, "A: starting MeloWare sharing, selectedFolders=${wifiSharedFolderPaths.size}")
         wifiAppShareRequested = true
         wifiAppShareEnabled = true
         wifiHostRequestedByUser = true
         if (wifiHostActive && localAudioServer != null) {
+            refreshMeloWareSharedFolders()
             wifiLanDiscovery.advertise(localAudioServer!!.port, localAudioServer!!.token)
         } else if (!wifiHostBusy) {
             startWifiHostForCurrentSong(showMessage = true)
         }
+    }
+
+    /** User must explicitly choose which audio folders the other phone can browse. */
+    fun setMeloWareFolderShared(folder: String, enabled: Boolean) {
+        val validFolder = wifiShareableFolders.any { it.path == folder }
+        if (!validFolder) return
+        if (enabled && folder !in wifiSharedFolderPaths) wifiSharedFolderPaths.add(folder)
+        if (!enabled) wifiSharedFolderPaths.remove(folder)
+        refreshMeloWareSharedFolders()
+    }
+
+    fun selectAllMeloWareFolders(enabled: Boolean) {
+        wifiSharedFolderPaths.clear()
+        if (enabled) wifiSharedFolderPaths.addAll(wifiShareableFolders.map(MeloWareLanFolder::path))
+        refreshMeloWareSharedFolders()
+    }
+
+    private fun refreshMeloWareSharedFolders() {
+        val selected = if (wifiAppShareRequested) wifiSharedFolderPaths.toSet() else emptySet()
+        val available = if (selected.isEmpty()) emptyList() else localSongs
+            .asSequence()
+            .filter { it.source == SongSource.LOCAL_MEDIASTORE || it.source == SongSource.DOWNLOADED }
+            .filter { it.folderName.trim('/').ifBlank { "Nhạc trên máy" } in selected }
+            .map { song ->
+                LanSharedAudio(
+                    key = song.id.sha256().take(24),
+                    folder = song.folderName.trim('/').ifBlank { "Nhạc trên máy" },
+                    title = song.title,
+                    artist = song.artist,
+                    album = song.album,
+                    durationMs = song.durationMs,
+                    mimeType = song.mimeType ?: resolveAudioMime(song.uri.lastPathSegment.orEmpty(), null) ?: "audio/mpeg",
+                    uri = song.uri
+                )
+            }.toList()
+        localAudioServer?.updateSharedLibrary(available)
     }
 
     fun startSearchingMeloWare() {
@@ -897,19 +1195,22 @@ internal class MusicController(private val context: Context) {
 
     /** Fallback for routers that block mDNS but allow HTTP to the other phone. */
     fun receiveFromMeloWareUrl(rawUrl: String) {
-        val input = rawUrl.trim()
-        val parsed = runCatching { Uri.parse(input) }.getOrNull()
-        val address = parsed?.host.orEmpty()
-        val token = parsed?.pathSegments?.firstOrNull().orEmpty()
-        val isLocal = address.matches(Regex("(?:10|192\\.168)\\..*")) ||
-            address.matches(Regex("172\\.(?:1[6-9]|2[0-9]|3[01])\\..*"))
-        val port = parsed?.port ?: -1
-        if (parsed?.scheme != "http" || !isLocal || port !in 1..65535 ||
-            !Regex("[a-fA-F0-9]{32}").matches(token)) {
+        val peer = parseMeloWareLanUrl(rawUrl) ?: run {
             wifiPeerMessage = "Dán URL Wi-Fi nội bộ hợp lệ từ MeloWare máy A để kết nối."
             return
         }
-        receiveFromMeloWare(MeloWareLanPeer("MeloWare ($address)", address, port, token))
+        receiveFromMeloWare(peer)
+    }
+
+    private fun parseMeloWareLanUrl(rawUrl: String): MeloWareLanPeer? {
+        val parsed = runCatching { Uri.parse(rawUrl.trim()) }.getOrNull() ?: return null
+        val host = parsed.host.orEmpty()
+        val token = parsed.pathSegments.firstOrNull().orEmpty()
+        val isPrivate = host.matches(Regex("(?:10|192\\.168)\\..*")) ||
+                host.matches(Regex("172\\.(?:1[6-9]|2[0-9]|3[01])\\..*"))
+        if (!parsed.scheme.equals("http", ignoreCase = true) || !isPrivate ||
+            parsed.port !in 1..65535 || !token.matches(Regex("[a-fA-F0-9]{32}"))) return null
+        return MeloWareLanPeer("MeloWare ($host)", host, parsed.port, token)
     }
 
     /** Receiver uses ExoPlayer, not an external browser. Poll metadata for song changes. */
@@ -952,6 +1253,169 @@ internal class MusicController(private val context: Context) {
                 }
                 delay(2_500L)
             }
+        }
+    }
+
+    /** Browse folders shared by a selected MeloWare sender, independently of live-sync mode. */
+    fun openMeloWareLibrary(peer: MeloWareLanPeer) {
+        stopReceivingMeloWare()
+        wifiLibraryJob?.cancel()
+        wifiLibraryPeer = peer
+        wifiRemoteFolders.clear()
+        wifiRemoteSongs.clear()
+        wifiRemoteFolderPath = null
+        wifiRemoteNextOffset = -1
+        wifiRemoteError = null
+        wifiRemoteLoading = true
+        wifiLibraryJob = scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    fetchMeloWareLibraryJson(peer, "library")
+                }
+            }
+            if (wifiLibraryPeer != peer) return@launch
+            wifiRemoteLoading = false
+            result.onSuccess { data ->
+                if (data.optString("app") != "MeloWare") {
+                    wifiRemoteError = "Máy này không chạy MeloWare."
+                    return@onSuccess
+                }
+                val folders = data.optJSONArray("folders") ?: JSONArray()
+                for (index in 0 until folders.length()) {
+                    val item = folders.optJSONObject(index) ?: continue
+                    val folderPath = item.optString("path")
+                    if (folderPath.isNotBlank()) {
+                        wifiRemoteFolders.add(MeloWareLanFolder(folderPath, item.optInt("count", 0)))
+                    }
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                wifiRemoteError = "Không đọc được thư mục máy gửi: ${error.localizedMessage ?: "Lỗi mạng"}"
+            }
+        }
+    }
+
+    fun openMeloWareLibraryUrl(rawUrl: String): Boolean {
+        val peer = parseMeloWareLanUrl(rawUrl) ?: run {
+            wifiPeerMessage = "Dán URL mạng nội bộ từ MeloWare máy A."
+            return false
+        }
+        openMeloWareLibrary(peer)
+        return true
+    }
+
+    /** Paginated remote folder listing: avoids loading thousands of songs at once. */
+    fun loadMeloWareFolder(folder: String, append: Boolean = false) {
+        val peer = wifiLibraryPeer ?: return
+        if (folder !in wifiRemoteFolders.map(MeloWareLanFolder::path)) return
+        if (wifiRemoteLoading) return
+        val offset = if (append) wifiRemoteNextOffset.takeIf { it >= 0 } ?: return else 0
+        wifiLibraryJob?.cancel()
+        if (!append) {
+            wifiRemoteSongs.clear()
+            wifiRemoteNextOffset = -1
+        }
+        wifiRemoteFolderPath = folder
+        wifiRemoteError = null
+        wifiRemoteLoading = true
+        wifiLibraryJob = scope.launch {
+            val endpoint = "library?folder=${URLEncoder.encode(folder, "UTF-8")}&offset=$offset"
+            val result = runCatching { withContext(Dispatchers.IO) { fetchMeloWareLibraryJson(peer, endpoint) } }
+            if (wifiLibraryPeer != peer || wifiRemoteFolderPath != folder) return@launch
+            wifiRemoteLoading = false
+            result.onSuccess { data ->
+                val tracks = data.optJSONArray("songs") ?: JSONArray()
+                for (index in 0 until tracks.length()) {
+                    val json = tracks.optJSONObject(index) ?: continue
+                    val key = json.optString("key")
+                    if (!key.matches(Regex("[0-9a-f]{24}"))) continue
+                    wifiRemoteSongs.add(
+                        MeloWareLanAudio(
+                            key = key,
+                            folder = folder,
+                            title = json.optString("title", "Bài hát"),
+                            artist = json.optString("artist", "Nghệ sĩ chưa biết"),
+                            album = json.optString("album"),
+                            durationMs = json.optLong("durationMs", 0L).coerceAtLeast(0),
+                            mimeType = json.optString("mimeType", "audio/mpeg")
+                        )
+                    )
+                }
+                wifiRemoteNextOffset = data.optInt("nextOffset", -1)
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                wifiRemoteError = "Không đọc được bài hát: ${error.localizedMessage ?: "Lỗi mạng"}"
+            }
+        }
+    }
+
+    fun loadMoreMeloWareFolder() {
+        val path = wifiRemoteFolderPath ?: return
+        loadMeloWareFolder(path, append = true)
+    }
+
+    fun backToMeloWareFolders() {
+        wifiLibraryJob?.cancel()
+        wifiRemoteLoading = false
+        wifiRemoteFolderPath = null
+        wifiRemoteSongs.clear()
+        wifiRemoteNextOffset = -1
+        wifiRemoteError = null
+    }
+
+    fun playFromMeloWareFolder(index: Int) {
+        val peer = wifiLibraryPeer ?: return
+        val sourceSongs = wifiRemoteSongs.toList()
+        if (index !in sourceSongs.indices) return
+        val songs = sourceSongs.map { remote ->
+            SongItem(
+                id = "meloware_folder_${peer.address}_${peer.port}_${remote.key}",
+                title = remote.title,
+                artist = remote.artist,
+                album = remote.album,
+                folderName = remote.folder,
+                uri = Uri.parse("http://${peer.address}:${peer.port}/${peer.token}/track/${remote.key}"),
+                durationMs = remote.durationMs,
+                source = SongSource.ONLINE_HTTP,
+                mimeType = remote.mimeType
+            )
+        }
+        // Folder playback is independent of the sender's currently playing track.
+        playSong(songs[index], songs)
+    }
+
+    fun closeMeloWareLibrary() {
+        wifiLibraryJob?.cancel()
+        wifiLibraryJob = null
+        wifiLibraryPeer = null
+        wifiRemoteFolders.clear()
+        wifiRemoteSongs.clear()
+        wifiRemoteFolderPath = null
+        wifiRemoteError = null
+        wifiRemoteLoading = false
+        wifiRemoteNextOffset = -1
+    }
+
+    private fun fetchMeloWareLibraryJson(peer: MeloWareLanPeer, endpoint: String): JSONObject {
+        val label = endpoint.substringBefore('?')
+        Log.d(MELOWARE_LAN_LOG_TAG, "B: requesting $label from ${peer.address}:${peer.port}")
+        val url = URL("http://${peer.address}:${peer.port}/${peer.token}/$endpoint")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.connectTimeout = 4_000
+        connection.readTimeout = 8_000
+        connection.requestMethod = "GET"
+        try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                throw IOException("Máy A trả HTTP ${connection.responseCode}")
+            }
+            val response = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            Log.d(MELOWARE_LAN_LOG_TAG, "B: received $label response, chars=${response.length}")
+            return JSONObject(response)
+        } catch (error: Exception) {
+            Log.e(MELOWARE_LAN_LOG_TAG, "B: failed to load $label", error)
+            throw error
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -1095,6 +1559,7 @@ internal class MusicController(private val context: Context) {
         addAll(localSongs)
         addAll(personalDriveSongs)
         addAll(publicDriveSongs)
+        addAll(internetLibrarySongs())
     }.distinctBy { it.id }
 
     fun filteredLibrarySongs(): List<SongItem> {
@@ -1103,6 +1568,7 @@ internal class MusicController(private val context: Context) {
             LibrarySource.LOCAL -> localSongs.filter { it.source == SongSource.LOCAL_MEDIASTORE }
             LibrarySource.PERSONAL_DRIVE -> personalDriveSongs.toList()
             LibrarySource.PUBLIC_DRIVE -> publicDriveSongs.toList()
+            LibrarySource.INTERNET -> internetLibrarySongs()
             LibrarySource.DOWNLOADED -> localSongs.filter { it.source == SongSource.DOWNLOADED }
             LibrarySource.FAVORITES -> allLibrarySongs().filter { isFavorite(it) }
         }
@@ -1130,6 +1596,7 @@ internal class MusicController(private val context: Context) {
         LibrarySource.LOCAL -> localSongs.count { it.source == SongSource.LOCAL_MEDIASTORE }
         LibrarySource.PERSONAL_DRIVE -> personalDriveSongs.size
         LibrarySource.PUBLIC_DRIVE -> publicDriveSongs.size
+        LibrarySource.INTERNET -> internetLibrarySongs().size
         LibrarySource.DOWNLOADED -> localSongs.count { it.source == SongSource.DOWNLOADED }
         LibrarySource.FAVORITES -> allLibrarySongs().count { isFavorite(it) }
     }
@@ -1164,7 +1631,10 @@ internal class MusicController(private val context: Context) {
             result.onSuccess { songs ->
                 localSongs.clear()
                 localSongs.addAll(songs)
-                statusMessage = "Đã quét ${songs.size} bài hát trên điện thoại"
+                // If the sender rescans files, refresh the already-authorized folder list.
+                wifiSharedFolderPaths.removeAll { folder -> wifiShareableFolders.none { it.path == folder } }
+                refreshMeloWareSharedFolders()
+                // Quét và cập nhật thư viện ngầm; không hiển thị Toast khi hoàn tất.
             }.onFailure { throwable ->
                 errorMessage = "Không thể quét nhạc trên điện thoại: ${throwable.localizedMessage ?: "Lỗi không xác định"}"
             }
@@ -1852,7 +2322,9 @@ internal class MusicController(private val context: Context) {
                 val first = allLibrarySongs().firstOrNull() ?: return
                 playSong(first)
             }
-            player.currentMediaItem?.mediaId != song.id -> prepareCurrent(autoPlay = true)
+            player.currentMediaItem?.mediaId != song.id ||
+                    (song.source == SongSource.INTERNET_P2P && player.playbackState == Player.STATE_IDLE) ->
+                prepareCurrent(autoPlay = true)
             player.playbackState == Player.STATE_ENDED -> {
                 player.seekTo(0L)
                 player.play()
@@ -1928,9 +2400,163 @@ internal class MusicController(private val context: Context) {
 
     fun isFavorite(song: SongItem): Boolean = favoriteIds[song.id] == true
 
-    fun artworkFor(song: SongItem): String? = artworkById[song.id] ?: song.artworkUrl
+    private fun customArtworkKey(songId: String) = songId.sha256().take(32)
+
+    private fun customArtworkPreferenceKey(hash: String) = "melowave_custom_cover_$hash"
+
+    fun hasCustomArtwork(song: SongItem): Boolean =
+        customArtworkByKey.containsKey(customArtworkKey(song.id))
+
+    fun artworkFor(song: SongItem): String? =
+        customArtworkByKey[customArtworkKey(song.id)] ?: artworkById[song.id] ?: song.artworkUrl
+
+    /**
+     * Copy the selected image into app-private storage: no gallery permission is required,
+     * and the photo stays available even after the photo picker's URI grant expires.
+     * Original MP3/FLAC metadata and the remote cover are never overwritten.
+     */
+    fun setCustomArtwork(song: SongItem, photoUri: Uri, normalizedCrop: RectF? = null) {
+        scope.launch {
+            val hash = customArtworkKey(song.id)
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    runCatching {
+                        val folder = File(context.filesDir, "melowave_custom_covers")
+                        if (!folder.isDirectory && !folder.mkdirs()) {
+                            throw IOException("Không tạo được thư mục ảnh bìa")
+                        }
+                        val out = File(folder, "${hash}_${UUID.randomUUID()}.jpg")
+                        try {
+                            val decoded = decodeChosenArtwork(photoUri)
+                            try {
+                                val ready = if (normalizedCrop != null) {
+                                    cropChosenArtwork(decoded, normalizedCrop)
+                                } else decoded
+                                try {
+                                    FileOutputStream(out).use { stream ->
+                                        if (!ready.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
+                                            throw IOException("Không thể lưu ảnh JPEG")
+                                        }
+                                    }
+                                } finally {
+                                    if (ready !== decoded) ready.recycle()
+                                }
+                            } finally {
+                                decoded.recycle()
+                            }
+                            if (out.length() <= 0L) throw IOException("Ảnh không có dữ liệu")
+                            Uri.fromFile(out).toString()
+                        } catch (failure: Exception) {
+                            out.delete()
+                            throw failure
+                        }
+                    }
+                } finally {
+                    // Delete only our own temporary WebView image, after the copy/crop
+                    // finishes (never before the coroutine has opened the input file).
+                    discardSearchedArtworkTemp(photoUri)
+                }
+            }
+            result.onSuccess { savedUri ->
+                val oldUri = customArtworkByKey.put(hash, savedUri)
+                prefs.edit().putString(customArtworkPreferenceKey(hash), savedUri).apply()
+                scope.launch(Dispatchers.IO) { deleteOldCustomCover(oldUri) }
+                statusMessage = "Đã cập nhật ảnh bìa cho ${song.title}"
+            }.onFailure { failure ->
+                statusMessage = "Không đổi được ảnh bìa: ${failure.localizedMessage ?: "Ảnh không hợp lệ"}"
+            }
+        }
+    }
+
+    /** Never touch Gallery photos; only delete cache files created by the WebView picker. */
+    fun discardSearchedArtworkTemp(photoUri: Uri) {
+        if (photoUri.scheme != "file") return
+        runCatching {
+            val folder = File(context.cacheDir, "melowave_web_cover_search").canonicalFile
+            val item = photoUri.path?.let(::File)?.canonicalFile ?: return
+            if (item.parentFile == folder && item.name.startsWith("cover_") &&
+                item.name.endsWith(".img")) {
+                item.delete()
+            }
+        }
+    }
+
+    fun restoreAutomaticArtwork(song: SongItem) {
+        val hash = customArtworkKey(song.id)
+        val oldUri = customArtworkByKey.remove(hash)
+        prefs.edit().remove(customArtworkPreferenceKey(hash)).apply()
+        scope.launch(Dispatchers.IO) { deleteOldCustomCover(oldUri) }
+        statusMessage = "Đã khôi phục ảnh bìa tự động"
+        if (artworkById[song.id].isNullOrBlank() && song.artworkUrl.isNullOrBlank()) {
+            ensureArtwork(song)
+        }
+    }
+
+    private fun deleteOldCustomCover(savedUri: String?) {
+        if (savedUri.isNullOrBlank()) return
+        runCatching {
+            val file = Uri.parse(savedUri).path?.let(::File)?.canonicalFile ?: return
+            val folder = File(context.filesDir, "melowave_custom_covers").canonicalFile
+            // Never delete content outside the directory controlled by MeloWave.
+            if (file.parentFile == folder) file.delete()
+        }
+    }
+
+    /** Decode on a worker thread so a large gallery photo cannot freeze the player UI. */
+    suspend fun loadArtworkForCrop(photoUri: Uri): Bitmap =
+        withContext(Dispatchers.IO) { decodeChosenArtwork(photoUri) }
+
+    /** The normalized crop comes from the on-screen square preview, not from the audio file. */
+    private fun cropChosenArtwork(bitmap: Bitmap, normalized: RectF): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val cropWidth = ((normalized.right - normalized.left).coerceIn(0f, 1f) * width)
+            .roundToInt().coerceAtLeast(1)
+        val cropHeight = ((normalized.bottom - normalized.top).coerceIn(0f, 1f) * height)
+            .roundToInt().coerceAtLeast(1)
+        val side = minOf(cropWidth, cropHeight, width, height).coerceAtLeast(1)
+        val left = (normalized.left.coerceIn(0f, 1f) * width).roundToInt()
+            .coerceIn(0, width - side)
+        val top = (normalized.top.coerceIn(0f, 1f) * height).roundToInt()
+            .coerceIn(0, height - side)
+        return Bitmap.createBitmap(bitmap, left, top, side, side)
+    }
+
+    private fun decodeChosenArtwork(photoUri: Uri): Bitmap {
+        val resolver = context.contentResolver
+        val maxEdge = 1200
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, photoUri)) {
+                    decoder, imageInfo, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val width = imageInfo.size.width
+                val height = imageInfo.size.height
+                if (width <= 0 || height <= 0) throw IOException("Ảnh không hợp lệ")
+                val factor = maxOf(width, height).toFloat() / maxEdge.toFloat()
+                if (factor > 1f) {
+                    decoder.setTargetSize(
+                        maxOf(1, (width / factor).toInt()),
+                        maxOf(1, (height / factor).toInt())
+                    )
+                }
+            }
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(photoUri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, bounds)
+            Unit
+        } ?: throw IOException("Không thể đọc ảnh")
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Ảnh không hợp lệ")
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxEdge) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        return resolver.openInputStream(photoUri)?.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: throw IOException("Không thể giải mã ảnh")
+    }
 
     fun ensureArtwork(song: SongItem) {
+        // P2P files have no persistent URI outside the live Internet session.
+        if (song.source == SongSource.INTERNET_P2P) return
         if (!artworkFor(song).isNullOrBlank()) return
         if (!artworkRequests.add(song.id)) return
         scope.launch {
@@ -1953,6 +2579,26 @@ internal class MusicController(private val context: Context) {
     }
 
     fun downloadSongForOffline(song: SongItem) {
+        if (song.source == SongSource.INTERNET_P2P) {
+            val id = song.uri.pathSegments.firstOrNull()
+            val audio = internetSession.remoteAudio.firstOrNull { it.id == id }
+            if (audio == null || !internetSession.dataChannelOpen) {
+                statusMessage = "Máy A đã ngắt mạng. Hãy kết nối lại để tải nhạc."
+            } else {
+                internetSession.downloadAudio(audio)
+                statusMessage = internetSession.transferMessage
+            }
+            return
+        }
+        if (song.id.startsWith("meloware_pc_")) {
+            if (laptopShare.downloadPlayingUri(song.uri) {
+                    statusMessage = "Đã tải bài hát vào Music/meloware_laptop"
+                    scanLocalMusic()
+                }) {
+                statusMessage = "Đang tải nhạc từ máy tính vào Music/meloware_laptop..."
+            } else statusMessage = "Không thể tải: hãy kết nối lại Chrome rồi chọn bài từ thư mục máy tính."
+            return
+        }
         if (song.source == SongSource.MOVIE) {
             statusMessage = "Movie không hỗ trợ tải trực tiếp âm thanh của video bằng chức năng này."
             return
@@ -1971,6 +2617,194 @@ internal class MusicController(private val context: Context) {
                 errorMessage = "Không tải được bài hát: ${throwable.localizedMessage ?: "Lỗi không xác định"}"
             }
         }
+    }
+
+    /** Local file management is intentionally limited to MediaStore entries on this device. */
+    fun canManageLocalSong(song: SongItem): Boolean =
+        canUseLocalAudioTools(song) && song.uri.scheme == "content" &&
+            song.uri.authority == MediaStore.AUTHORITY
+
+    private fun localSongLabelKey(songId: String): String =
+        "local_song_label_" + songId.sha256().take(32)
+
+    private fun withSavedLocalLabel(song: SongItem): SongItem {
+        val encoded = prefs.getString(localSongLabelKey(song.id), null) ?: return song
+        return runCatching {
+            val saved = JSONObject(encoded)
+            song.copy(
+                title = saved.optString("title").ifBlank { song.title },
+                artist = saved.optString("artist").ifBlank { song.artist }
+            )
+        }.getOrDefault(song)
+    }
+
+    /**
+     * Update the Android media library metadata and maintain a durable in-app label.
+     * This does NOT rewrite the embedded ID3/FLAC tags inside the audio file.
+     */
+    suspend fun updateLocalSongInfo(
+        song: SongItem, title: String, artist: String,
+        consentGranted: Boolean = false
+    ): LocalSongMutationResult {
+        if (!canManageLocalSong(song)) {
+            return LocalSongMutationResult.Failed("Chỉ sửa thông tin của nhạc lưu trên thiết bị.")
+        }
+        val newTitle = title.trim()
+        val newArtist = artist.trim().ifBlank { "Nghệ sĩ chưa biết" }
+        if (newTitle.isBlank() || newTitle.length > 200 || newArtist.length > 200) {
+            return LocalSongMutationResult.Failed("Tên bài hát và nghệ sĩ không được vượt quá 200 ký tự; tên bài hát không được trống.")
+        }
+        val resolver = context.contentResolver
+        val attempt = withContext(Dispatchers.IO) {
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.Audio.Media.TITLE, newTitle)
+                    put(MediaStore.Audio.Media.ARTIST, newArtist)
+                }
+                val changed = resolver.update(song.uri, values, null, null)
+                if (changed > 0) LocalSongMutationResult.Completed
+                else {
+                    // Some media providers won't modify TITLE/ARTIST. Keep a durable
+                    // in-app label rather than silently failing the user's edit.
+                    val stillExists = resolver.query(
+                        song.uri, arrayOf(MediaStore.Audio.Media._ID), null, null, null
+                    )?.use { it.moveToFirst() } == true
+                    if (stillExists) LocalSongMutationResult.LibraryOnly
+                    else LocalSongMutationResult.Failed("Không tìm thấy tệp nhạc trên thiết bị.")
+                }
+            } catch (security: SecurityException) {
+                when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            security is android.app.RecoverableSecurityException ->
+                        LocalSongMutationResult.NeedsConsent(security.userAction.actionIntent.intentSender)
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !consentGranted -> {
+                        runCatching<LocalSongMutationResult> {
+                            LocalSongMutationResult.NeedsConsent(
+                                MediaStore.createWriteRequest(resolver, listOf(song.uri)).intentSender
+                            )
+                        }.getOrElse {
+                            LocalSongMutationResult.Failed("Không xin được quyền sửa bài hát: ${it.localizedMessage ?: "Không xác định"}")
+                        }
+                    }
+                    else -> LocalSongMutationResult.Failed("Android chưa cấp quyền sửa bài hát: ${security.localizedMessage ?: "Bị từ chối"}")
+                }
+            } catch (failure: Exception) {
+                LocalSongMutationResult.Failed("Sửa thông tin thất bại: ${failure.localizedMessage ?: "Lỗi không xác định"}")
+            }
+        }
+        if (attempt is LocalSongMutationResult.Completed ||
+            attempt is LocalSongMutationResult.LibraryOnly) {
+            prefs.edit().putString(localSongLabelKey(song.id), JSONObject().apply {
+                put("title", newTitle)
+                put("artist", newArtist)
+            }.toString()).apply()
+            fun replace(list: MutableList<SongItem>) {
+                val idx = list.indexOfFirst { it.id == song.id }
+                if (idx >= 0) list[idx] = list[idx].copy(title = newTitle, artist = newArtist)
+            }
+            replace(localSongs)
+            replace(queue)
+            replace(recentSongs)
+            saveQueue()
+            saveSongList(KEY_RECENTS, recentSongs)
+            lyricsJobs.remove(song.id)?.cancel()
+            lyricsBySongId.remove(song.id)
+            lyricsErrorBySongId.remove(song.id)
+            statusMessage = if (attempt is LocalSongMutationResult.LibraryOnly)
+                "Đã lưu tên bài hát và nghệ sĩ trong MeloWave (Android không cho cập nhật MediaStore)."
+            else "Đã cập nhật tên bài hát và nghệ sĩ"
+        }
+        return attempt
+    }
+
+    /**
+     * On Android 11+ the system deletes via MediaStore.createDeleteRequest itself.
+     * The 'consentGranted' continuation just synchronizes app state after RESULT_OK.
+     */
+    suspend fun deleteLocalSongFromDevice(
+        song: SongItem, consentGranted: Boolean = false
+    ): LocalSongMutationResult {
+        if (!canManageLocalSong(song)) {
+            return LocalSongMutationResult.Failed("Chỉ có thể xóa tệp nhạc trên điện thoại.")
+        }
+        val resolver = context.contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!consentGranted) {
+                return runCatching<LocalSongMutationResult> {
+                    LocalSongMutationResult.NeedsConsent(
+                        MediaStore.createDeleteRequest(resolver, listOf(song.uri)).intentSender
+                    )
+                }.getOrElse {
+                    LocalSongMutationResult.Failed("Không tạo được yêu cầu xóa: ${it.localizedMessage ?: "Lỗi không xác định"}")
+                }
+            }
+            // Android has confirmed and performed this deletion through the OS dialog.
+            onLocalSongDeleted(song)
+            return LocalSongMutationResult.Completed
+        }
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val count = resolver.delete(song.uri, null, null)
+                if (count > 0) LocalSongMutationResult.Completed
+                else LocalSongMutationResult.Failed("Không xóa được tệp nhạc. File có thể đã bị di chuyển hoặc xóa trước đó.")
+            } catch (security: SecurityException) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    security is android.app.RecoverableSecurityException
+                ) LocalSongMutationResult.NeedsConsent(security.userAction.actionIntent.intentSender)
+                else LocalSongMutationResult.Failed("Không có quyền xóa tệp nhạc: ${security.localizedMessage ?: "Bị từ chối"}")
+            } catch (failure: Exception) {
+                LocalSongMutationResult.Failed("Xóa bài hát thất bại: ${failure.localizedMessage ?: "Lỗi không xác định"}")
+            }
+        }
+        if (result is LocalSongMutationResult.Completed) onLocalSongDeleted(song)
+        return result
+    }
+
+    private fun onLocalSongDeleted(song: SongItem) {
+        val removedIndex = queue.indexOfFirst { it.id == song.id }
+        val wasCurrent = currentSong?.id == song.id
+        if (wasCurrent) {
+            player.stop()
+            player.clearMediaItems()
+            isPlaying = false
+            isLoading = false
+            positionMs = 0L
+            durationMs = 1L
+            if (castConnected) {
+                castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+            }
+            if (hostedSongId == song.id) stopWifiHostInternal(clearUserRequest = false)
+        }
+        localSongs.removeAll { it.id == song.id }
+        recentSongs.removeAll { it.id == song.id }
+        queue.removeAll { it.id == song.id }
+        currentIndex = when {
+            queue.isEmpty() -> -1
+            removedIndex < 0 -> currentIndex.coerceIn(0, queue.lastIndex)
+            removedIndex < currentIndex -> (currentIndex - 1).coerceAtLeast(0)
+            else -> currentIndex.coerceIn(0, queue.lastIndex)
+        }
+        if (wasCurrent && currentScreen == MusicScreen.NOW_PLAYING) {
+            currentScreen = previousScreen
+        }
+        favoriteIds.remove(song.id)
+        val removedCover = customArtworkByKey.remove(customArtworkKey(song.id))
+        scope.launch(Dispatchers.IO) { deleteOldCustomCover(removedCover) }
+        prefs.edit()
+            .remove(customArtworkPreferenceKey(customArtworkKey(song.id)))
+            .remove(localSongLabelKey(song.id))
+            .remove("art_${song.id.sha256().take(32)}")
+            .putStringSet(KEY_FAVORITES, favoriteIds.keys.toSet())
+            .apply()
+        cachedPlaybackUris.remove(song.id)
+        audioTechnicalInfoById.remove(song.id)
+        artworkById.remove(song.id)
+        lyricsJobs.remove(song.id)?.cancel()
+        lyricsBySongId.remove(song.id)
+        lyricsErrorBySongId.remove(song.id)
+        saveSongList(KEY_RECENTS, recentSongs)
+        saveQueue()
+        statusMessage = "Đã xóa bài hát khỏi điện thoại"
     }
 
     fun canUseLocalAudioTools(song: SongItem): Boolean =
@@ -2307,6 +3141,7 @@ internal class MusicController(private val context: Context) {
         SongSource.PERSONAL_DRIVE -> "Google Drive"
         SongSource.PUBLIC_DRIVE -> "Drive chia sẻ"
         SongSource.ONLINE_HTTP -> "Music Preview"
+        SongSource.INTERNET_P2P -> "MeloWare Internet"
         SongSource.MOVIE -> "Movie"
         SongSource.APP_RESOURCE -> "Ứng dụng"
     }
@@ -2319,6 +3154,7 @@ internal class MusicController(private val context: Context) {
             SongSource.DOWNLOADED -> "OFFLINE $ext"
             SongSource.LOCAL_MEDIASTORE -> ext.takeIf { it != "AUDIO" } ?: "OFFLINE"
             SongSource.ONLINE_HTTP -> if (song.id.startsWith("meloware_lan_")) "MELOWARE LAN" else "MUSIC"
+            SongSource.INTERNET_P2P -> "INTERNET P2P"
             SongSource.MOVIE -> "MOVIE"
             SongSource.APP_RESOURCE -> "DEMO"
         }
@@ -2327,7 +3163,13 @@ internal class MusicController(private val context: Context) {
     private fun configurePlayerListener() {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(value: Boolean) {
-                if (currentSong?.source != SongSource.MOVIE) isPlaying = value
+                if (currentSong?.source != SongSource.MOVIE) {
+                    isPlaying = value
+                    if (value && currentSong != null) {
+                        // Start the guest trial only after real ExoPlayer playback begins.
+                        MeloWaveTrial.onPlaybackStarted(context)
+                    }
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -2378,6 +3220,51 @@ internal class MusicController(private val context: Context) {
     private fun prepareCurrent(autoPlay: Boolean) {
         val song = currentSong ?: return
         playbackJob?.cancel()
+        // Stop an old Internet stream before switching to a local/Drive source.
+        if (internetWasPlaying && song.source != SongSource.INTERNET_P2P) {
+            player.stop()
+            if (internetSessionLazy.isInitialized()) internetSession.stopOnline()
+            internetWasPlaying = false
+        }
+        if (song.source == SongSource.INTERNET_P2P) {
+            if (castConnected) {
+                errorMessage = "Hãy ngắt Google Cast trước khi phát nhạc WebRTC Internet."
+                return
+            }
+            if (!internetSession.dataChannelOpen) {
+                isLoading = false
+                errorMessage = "Máy A không còn kết nối Internet."
+                return
+            }
+            internetWasPlaying = true
+            isLoading = true
+            isPlaying = false
+            errorMessage = null
+            player.stop()
+            player.clearMediaItems()
+            val remoteId = song.uri.pathSegments.firstOrNull().orEmpty()
+            internetSession.playInLibrary(
+                remoteId,
+                song.toMediaItem(song.uri, artworkFor(song)),
+                onReady = { source ->
+                    if (currentSong?.id == song.id && internetSession.dataChannelOpen) {
+                        player.setMediaSource(source)
+                        player.prepare()
+                        if (autoPlay) player.play()
+                    }
+                },
+                onError = { reason ->
+                    if (currentSong?.id == song.id) {
+                        isLoading = false
+                        isPlaying = false
+                        errorMessage = reason
+                    }
+                }
+            )
+            addRecent(song)
+            saveQueue()
+            return
+        }
         // Keep the HTTP port/token stable while the user is sharing, so the
         // receiving MeloWare can follow the next song without rediscovering A.
         if (hostedSongId != null && hostedSongId != song.id && !wifiHostRequestedByUser) {
@@ -2476,7 +3363,8 @@ internal class MusicController(private val context: Context) {
             "mp3" -> "MP3"
             else -> "Chất lượng gốc"
         }
-        val size = if (song.source == SongSource.ONLINE_HTTP || song.source == SongSource.MOVIE) {
+        val size = if (song.source == SongSource.ONLINE_HTTP ||
+            song.source == SongSource.INTERNET_P2P || song.source == SongSource.MOVIE) {
             "Trực tuyến"
         } else {
             "Đang đọc..."
@@ -2487,6 +3375,9 @@ internal class MusicController(private val context: Context) {
     private fun readAudioTechnicalInfo(song: SongItem): AudioTechnicalInfo {
         if (song.source == SongSource.MOVIE) {
             return AudioTechnicalInfo("Video online", "STREAM", "Trực tuyến")
+        }
+        if (song.source == SongSource.INTERNET_P2P) {
+            return provisionalAudioTechnicalInfo(song)
         }
         val uri = cachedPlaybackUris[song.id] ?: song.uri
         val extension = resolvedExtension(song).uppercase(Locale.ROOT).ifBlank { "AUDIO" }
@@ -2522,7 +3413,9 @@ internal class MusicController(private val context: Context) {
         return AudioTechnicalInfo(
             qualityLabel = quality,
             extensionLabel = extension,
-            sizeLabel = sizeBytes?.let(::formatFileSize) ?: if (song.source == SongSource.ONLINE_HTTP) "Trực tuyến" else "Không rõ dung lượng",
+            sizeLabel = sizeBytes?.let(::formatFileSize) ?:
+            if (song.source == SongSource.ONLINE_HTTP || song.source == SongSource.INTERNET_P2P)
+                "Trực tuyến" else "Không rõ dung lượng",
             bitrateKbps = bitrateKbps,
             sampleRateHz = sampleRateHz,
             sizeBytes = sizeBytes
@@ -2606,6 +3499,7 @@ internal class MusicController(private val context: Context) {
         } else {
             stopWifiHostInternal(clearUserRequest = false)
             LocalAudioHttpServer(
+                contentResolver = context.contentResolver,
                 file = sourceFile,
                 contentType = mime,
                 displayName = song.title,
@@ -2622,6 +3516,7 @@ internal class MusicController(private val context: Context) {
         wifiHostActive = true
         wifiHostError = null
         wifiHostUrl = "http://$ip:${server.port}/${server.token}/${sourceFile.name}"
+        refreshMeloWareSharedFolders()
         if (wifiAppShareRequested) wifiLanDiscovery.advertise(server.port, server.token)
         return wifiHostUrl!!
     }
@@ -2691,6 +3586,8 @@ internal class MusicController(private val context: Context) {
             wifiHostRequestedByUser = false
             wifiAppShareRequested = false
             wifiAppShareEnabled = false
+            // Nothing from the previous share session is shared on the next start.
+            wifiSharedFolderPaths.clear()
         }
     }
 
@@ -2725,6 +3622,9 @@ internal class MusicController(private val context: Context) {
         remoteMediaCallback = object : RemoteMediaClient.Callback() {
             override fun onStatusUpdated() {
                 isPlaying = remote.isPlaying
+                if (remote.isPlaying && currentSong?.source != SongSource.MOVIE) {
+                    MeloWaveTrial.onPlaybackStarted(context)
+                }
                 isLoading = remote.isBuffering
                 val remoteDuration = remote.streamDuration
                 if (remoteDuration > 0L) durationMs = remoteDuration
@@ -2769,6 +3669,8 @@ internal class MusicController(private val context: Context) {
     }
 
     private fun addRecent(song: SongItem) {
+        // Chrome laptop streams use an ephemeral localhost URL; do not keep stale shortcuts after disconnect.
+        if (song.id.startsWith("meloware_pc_")) return
         recentSongs.removeAll { it.id == song.id }
         recentSongs.add(0, song)
         while (recentSongs.size > 30) recentSongs.removeAt(recentSongs.lastIndex)
@@ -2859,7 +3761,7 @@ internal class MusicController(private val context: Context) {
                     File(relativeOrPath).parentFile?.name ?: "Nhạc trên máy"
                 }
                 val downloaded = (folder.contains("Tunertools", ignoreCase = true) || folder.contains("MeloWare", ignoreCase = true))
-                output += SongItem(
+                output += withSavedLocalLabel(SongItem(
                     id = uri.toString(),
                     title = parsed.first,
                     artist = parsed.second,
@@ -2869,7 +3771,7 @@ internal class MusicController(private val context: Context) {
                     durationMs = cursor.longOrZero(durationIndex),
                     source = if (downloaded) SongSource.DOWNLOADED else SongSource.LOCAL_MEDIASTORE,
                     mimeType = mime
-                )
+                ))
             }
         }
         return output.distinctBy { it.id }
@@ -2918,6 +3820,19 @@ internal class MusicController(private val context: Context) {
     }
 
     private fun restoreState() {
+        // Load persisted cover overrides once, BEFORE the restored queue is displayed.
+        val customFolder = File(context.filesDir, "melowave_custom_covers").canonicalFile
+        prefs.all.forEach { (key, value) ->
+            if (!key.startsWith("melowave_custom_cover_")) return@forEach
+            val savedUri = value as? String
+            val file = runCatching { savedUri?.let { Uri.parse(it).path }?.let(::File)?.canonicalFile }
+                .getOrNull()
+            if (savedUri != null && file != null && file.isFile && file.parentFile == customFolder) {
+                customArtworkByKey[key.removePrefix("melowave_custom_cover_")] = savedUri
+            } else {
+                prefs.edit().remove(key).apply()
+            }
+        }
         favoriteIds.putAll(
             prefs.getStringSet(KEY_FAVORITES, emptySet()).orEmpty().associateWith { true }
         )
@@ -2947,7 +3862,8 @@ internal class MusicController(private val context: Context) {
 
     private fun saveSongList(key: String, songs: List<SongItem>) {
         val array = JSONArray()
-        songs.forEach { song ->
+        songs.filterNot { it.id.startsWith("meloware_pc_") ||
+                it.source == SongSource.INTERNET_P2P }.forEach { song ->
             array.put(JSONObject().apply {
                 put("id", song.id)
                 put("title", song.title)
@@ -2958,7 +3874,9 @@ internal class MusicController(private val context: Context) {
                 put("durationMs", song.durationMs)
                 put("source", song.source.name)
                 put("mimeType", song.mimeType.orEmpty())
-                put("artworkUrl", artworkFor(song).orEmpty())
+                // Do not persist app-private custom cover as the original online cover.
+                // Otherwise "restore automatic" could fall back to a deleted private file.
+                put("artworkUrl", (artworkById[song.id] ?: song.artworkUrl).orEmpty())
             })
         }
         prefs.edit().putString(key, array.toString()).apply()
@@ -3846,7 +4764,11 @@ private object SharedDriveApi {
     private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
 }
 
+// Filter this tag in Logcat on BOTH phones; never log the LAN access token.
+private const val MELOWARE_LAN_LOG_TAG = "MeloWareLAN"
+
 private class LocalAudioHttpServer(
+    private val contentResolver: android.content.ContentResolver,
     file: File,
     contentType: String,
     displayName: String,
@@ -3865,6 +4787,13 @@ private class LocalAudioHttpServer(
         val key: String
     )
     @Volatile private var current = ServedSong(file, contentType, displayName, artist, album, durationMs, songKey)
+    @Volatile private var sharedAudio: List<LanSharedAudio> = emptyList()
+
+    fun updateSharedLibrary(allowedSongs: List<LanSharedAudio>) {
+        // The server only ever sees the immutable, explicitly selected allow-list.
+        sharedAudio = allowedSongs.toList()
+        Log.i(MELOWARE_LAN_LOG_TAG, "A: shared library updated, songs=${sharedAudio.size}")
+    }
 
     fun updateSong(
         file: File, mimeType: String, title: String, artist: String, album: String,
@@ -3881,18 +4810,46 @@ private class LocalAudioHttpServer(
     fun start() {
         if (running) return
         running = true
+        Log.i(MELOWARE_LAN_LOG_TAG, "A: LAN HTTP server started on port=$port")
         executor.execute {
             while (running) {
-                val socket = runCatching { serverSocket.accept() }.getOrNull() ?: break
-                executor.execute { handle(socket) }
+                val socket = try {
+                    serverSocket.accept()
+                } catch (error: Exception) {
+                    if (running) Log.e(MELOWARE_LAN_LOG_TAG, "A: accept() failed", error)
+                    break
+                }
+                try {
+                    executor.execute { handleClientSafely(socket) }
+                } catch (error: Exception) {
+                    // The server may stop just after accept(); do not crash the app.
+                    runCatching { socket.close() }
+                    if (running) Log.e(MELOWARE_LAN_LOG_TAG, "A: cannot dispatch LAN client", error)
+                }
             }
         }
     }
 
     fun stop() {
         running = false
+        Log.i(MELOWARE_LAN_LOG_TAG, "A: LAN HTTP server stopping")
         runCatching { serverSocket.close() }
         executor.shutdownNow()
+    }
+
+    /** An exception on an Executor worker is normally fatal for the Android process. */
+    private fun handleClientSafely(socket: Socket) {
+        try {
+            handle(socket)
+        } catch (error: java.net.SocketException) {
+            // Common when the receiver cancels a folder request / skips a song.
+            Log.w(MELOWARE_LAN_LOG_TAG, "A: peer disconnected during request", error)
+        } catch (error: IOException) {
+            Log.e(MELOWARE_LAN_LOG_TAG, "A: LAN HTTP I/O error", error)
+        } catch (error: Exception) {
+            // Log full stack trace rather than killing phone A because of one client.
+            Log.e(MELOWARE_LAN_LOG_TAG, "A: LAN HTTP request failed", error)
+        }
     }
 
     private fun handle(socket: Socket) {
@@ -3904,6 +4861,14 @@ private class LocalAudioHttpServer(
             if (parts.size < 2) return
             val method = parts[0].uppercase(Locale.ROOT)
             val path = parts[1].substringBefore('?')
+            val rawQuery = parts[1].substringAfter('?', "")
+            val endpoint = when {
+                path == "/$token/library" -> if (rawQuery.isBlank()) "folders" else "folder songs"
+                path == "/$token/info" -> "song info"
+                path.startsWith("/$token/track/") -> "track stream"
+                else -> "other"
+            }
+            Log.d(MELOWARE_LAN_LOG_TAG, "A: HTTP $method request=$endpoint")
             val headers = linkedMapOf<String, String>()
             while (true) {
                 val line = reader.readLine() ?: break
@@ -3911,7 +4876,7 @@ private class LocalAudioHttpServer(
                 val index = line.indexOf(':')
                 if (index > 0) headers[line.substring(0, index).trim().lowercase(Locale.ROOT)] = line.substring(index + 1).trim()
             }
-            if (!path.contains("/$token/")) {
+            if (!path.startsWith("/$token/")) {
                 writeSimpleResponse(client, 404, "Not Found")
                 return
             }
@@ -3947,10 +4912,26 @@ private class LocalAudioHttpServer(
                 }.toString().toByteArray(Charsets.UTF_8)
                 val out = client.getOutputStream()
                 out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n" +
-                    "Content-Length: ${body.size}\r\nCache-Control: no-store\r\n" +
-                    "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
+                        "Content-Length: ${body.size}\r\nCache-Control: no-store\r\n" +
+                        "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
                 if (method == "GET") out.write(body)
                 out.flush()
+                return
+            }
+            // Folder browsing is available ONLY for folders explicitly enabled on machine A.
+            if (path == "/$token/library") {
+                sendLanLibraryJson(client, method, rawQuery)
+                return
+            }
+            if (path.startsWith("/$token/track/")) {
+                val key = path.removePrefix("/$token/track/")
+                val shared = if (key.matches(Regex("[0-9a-f]{24}")))
+                    sharedAudio.firstOrNull { it.key == key } else null
+                if (shared == null) {
+                    writeSimpleResponse(client, 404, "Not Shared")
+                    return
+                }
+                streamSharedTrack(client, method, headers, shared)
                 return
             }
             val song = current  // Keep a consistent file snapshot while this client streams.
@@ -4007,6 +4988,144 @@ private class LocalAudioHttpServer(
         }
     }
 
+    private fun sendLanLibraryJson(client: Socket, method: String, rawQuery: String) {
+        val args = rawQuery.split('&').mapNotNull { pair ->
+            val idx = pair.indexOf('=')
+            if (idx < 1) null else runCatching {
+                URLDecoder.decode(pair.substring(0, idx), "UTF-8") to
+                        URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+            }.getOrNull()
+        }.toMap()
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        val allowed = sharedAudio
+        val json = JSONObject().apply {
+            put("app", "MeloWare")
+            put("version", 2)
+            if (!args.containsKey("folder")) {
+                val grouped = allowed.groupingBy(LanSharedAudio::folder).eachCount()
+                val folders = JSONArray()
+                grouped.entries.sortedBy { it.key.lowercase(Locale.ROOT) }.forEach { (folder, count) ->
+                    folders.put(JSONObject().put("path", folder).put("count", count))
+                }
+                put("folders", folders)
+                Log.d(MELOWARE_LAN_LOG_TAG, "A: listing shared folders count=${grouped.size}, tracks=${allowed.size}")
+            } else {
+                val folder = args["folder"].orEmpty()
+                val offset = (args["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+                val tracks = JSONArray()
+                var total = 0
+                var returned = 0
+                // A single pass avoids duplicating a potentially very large folder in RAM.
+                for (entry in allowed) {
+                    if (entry.folder != folder) continue
+                    if (total >= offset && returned < 100) {
+                        tracks.put(JSONObject().apply {
+                            put("key", entry.key)
+                            put("title", entry.title)
+                            put("artist", entry.artist)
+                            put("album", entry.album)
+                            put("durationMs", entry.durationMs)
+                            put("mimeType", entry.mimeType)
+                        })
+                        returned++
+                    }
+                    total++
+                }
+                put("songs", tracks)
+                put("total", total)
+                put("nextOffset", if (offset.toLong() + returned < total) offset + returned else -1)
+                Log.d(MELOWARE_LAN_LOG_TAG, "A: listing folder songs total=$total, offset=$offset, returned=$returned")
+            }
+        }
+        val body = json.toString().toByteArray(Charsets.UTF_8)
+        Log.d(MELOWARE_LAN_LOG_TAG, "A: library response bytes=${body.size}, elapsedMs=${android.os.SystemClock.elapsedRealtime() - startedAt}")
+        val output = client.getOutputStream()
+        output.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n" +
+                "Content-Length: ${body.size}\r\nCache-Control: no-store\r\n" +
+                "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
+        if (method == "GET") output.write(body)
+        output.flush()
+    }
+
+    /** Stream an authorized MediaStore content URI with HTTP Range, without sharing its real path. */
+    private fun streamSharedTrack(
+        client: Socket, method: String, headers: Map<String, String>, entry: LanSharedAudio
+    ) {
+        Log.d(MELOWARE_LAN_LOG_TAG, "A: audio stream requested (key=${entry.key.take(8)}...)")
+        val descriptor = runCatching { contentResolver.openAssetFileDescriptor(entry.uri, "r") }
+            .onFailure { Log.e(MELOWARE_LAN_LOG_TAG, "A: failed to access shared track", it) }
+            .getOrNull()
+        if (descriptor == null) {
+            writeSimpleResponse(client, 404, "Audio Not Found")
+            return
+        }
+        descriptor.use { afd ->
+            val reported = if (afd.length > 0L) afd.length else 0L
+            val total = if (reported > 0L) reported else runCatching {
+                contentResolver.query(entry.uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+                    ?.use { c ->
+                        if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
+                    } ?: 0L
+            }.getOrDefault(0L)
+            if (total <= 0L) {
+                writeSimpleResponse(client, 404, "Empty Audio")
+                return
+            }
+            val range = parseRange(headers["range"], total)
+            if (range == null && !headers["range"].isNullOrBlank()) {
+                val out = client.getOutputStream()
+                out.write(("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$total\r\n" +
+                        "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
+                out.flush()
+                return
+            }
+            val start = range?.first ?: 0L
+            val end = range?.second ?: total - 1L
+            val length = end - start + 1L
+            val code = if (range == null) "200 OK" else "206 Partial Content"
+            val output = client.getOutputStream()
+            val header = buildString {
+                append("HTTP/1.1 $code\r\n")
+                append("Content-Type: ${entry.mimeType}\r\n")
+                append("Content-Length: $length\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Cache-Control: no-store\r\n")
+                if (range != null) append("Content-Range: bytes $start-$end/$total\r\n")
+                append("Connection: close\r\n\r\n")
+            }
+            output.write(header.toByteArray(Charsets.US_ASCII))
+            if (method == "HEAD") {
+                output.flush()
+                return
+            }
+            afd.createInputStream().use { source ->
+                if (!skipAudioBytes(source, start)) return
+                val buffer = ByteArray(64 * 1024)
+                var remaining = length
+                while (remaining > 0L) {
+                    val read = source.read(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                    remaining -= read
+                }
+            }
+            output.flush()
+        }
+    }
+
+    private fun skipAudioBytes(input: InputStream, bytes: Long): Boolean {
+        var remaining = bytes
+        while (remaining > 0L) {
+            val n = input.skip(remaining)
+            if (n > 0L) remaining -= n
+            else {
+                if (input.read() < 0) return false
+                remaining--
+            }
+        }
+        return true
+    }
+
     private fun parseRange(value: String?, total: Long): Pair<Long, Long>? {
         if (value.isNullOrBlank()) return null
         val match = Regex("bytes=(\\d*)-(\\d*)", RegexOption.IGNORE_CASE).find(value) ?: return null
@@ -4057,7 +5176,8 @@ internal class MeloWareLanDiscovery(context: Context) {
     private var publishPort = -1
     private var publishToken: String? = null
     private var browser: NsdManager.DiscoveryListener? = null
-    private val resolving = ConcurrentHashMap.newKeySet<String>()
+    private val resolving: MutableSet<String> =
+        Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     fun advertise(port: Int, token: String) {
         if (port <= 0 || token.length != 32) return
@@ -4304,8 +5424,9 @@ private object LrclibLyricsRepository {
     private fun request(url: String): Pair<Int, String> {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
-        connection.connectTimeout = 12_000
-        connection.readTimeout = 18_000
+        // Give a slow first connection more time before the UI shows an error.
+        connection.connectTimeout = 16_000
+        connection.readTimeout = 26_000
         connection.instanceFollowRedirects = true
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("User-Agent", CLIENT_ID)
@@ -4379,29 +5500,87 @@ private object LrclibLyricsRepository {
         )
     }
 
+    /** Supports standard line-timed LRC and optional enhanced LRC inline word tags. */
     private fun parseSyncedLyrics(raw: String): List<LyricLine> {
-        val timestampRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?]")
+        val lineTimestampRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?]")
         val output = mutableListOf<LyricLine>()
         raw.lineSequence().forEach { sourceLine ->
-            val matches = timestampRegex.findAll(sourceLine).toList()
+            val matches = lineTimestampRegex.findAll(sourceLine).toList()
             if (matches.isEmpty()) return@forEach
-            val text = sourceLine.substringAfterLast(']').trim()
+            val rawText = sourceLine.substring(matches.last().range.last + 1)
+            val initialTime = parseLrcTimestamp(matches.first()) ?: return@forEach
+            val (text, inlineWordTimes) = parseInlineLyricWords(rawText, initialTime)
             if (text.isBlank()) return@forEach
-            matches.forEach { match ->
-                val minutes = match.groupValues[1].toLongOrNull()
-                val seconds = match.groupValues[2].toLongOrNull()
-                if (minutes != null && seconds != null) {
-                    val fraction = match.groupValues.getOrNull(3).orEmpty()
-                    val fractionMs = when (fraction.length) {
-                        1 -> fraction.toLongOrNull()?.times(100L) ?: 0L
-                        2 -> fraction.toLongOrNull()?.times(10L) ?: 0L
-                        else -> fraction.take(3).padEnd(3, '0').toLongOrNull() ?: 0L
+            matches.forEach timestampLoop@ { match ->
+                val timeMs = parseLrcTimestamp(match) ?: return@timestampLoop
+                // Repeated [time] tags should shift the inline relative timing as well.
+                val adjustedWords = if (timeMs == initialTime) inlineWordTimes else {
+                    inlineWordTimes.map { word ->
+                        word.copy(timestampMs = (word.timestampMs + timeMs - initialTime).coerceAtLeast(0L))
                     }
-                    output += LyricLine((minutes * 60L + seconds) * 1000L + fractionMs, text)
                 }
+                output += LyricLine(timeMs, text, adjustedWords)
             }
         }
         return output.sortedBy { it.timestampMs ?: Long.MAX_VALUE }
+    }
+
+    private fun parseLrcTimestamp(match: MatchResult): Long? {
+        val minute = match.groupValues[1].toLongOrNull() ?: return null
+        val second = match.groupValues[2].toLongOrNull() ?: return null
+        if (second >= 60L) return null
+        val fraction = match.groupValues.getOrNull(3).orEmpty()
+        val milliseconds = when (fraction.length) {
+            0 -> 0L
+            1 -> (fraction.toLongOrNull() ?: 0L) * 100L
+            2 -> (fraction.toLongOrNull() ?: 0L) * 10L
+            else -> fraction.take(3).padEnd(3, '0').toLongOrNull() ?: 0L
+        }
+        return (minute * 60L + second) * 1000L + milliseconds
+    }
+
+    /** Removes <time> markers and maps each word to its best available timestamp. */
+    private fun parseInlineLyricWords(rawText: String, lineStartMs: Long): Pair<String, List<LyricWordTiming>> {
+        val markerRegex = Regex("<(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?>")
+        val markers = mutableListOf<Pair<Int, Long>>()
+        val stripped = StringBuilder()
+        var lastOffset = 0
+        markerRegex.findAll(rawText).forEach { marker ->
+            stripped.append(rawText, lastOffset, marker.range.first)
+            parseLrcTimestamp(marker)?.let { millis -> markers += stripped.length to millis }
+            lastOffset = marker.range.last + 1
+        }
+        stripped.append(rawText, lastOffset, rawText.length)
+        val untrimmed = stripped.toString()
+        val trimStart = untrimmed.indexOfFirst { !it.isWhitespace() }
+        if (trimStart < 0) return "" to emptyList()
+        val text = untrimmed.trim()
+        if (markers.isEmpty()) return text to emptyList()
+
+        val adjustedMarkers = markers.map { (offset, millis) ->
+            (offset - trimStart).coerceAtLeast(0) to millis
+        }
+        val words = Regex("\\S+").findAll(text).toList()
+        if (words.isEmpty()) return text to emptyList()
+
+        val markerForWord = words.map { word ->
+            adjustedMarkers.indexOfLast { it.first <= word.range.first }
+        }
+        val indicesByMarker = words.indices.groupBy { markerForWord[it] }
+        val wordTimes = words.mapIndexed { wordIndex, word ->
+            val markerIndex = markerForWord[wordIndex]
+            val markerTime = if (markerIndex >= 0) adjustedMarkers[markerIndex].second else lineStartMs
+            val nextMarkerTime = adjustedMarkers.getOrNull(markerIndex + 1)?.second
+            val group = indicesByMarker[markerIndex].orEmpty()
+            val withinGroup = group.indexOf(wordIndex).coerceAtLeast(0)
+            val time = if (nextMarkerTime != null && nextMarkerTime > markerTime) {
+                markerTime + (nextMarkerTime - markerTime) * withinGroup / group.size.coerceAtLeast(1)
+            } else {
+                markerTime + withinGroup * 320L
+            }
+            LyricWordTiming(word.range.first, time.coerceAtLeast(0L))
+        }
+        return text to wordTimes
     }
 
     private fun cleanTrackName(value: String): String = value
