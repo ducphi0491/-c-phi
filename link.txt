@@ -1,26 +1,23 @@
-=46604080&wv_count=1&ad_mem_tier=6&rdps=10800&_cv=263933029&is_lat=false&blob=ABPQqLGZn2TBnK44Tl8tEHNAxLMyDDfPvFePwuG_5fmU8UY0Xw-PyWAlYja0E0QkUk60-9Q9qS1bUvrdAOVMe5CETvpkQuiwb9pBMP8M6xdKg2_gcWlOXMa651LY__e5kHLa54odO2fCfx88Fdo1LPLRInnlLhTreOwLTC4RGgPnJx85jwDQgJVQO_TKMb-YULeeld-SKyiTlWcZZZy48ShytoKhQvZlGTW8kkLGOPUff6opnL4oAFw2CuyBlPHSBOA-Cl3nOWskxYK82jaNnTenhIOfycGsjICctCdhA4qZ86uz-JIfhOZF5W6MCSmkk3ul1ggyzTE4sBUePzedxMEGMnrs_aI3dImraoAZzWY2It0rV3gPkKooNdXiUM-xMvA1s9VtKj6Ja8DWNdixfqu-Ga6jbTa39YuiPiqmTdXvchKZhhhgLMpOuXV7vw&capsbf=7FFFFFEE&adk=1671180534&jsv=sdk_20190107_RC02-production-sdk_20261005_RC00#eid=318500618%252C318486317%252C318491267%252C318483611%252C318484497%252C318523783%252C318529671%252C95401396%252C318503827%252C318512169%252C318515546%252C318529411%252C318529904&format=368x58_as&heap_free=6308680&heap_max=268435456&heap_total=46604080&js=afma-sdk-a-v263500999.262180000.1&msid=ducphi.tunnerinstrument&preqs=1&seq_num=2&target_api=36
+Hi Phi,
 
-HTTP/1.1 403 Forbidden
-Ad response headers
-x-afma-content-url-opted-out: true
-alt-svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
-server: cafe
-x-afma-test-request: true
-x-content-type-options: nosniff
-p3p: policyref="https://googleads.g.doubleclick.net/pagead/gcn_p3p_.xml", CP="CURa ADMa DEVa TAIo PSAo PSDo OUR IND UNI PUR INT DEM STA PRE COM NAV OTC NOI DSP COR"
-x-android-received-millis: 1792117764418
-x-afma-content-vertical-opted-out: true
-date: Fri, 16 Oct 2026 02:29:24 GMT
-x-android-selected-protocol: http/1.1
-x-afma-gws-query-id: BIzRauauKLz3z7sPgcGwmQ4
-timing-allow-origin: *
-x-android-response-source: NETWORK 403
-cross-origin-resource-policy: cross-origin
-x-afma-analytics-personalization: true
-x-android-sent-millis: 1792117764338
-content-length: 0
-x-afma-on-device-brand-safety-opted-out: true
-x-xss-protection: 0
-x-afma-use-https: false
-content-type: text/html; charset=UTF-8
-x-afma-test-inspector-gesture: shake
+Thank you for reaching out to Mobile Ads SDK Support team.
+
+I understand that your banner ad unit (ca-app-pub-3156289270309336/4491022655) in Tuner Tools returns HTTP 403 responses and unfilled states on both physical devices and emulators, while Google test ad units display successfully.
+
+Here is clarification regarding this behavior based on an inspection of your account configuration:
+
+Upon reviewing your account configuration, the ad unit was created with the Partner Bidding serving type.
+
+Partner Bidding ad units are designed exclusively for third-party mediation platforms where Google participates as a real-time bidder. When this option is selected, the ad unit is restricted from delivering ads when requested directly through the Google Mobile Ads SDK or within standard AdMob Network requests.
+
+Because the serving type of an ad unit is permanent once created, you will need to set up a standard ad unit in your AdMob account and ensure the Partner bidding option is left unchecked. Once created, update your application code with the new ad unit identifier.
+
+For reference, you can review the official guides on understanding ad unit serving types and ad units, ad formats, and ad types.
+
+After making these changes, if any unexpected behavior persists, please let me know and I will look into it.
+
+Best,
+Ranjith
+Sellside Support
+
+© 2026 Google LLC, 
