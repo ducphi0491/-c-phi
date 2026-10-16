@@ -11,7 +11,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -33,14 +32,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -52,7 +54,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.sin
 
 /**
@@ -145,7 +146,7 @@ fun MeloWaveLaunchSplash(onFinished: () -> Unit) {
                     for (step in 1..80) {
                         val x = width * step / 80f
                         val angle = (x / width * (2.2f + layer * 0.27f) * PI.toFloat() +
-                            pulse * (0.42f - layer * 0.11f)).toDouble()
+                                pulse * (0.42f - layer * 0.11f)).toDouble()
                         lineTo(x, baseline + sin(angle).toFloat() * amplitude)
                     }
                     lineTo(width, height)
@@ -176,53 +177,24 @@ fun MeloWaveLaunchSplash(onFinished: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Keep the original 220dp layout slot so the splash's text and spectrum
+            // stay in their existing positions. The old circular spinner is gone.
             Box(modifier = Modifier.size(220.dp), contentAlignment = Alignment.Center) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val strokePx = 2.5.dp.toPx()
-                    val ringInset = 10.dp.toPx()
-                    drawCircle(
-                        color = Color(0x503C56EE),
-                        radius = min(size.width, size.height) / 2f - ringInset,
-                        style = Stroke(width = 1.3.dp.toPx())
-                    )
-                    drawArc(
-                        brush = Brush.sweepGradient(
-                            listOf(
-                                Color(0xFFDF40EA),
-                                Color(0xFF9351FA),
-                                Color(0xFF06BCF4),
-                                Color(0x00A855F7)
-                            )
-                        ),
-                        startAngle = pulse * 180f / PI.toFloat(),
-                        sweepAngle = 103f,
-                        useCenter = false,
-                        topLeft = Offset(ringInset, ringInset),
-                        size = Size(size.width - ringInset * 2f, size.height - ringInset * 2f),
-                        style = Stroke(width = strokePx, cap = StrokeCap.Round)
-                    )
-                }
+                val logoShape = RoundedCornerShape(34.dp)
                 Box(
                     modifier = Modifier
                         .size(150.dp)
-                        .shadow(18.dp, RoundedCornerShape(34.dp), clip = false)
-                        .clip(RoundedCornerShape(34.dp))
+                        .shadow(18.dp, logoShape, clip = false)
+                        .clip(logoShape)
                         .background(
                             Brush.linearGradient(
                                 listOf(Color(0xFF200B48), Color(0xFF090D2B), Color(0xFF07182D))
                             )
-                        )
-                        .border(
-                            width = 1.dp,
-                            brush = Brush.linearGradient(
-                                listOf(Color(0xFFA44AFF), Color(0xFF297FE9))
-                            ),
-                            shape = RoundedCornerShape(34.dp)
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     val context = LocalContext.current
-                    // ImageView handles adaptive and bitmap launcher icons alike.
+                    // Use the real launcher icon: no replacement PNG and no new assets.
                     val appIcon = remember(context) {
                         runCatching {
                             context.packageManager.getApplicationIcon(context.packageName)
@@ -238,6 +210,86 @@ fun MeloWaveLaunchSplash(onFinished: () -> Unit) {
                             },
                             modifier = Modifier.fillMaxSize()
                         )
+                    }
+
+                    // The seven-colour loading trail moves *on the actual rounded
+                    // square border of the logo*, not on a separate circular ring.
+                    // Compose PathMeasure follows every straight edge and corner.
+                    Canvas(modifier = Modifier.matchParentSize()) {
+                        val lineWidth = 3.2.dp.toPx()
+                        val inset = lineWidth / 2f + 1.1.dp.toPx()
+                        val radius = (34.dp.toPx() - inset).coerceAtLeast(0f)
+                        val roundBorder = Path().apply {
+                            addRoundRect(
+                                RoundRect(
+                                    left = inset,
+                                    top = inset,
+                                    right = size.width - inset,
+                                    bottom = size.height - inset,
+                                    topLeftCornerRadius = CornerRadius(radius),
+                                    topRightCornerRadius = CornerRadius(radius),
+                                    bottomRightCornerRadius = CornerRadius(radius),
+                                    bottomLeftCornerRadius = CornerRadius(radius)
+                                )
+                            )
+                        }
+                        drawPath(
+                            path = roundBorder,
+                            color = Color(0x885A5CB9),
+                            style = Stroke(width = 1.5.dp.toPx())
+                        )
+
+                        val measure = PathMeasure().apply { setPath(roundBorder, true) }
+                        val perimeter = measure.length
+                        if (perimeter > 0f) {
+                            // Seven visibly different rainbow colours, interpolated
+                            // across the travelling highlight for a smooth animation.
+                            val rainbow = listOf(
+                                Color(0xFFFF4268), // Red
+                                Color(0xFFFF9D36), // Orange
+                                Color(0xFFFFE64D), // Yellow
+                                Color(0xFF47E879), // Green
+                                Color(0xFF24DBE9), // Cyan
+                                Color(0xFF4383FF), // Blue
+                                Color(0xFFBB5DFF)  // Violet
+                            )
+                            val position = (pulse / (2f * PI.toFloat())) * perimeter
+                            val trailLength = perimeter * 0.34f
+                            val pieces = 42
+                            val brightStyle = Stroke(width = lineWidth, cap = StrokeCap.Round)
+                            val glowStyle = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
+
+                            for (index in 0 until pieces) {
+                                val progress = (index + 0.5f) / pieces
+                                val huePoint = progress * (rainbow.size - 1)
+                                val first = huePoint.toInt().coerceIn(0, rainbow.size - 2)
+                                val hue = lerp(rainbow[first], rainbow[first + 1], huePoint - first)
+                                val tailFade = 0.24f + progress * 0.76f
+                                val from = position - trailLength + index * trailLength / pieces
+                                val to = position - trailLength + (index + 1) * trailLength / pieces
+                                val wrappedFrom = ((from % perimeter) + perimeter) % perimeter
+                                val wrappedTo = ((to % perimeter) + perimeter) % perimeter
+                                val segment = Path()
+                                if (wrappedFrom < wrappedTo) {
+                                    measure.getSegment(wrappedFrom, wrappedTo, segment, true)
+                                } else {
+                                    measure.getSegment(wrappedFrom, perimeter, segment, true)
+                                    if (wrappedTo > 0f) {
+                                        measure.getSegment(0f, wrappedTo, segment, true)
+                                    }
+                                }
+                                drawPath(
+                                    path = segment,
+                                    color = hue.copy(alpha = tailFade * 0.30f),
+                                    style = glowStyle
+                                )
+                                drawPath(
+                                    path = segment,
+                                    color = hue.copy(alpha = tailFade),
+                                    style = brightStyle
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -284,7 +336,7 @@ fun MeloWaveLaunchSplash(onFinished: () -> Unit) {
                     val envelope = 1f - 0.78f * side
                     val motion = abs(
                         sin((pulse * 1.55f + bar * 0.57f).toDouble()) *
-                            sin((pulse * 0.64f - bar * 0.19f).toDouble())
+                                sin((pulse * 0.64f - bar * 0.19f).toDouble())
                     ).toFloat()
                     val heightPx = 5.dp.toPx() + maxAmplitude * envelope * (0.19f + 0.79f * motion)
                     val x = spacing * (bar + 1)
