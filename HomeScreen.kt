@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
@@ -45,14 +46,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.CompareArrows
+import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -77,6 +81,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -105,7 +115,8 @@ internal fun HomeScreen(
     val recommended = controller.recommendations()
     val driveSongs = controller.newlyAddedFromDrive()
     var showOnlineSearch by remember { mutableStateOf(false) }
-    var showLaptopMusic by remember { mutableStateOf(false) }
+    var showNetworkMenu by remember { mutableStateOf(false) }
+    var activeAudioTool by remember { mutableStateOf<AudioToolMode?>(null) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -127,12 +138,15 @@ internal fun HomeScreen(
                 .padding(padding)
                 .statusBarsPadding()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(13.dp)
         ) {
             item {
                 HomeHeader(
+                    accountInitial = controller.personalDriveAccountEmail
+                        ?.firstOrNull()?.uppercaseChar()?.toString() ?: "M",
                     onLogoFiveTap = { showOnlineSearch = true },
+                    onOpenAccount = onOpenPersonalDrive,
                     onSettings = onSettings
                 )
             }
@@ -160,23 +174,52 @@ internal fun HomeScreen(
             }
 
             item {
+                // One entry point for all 4 LAN / Internet connection methods.
                 Surface(
-                    modifier = Modifier.fillMaxWidth().clickable { showLaptopMusic = true },
-                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { showNetworkMenu = true },
+                    shape = RoundedCornerShape(18.dp),
                     color = colors.card,
                     border = BorderStroke(1.dp, colors.border)
                 ) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Computer, null, tint = colors.purpleBright,
-                            modifier = Modifier.size(26.dp))
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(46.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(colors.purple.copy(alpha = 0.15f))
+                                .border(
+                                    BorderStroke(1.dp, colors.purple.copy(alpha = 0.36f)),
+                                    RoundedCornerShape(14.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            TwoPhonesTransferIcon(
+                                tint = colors.purpleBright,
+                                modifier = Modifier.size(33.dp)
+                            )
+                        }
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Nhạc từ máy tính qua Wi-Fi", fontWeight = FontWeight.Bold,
-                                color = colors.textPrimary)
-                            Text("Mở Chrome trên PC · Nghe online hoặc tải bài hát",
-                                fontSize = 11.sp, color = colors.textSecondary)
+                            Text(
+                                mwString("home.network_title", "Lấy nhạc qua mạng"),
+                                fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                mwString("home.network_desc", "Kết nối điện thoại và máy tính qua LAN/Wi-Fi hoặc Internet"),
+                                fontSize = 11.sp,
+                                color = colors.textSecondary,
+                                lineHeight = 15.sp
+                            )
                         }
-                        Icon(Icons.Rounded.PlayArrow, null, tint = colors.purpleBright)
+                        Icon(
+                            Icons.Rounded.KeyboardArrowRight,
+                            contentDescription = mwString("home.open_connections", "Mở menu kết nối"),
+                            tint = colors.purpleBright
+                        )
                     }
                 }
             }
@@ -184,8 +227,8 @@ internal fun HomeScreen(
             if (recent.isNotEmpty()) {
                 item {
                     SectionTitle(
-                        title = "Nghe gần đây",
-                        actionText = "Xem tất cả",
+                        title = mwString("home.recent", "Nghe gần đây"),
+                        actionText = mwString("home.view_all", "Xem tất cả"),
                         onAction = { controller.openLibrary(LibrarySource.ALL) }
                     )
                 }
@@ -206,11 +249,20 @@ internal fun HomeScreen(
                 }
             }
 
+            // Compact full-width audio tools below the recently-played section.
+            // All operations remain offline and keep their existing callbacks.
+            item {
+                HomeAudioToolsPanel(
+                    onConvert = { activeAudioTool = AudioToolMode.CONVERT },
+                    onExtract = { activeAudioTool = AudioToolMode.EXTRACT }
+                )
+            }
+
             if (recommended.isNotEmpty()) {
                 item {
                     SectionTitle(
-                        title = "Đề xuất cho bạn",
-                        actionText = "Thư viện",
+                        title = mwString("home.recommended", "Đề xuất cho bạn"),
+                        actionText = mwString("nav.library", "Thư viện"),
                         onAction = { controller.openLibrary() }
                     )
                 }
@@ -234,8 +286,8 @@ internal fun HomeScreen(
             if (driveSongs.isNotEmpty()) {
                 item {
                     SectionTitle(
-                        title = "Mới thêm từ Drive",
-                        actionText = "Xem tất cả",
+                        title = mwString("home.new_drive", "Mới thêm từ Drive"),
+                        actionText = mwString("home.view_all", "Xem tất cả"),
                         onAction = { controller.openLibrary(LibrarySource.PERSONAL_DRIVE) }
                     )
                 }
@@ -255,9 +307,9 @@ internal fun HomeScreen(
             if (recent.isEmpty() && recommended.isEmpty() && driveSongs.isEmpty()) {
                 item {
                     EmptyLibraryState(
-                        title = "Chưa có bài hát",
-                        description = "Quét nhạc trên điện thoại hoặc kết nối Google Drive để bắt đầu.",
-                        buttonText = "Quét nhạc trên máy",
+                        title = mwString("home.empty_title", "Chưa có bài hát"),
+                        description = mwString("home.empty_desc", "Quét nhạc trên điện thoại hoặc kết nối Google Drive để bắt đầu."),
+                        buttonText = mwString("home.scan_local", "Quét nhạc trên máy"),
                         onButton = onScanLocal
                     )
                 }
@@ -265,8 +317,18 @@ internal fun HomeScreen(
         }
     }
 
-    if (showLaptopMusic) {
-        MeloWareLaptopDialog(controller = controller, onDismiss = { showLaptopMusic = false })
+    if (showNetworkMenu) {
+        MeloWareNetworkMenuDialog(
+            controller = controller,
+            onDismiss = { showNetworkMenu = false }
+        )
+    }
+
+    activeAudioTool?.let { mode ->
+        MeloWaveAudioToolDialog(
+            mode = mode,
+            onDismiss = { activeAudioTool = null }
+        )
     }
 
     if (showOnlineSearch) {
@@ -278,8 +340,140 @@ internal fun HomeScreen(
 }
 
 @Composable
+private fun HomeAudioToolsPanel(
+    onConvert: () -> Unit,
+    onExtract: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(21.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, colors.purple.copy(alpha = if (colors.isDark) 0.40f else 0.24f))
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            lerp(colors.card, colors.purple, if (colors.isDark) 0.22f else 0.06f),
+                            lerp(colors.card, colors.backgroundSoft, 0.55f),
+                            lerp(colors.card, colors.purpleBright, if (colors.isDark) 0.12f else 0.05f)
+                        )
+                    )
+                )
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = colors.purpleBright,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    mwString("audio_tools.section", "Công cụ âm thanh"),
+                    modifier = Modifier.weight(1f),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Surface(
+                    shape = RoundedCornerShape(30.dp),
+                    color = colors.green.copy(alpha = if (colors.isDark) 0.13f else 0.08f),
+                    border = BorderStroke(1.dp, colors.green.copy(alpha = 0.36f))
+                ) {
+                    Text(
+                        text = "Offline",
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                        color = colors.green,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+            HomeAudioToolRow(
+                title = mwString("audio_tools.convert", "Đổi định dạng"),
+                subtitle = "MP3 · M4A · WAV",
+                icon = Icons.Rounded.CompareArrows,
+                tint = colors.purpleBright,
+                onClick = onConvert
+            )
+            HomeAudioToolRow(
+                title = mwString("audio_tools.extract", "Tách âm thanh từ video"),
+                subtitle = mwString("audio_tools.from_video", "Từ video trong máy"),
+                icon = Icons.Rounded.Movie,
+                tint = colors.magenta,
+                onClick = onExtract
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeAudioToolRow(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(15.dp),
+        color = colors.card.copy(alpha = if (colors.isDark) 0.79f else 0.87f),
+        border = BorderStroke(1.dp, colors.border.copy(alpha = 0.72f))
+    ) {
+        Row(
+            modifier = Modifier.padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(45.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(tint.copy(alpha = if (colors.isDark) 0.28f else 0.12f))
+                    .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(13.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(27.dp))
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    color = colors.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    subtitle,
+                    color = colors.textSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colors.purpleBright,
+                modifier = Modifier.size(23.dp)
+            )
+        }
+    }
+}
+
+@Composable
 private fun HomeHeader(
+    accountInitial: String,
     onLogoFiveTap: () -> Unit,
+    onOpenAccount: () -> Unit,
     onSettings: () -> Unit
 ) {
     val colors = LocalMusicColors.current
@@ -288,13 +482,8 @@ private fun HomeHeader(
 
     fun registerLogoTap() {
         val now = SystemClock.elapsedRealtime()
-        logoTapCount = if (now - lastLogoTapAt <= 1_800L) {
-            logoTapCount + 1
-        } else {
-            1
-        }
+        logoTapCount = if (now - lastLogoTapAt <= 1_800L) logoTapCount + 1 else 1
         lastLogoTapAt = now
-
         if (logoTapCount >= 5) {
             logoTapCount = 0
             lastLogoTapAt = 0L
@@ -303,53 +492,49 @@ private fun HomeHeader(
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(46.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.weight(1f).clickable(onClick = ::registerLogoTap),
+            verticalArrangement = Arrangement.Center
         ) {
-            Surface(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clickable(onClick = ::registerLogoTap),
-                shape = RoundedCornerShape(14.dp),
-                color = Color.Black,
-                border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.62f)),
-                shadowElevation = 7.dp
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(Color.Black)
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.logo),
-                        contentDescription = "Logo MeloWare",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-            Spacer(Modifier.width(11.dp))
-            Column {
-                GradientText(
-                    text = "MeloWare",
-                    brush = Brush.horizontalGradient(listOf(colors.purpleBright, colors.magenta)),
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                Text(
-                    text = "Âm nhạc của bạn",
-                    color = colors.textSecondary,
-                    fontSize = 16.sp
-                )
-            }
+            GradientText(
+                text = "MeloWave",
+                brush = Brush.horizontalGradient(listOf(colors.textPrimary, colors.purpleBright)),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+            Text(
+                text = mwString("home.tagline", "Âm nhạc của bạn"),
+                color = colors.textSecondary,
+                fontSize = 10.5.sp,
+                maxLines = 1
+            )
         }
-        IconButton(onClick = onSettings) {
-            Icon(Icons.Rounded.Settings, contentDescription = "Cài đặt", tint = colors.textPrimary)
+        IconButton(onClick = onSettings, modifier = Modifier.size(38.dp)) {
+            Icon(
+                Icons.Rounded.Settings,
+                contentDescription = mwString("settings.title", "Cài đặt"),
+                tint = colors.textSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Spacer(Modifier.width(5.dp))
+        Box(
+            modifier = Modifier
+                .size(35.dp)
+                .clip(CircleShape)
+                .background(Brush.linearGradient(listOf(colors.purple, colors.magenta)))
+                .clickable(onClick = onOpenAccount),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = accountInitial,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
         }
     }
 }
@@ -370,10 +555,7 @@ private fun HomeSearchBar(
         if (result.resultCode == Activity.RESULT_OK) {
             val spokenText = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()
-                ?.trim()
-                .orEmpty()
-
+                ?.firstOrNull()?.trim().orEmpty()
             if (spokenText.isNotBlank()) {
                 query = spokenText
                 currentOnSearch(spokenText)
@@ -381,87 +563,94 @@ private fun HomeSearchBar(
         }
     }
 
+    val voicePrompt = mwString("home.voice_prompt", "Nói tên bài hát, ca sĩ hoặc album")
+    val voiceUnavailable = mwString("home.voice_unavailable", "Thiết bị chưa có dịch vụ nhận dạng giọng nói.")
+
     fun startVoiceSearch() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Nói tên bài hát, ca sĩ hoặc album")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, voicePrompt)
         }
-
         try {
             speechLauncher.launch(intent)
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(
-                context,
-                "Thiết bị chưa có dịch vụ nhận dạng giọng nói.",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(context, voiceUnavailable, Toast.LENGTH_LONG).show()
         }
     }
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = colors.cardRaised,
+        modifier = Modifier.fillMaxWidth().height(51.dp),
+        shape = RoundedCornerShape(23.dp),
+        color = colors.cardRaised.copy(alpha = 0.90f),
         border = BorderStroke(1.dp, colors.border)
     ) {
         Row(
-            modifier = Modifier.padding(start = 16.dp, end = 7.dp, top = 9.dp, bottom = 9.dp),
+            modifier = Modifier.padding(start = 5.dp, end = 5.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            IconButton(
+                onClick = { if (query.isNotBlank()) currentOnSearch(query) },
+                modifier = Modifier.size(37.dp)
+            ) {
+                Icon(
+                    Icons.Rounded.Search,
+                    contentDescription = mwString("home.search", "Tìm"),
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
             BasicTextField(
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.weight(1f),
-                textStyle = TextStyle(color = colors.textPrimary, fontSize = 14.sp),
+                textStyle = TextStyle(color = colors.textPrimary, fontSize = 13.sp),
                 singleLine = true,
                 cursorBrush = SolidColor(colors.purpleBright),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(
-                    onSearch = {
-                        if (query.isNotBlank()) currentOnSearch(query)
-                    }
-                ),
+                keyboardActions = KeyboardActions(onSearch = {
+                    if (query.isNotBlank()) currentOnSearch(query)
+                }),
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (query.isBlank()) {
                             Text(
-                                "Tìm bài hát, ca sĩ, album, thể loại...",
+                                mwString("home.search_hint", "Tìm bài hát, ca sĩ, album, thể loại..."),
                                 color = colors.textMuted,
-                                fontSize = 14.sp
+                                fontSize = 12.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         inner()
                     }
                 }
             )
-            IconButton(onClick = ::startVoiceSearch, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Mic,
-                    contentDescription = "Tìm kiếm bằng giọng nói",
-                    tint = colors.purpleBright,
-                    modifier = Modifier.size(21.dp)
-                )
-            }
-            IconButton(
-                onClick = { if (query.isNotBlank()) currentOnSearch(query) },
-                modifier = Modifier.size(36.dp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(colors.purple.copy(alpha = if (colors.isDark) 0.26f else 0.12f)),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Rounded.Search,
-                    contentDescription = "Tìm",
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(21.dp)
-                )
+                IconButton(onClick = ::startVoiceSearch, modifier = Modifier.size(39.dp)) {
+                    Icon(
+                        Icons.Rounded.Mic,
+                        contentDescription = mwString("home.voice_search", "Tìm kiếm bằng giọng nói"),
+                        tint = colors.purpleBright,
+                        modifier = Modifier.size(23.dp)
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * Theme-reactive hero. It deliberately uses no fixed headphone bitmap:
+ * the background, glow and headphone parts are repainted from LocalMusicColors.
+ */
 @Composable
 private fun HeroMusicCard(
     onOpenLocalFolders: () -> Unit,
@@ -469,81 +658,105 @@ private fun HeroMusicCard(
     onOpenPublicDrive: () -> Unit
 ) {
     val colors = LocalMusicColors.current
+    val shape = RoundedCornerShape(22.dp)
+    val heroColors = if (colors.isDark) {
+        listOf(
+            lerp(colors.background, colors.purple, 0.38f),
+            lerp(colors.backgroundSoft, colors.magenta, 0.35f),
+            lerp(colors.backgroundSoft, colors.purpleBright, 0.37f)
+        )
+    } else {
+        listOf(
+            lerp(colors.card, colors.purple, 0.11f),
+            lerp(colors.card, colors.magenta, 0.13f),
+            lerp(colors.card, colors.purpleBright, 0.18f)
+        )
+    }
+
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(224.dp),
-        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth().height(212.dp),
+        shape = shape,
         color = Color.Transparent,
-        border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.55f))
+        border = BorderStroke(1.dp, colors.purple.copy(alpha = if (colors.isDark) 0.76f else 0.36f))
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        if (colors.purple == (if (colors.isDark) DarkMusicColors.purple else LightMusicColors.purple)) {
-                            listOf(Color(0xFF15115B), Color(0xFF3A145D), Color(0xFF0C4B70))
-                        } else {
-                            listOf(
-                                androidx.compose.ui.graphics.lerp(colors.purple, Color.Black, 0.60f),
-                                androidx.compose.ui.graphics.lerp(colors.magenta, Color.Black, 0.65f),
-                                androidx.compose.ui.graphics.lerp(colors.blue, Color.Black, 0.70f)
-                            )
-                        }
-                    )
-                )
-                .padding(horizontal = 18.dp, vertical = 17.dp)
+                .clip(shape)
+                .background(Brush.linearGradient(heroColors))
         ) {
-            Box(
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(colors.magenta.copy(alpha = if (colors.isDark) 0.35f else 0.13f), Color.Transparent),
+                        center = Offset(w * 0.67f, h * 0.41f),
+                        radius = w * 0.47f
+                    ),
+                    center = Offset(w * 0.67f, h * 0.41f),
+                    radius = w * 0.47f
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(colors.purpleBright.copy(alpha = if (colors.isDark) 0.24f else 0.12f), Color.Transparent),
+                        center = Offset(w * 0.94f, h * 0.22f),
+                        radius = w * 0.32f
+                    ),
+                    center = Offset(w * 0.94f, h * 0.22f),
+                    radius = w * 0.32f
+                )
+            }
+
+            // Draw the earphones into a vector canvas, with no theme-specific PNGs.
+            HeroHeadphonesArtwork(
                 modifier = Modifier
-                    .size(190.dp)
-                    .align(Alignment.CenterEnd)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(colors.magenta.copy(alpha = 0.42f), Color.Transparent)
-                        )
-                    )
+                    .align(Alignment.TopEnd)
+                    .fillMaxWidth(0.56f)
+                    .height(150.dp)
+                    .offset(x = 8.dp, y = 0.dp)
             )
 
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 13.dp, vertical = 13.dp)
+            ) {
                 Text(
-                    text = "Nhạc không\ngiới hạn",
-                    color = Color.White,
-                    fontSize = 28.sp,
+                    text = mwString("home.unlimited", "Nhạc không\ngiới hạn"),
+                    color = colors.textPrimary,
+                    fontSize = 25.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    lineHeight = 30.sp
+                    lineHeight = 27.sp,
+                    maxLines = 2
                 )
-                Spacer(Modifier.height(7.dp))
+                Spacer(Modifier.height(5.dp))
                 Text(
-                    text = "Nghe nhạc Offline và Google Drive\nchất lượng cao",
-                    color = Color.White.copy(alpha = 0.78f),
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp
+                    text = mwString("home.hero_desc", "Nghe nhạc Offline và Google Drive\nchất lượng cao"),
+                    modifier = Modifier.fillMaxWidth(0.67f),
+                    color = colors.textSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.weight(1f))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
                     HeroSourceAction(
-                        title = "Nhạc máy",
-                        subtitle = "Thư mục âm thanh",
+                        title = mwString("home.local_music", "Nhạc máy"),
                         sourceType = HeroSourceType.LOCAL_FOLDER,
                         onClick = onOpenLocalFolders,
                         modifier = Modifier.weight(1f)
                     )
                     HeroSourceAction(
                         title = "Google Drive",
-                        subtitle = "Drive của tôi",
                         sourceType = HeroSourceType.PERSONAL_DRIVE,
                         onClick = onOpenPersonalDrive,
                         modifier = Modifier.weight(1f)
                     )
                     HeroSourceAction(
-                        title = "Link Drive",
-                        subtitle = "Thư mục chia sẻ",
+                        title = mwString("home.drive_link", "Link Drive"),
                         sourceType = HeroSourceType.PUBLIC_LINK,
                         onClick = onOpenPublicDrive,
                         modifier = Modifier.weight(1f)
@@ -551,6 +764,132 @@ private fun HeroMusicCard(
                 }
             }
         }
+    }
+}
+
+/** Normalized 200x160 illustration. Its colors come exclusively from the active theme. */
+@Composable
+private fun HeroHeadphonesArtwork(modifier: Modifier = Modifier) {
+    val colors = LocalMusicColors.current
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        if (w <= 0f || h <= 0f) return@Canvas
+        val sx = w / 200f
+        val sy = h / 160f
+        val unit = minOf(sx, sy)
+        fun x(v: Float) = v * sx
+        fun y(v: Float) = v * sy
+        fun at(a: Float, b: Float) = Offset(x(a), y(b))
+        val deep = lerp(colors.background, colors.purple, 0.20f)
+        val shadow = if (colors.isDark) colors.background else lerp(colors.purple, Color.Black, 0.58f)
+        val rim = colors.purpleBright
+        val highlight = lerp(colors.purpleBright, Color.White, if (colors.isDark) 0.40f else 0.30f)
+        val light = lerp(colors.magenta, Color.White, 0.18f)
+
+        // Inner halo, plus faint reflected circles around the headset.
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(colors.purpleBright.copy(alpha = 0.28f), Color.Transparent),
+                center = at(110f, 85f), radius = x(92f)
+            ),
+            radius = x(92f), center = at(110f, 85f)
+        )
+        drawCircle(
+            color = colors.magenta.copy(alpha = 0.26f), radius = 2.5f * unit,
+            center = at(29f, 36f)
+        )
+        drawCircle(
+            color = highlight.copy(alpha = 0.50f), radius = 1.5f * unit,
+            center = at(187f, 29f)
+        )
+
+        val band = Path().apply {
+            moveTo(x(32f), y(119f))
+            cubicTo(x(12f), y(48f), x(48f), y(10f), x(101f), y(12f))
+            cubicTo(x(154f), y(9f), x(187f), y(51f), x(171f), y(122f))
+        }
+        // 3D headband: deep silhouette, accent midlayer, illuminated rim.
+        drawPath(band, color = shadow.copy(alpha = 0.64f), style = Stroke(width = 32f * unit, cap = StrokeCap.Round))
+        drawPath(
+            band,
+            brush = Brush.linearGradient(
+                listOf(colors.purple, colors.magenta, colors.purpleBright, colors.purple),
+                start = at(18f, 33f), end = at(189f, 134f)
+            ),
+            style = Stroke(width = 23f * unit, cap = StrokeCap.Round)
+        )
+        drawPath(band, color = deep.copy(alpha = 0.83f), style = Stroke(width = 13f * unit, cap = StrokeCap.Round))
+        drawPath(
+            band,
+            brush = Brush.linearGradient(
+                listOf(highlight.copy(alpha = 0.92f), colors.magenta.copy(alpha = 0.88f), rim.copy(alpha = 0.65f)),
+                start = at(26f, 10f), end = at(176f, 119f)
+            ),
+            style = Stroke(width = 3.6f * unit, cap = StrokeCap.Round)
+        )
+
+        // Metallic hinges underneath the padded ear cups.
+        drawRoundRect(
+            brush = Brush.horizontalGradient(listOf(deep, rim, shadow)),
+            topLeft = at(19f, 93f), size = Size(x(26f), y(35f)),
+            cornerRadius = CornerRadius(8f * unit)
+        )
+        drawRoundRect(
+            brush = Brush.horizontalGradient(listOf(shadow, rim, deep)),
+            topLeft = at(157f, 93f), size = Size(x(26f), y(35f)),
+            cornerRadius = CornerRadius(8f * unit)
+        )
+
+        // Two softly glowing earcups, with darker inner cushions for depth.
+        drawOval(
+            brush = Brush.linearGradient(listOf(colors.magenta, rim, colors.purple, deep)),
+            topLeft = at(8f, 101f), size = Size(x(56f), y(57f))
+        )
+        drawOval(
+            color = shadow.copy(alpha = 0.78f),
+            topLeft = at(19f, 111f), size = Size(x(32f), y(41f))
+        )
+        drawOval(
+            brush = Brush.linearGradient(listOf(rim.copy(alpha = 0.85f), deep, shadow)),
+            topLeft = at(23f, 115f), size = Size(x(22f), y(31f))
+        )
+        drawOval(
+            brush = Brush.linearGradient(listOf(highlight, colors.purpleBright, colors.magenta, deep)),
+            topLeft = at(139f, 98f), size = Size(x(58f), y(61f))
+        )
+        drawOval(
+            color = shadow.copy(alpha = 0.82f),
+            topLeft = at(152f, 108f), size = Size(x(32f), y(43f))
+        )
+        drawOval(
+            brush = Brush.linearGradient(listOf(colors.purpleBright, deep, shadow)),
+            topLeft = at(156f, 112f), size = Size(x(23f), y(34f))
+        )
+        drawOval(
+            color = highlight.copy(alpha = 0.76f),
+            topLeft = at(139f, 98f), size = Size(x(58f), y(61f)),
+            style = Stroke(width = 2.1f * unit)
+        )
+        drawOval(
+            color = light.copy(alpha = 0.66f),
+            topLeft = at(8f, 101f), size = Size(x(56f), y(57f)),
+            style = Stroke(width = 1.8f * unit)
+        )
+
+        // Luminous musical note inside the arch.
+        val noteTone = lerp(colors.magenta, Color.White, if (colors.isDark) 0.42f else 0.18f)
+        drawLine(noteTone, at(105f, 62f), at(105f, 101f), strokeWidth = 5.0f * unit, cap = StrokeCap.Round)
+        drawLine(noteTone, at(105f, 62f), at(136f, 54f), strokeWidth = 5.4f * unit, cap = StrokeCap.Round)
+        drawLine(noteTone, at(136f, 54f), at(136f, 92f), strokeWidth = 5.0f * unit, cap = StrokeCap.Round)
+        drawOval(
+            brush = Brush.linearGradient(listOf(highlight, colors.magenta)),
+            topLeft = at(88f, 94f), size = Size(x(20f), y(13f))
+        )
+        drawOval(
+            brush = Brush.linearGradient(listOf(highlight, colors.magenta)),
+            topLeft = at(119f, 84f), size = Size(x(20f), y(13f))
+        )
     }
 }
 
@@ -563,87 +902,67 @@ private enum class HeroSourceType {
 @Composable
 private fun HeroSourceAction(
     title: String,
-    subtitle: String,
     sourceType: HeroSourceType,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMusicColors.current
     Surface(
-        modifier = modifier
-            .height(66.dp)
-            .clickable(onClick = onClick),
+        modifier = modifier.height(66.dp).clickable(onClick = onClick),
         shape = RoundedCornerShape(15.dp),
-        color = Color(0xFF050B18).copy(alpha = 0.68f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+        color = if (colors.isDark) colors.background.copy(alpha = 0.85f)
+            else Color.White.copy(alpha = 0.91f),
+        border = BorderStroke(1.dp, if (colors.isDark) Color.White.copy(alpha = 0.15f) else colors.border)
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Box(
-                modifier = Modifier.size(31.dp),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.size(30.dp), contentAlignment = Alignment.Center) {
                 when (sourceType) {
                     HeroSourceType.LOCAL_FOLDER -> {
                         Surface(
                             modifier = Modifier.size(29.dp),
                             shape = RoundedCornerShape(9.dp),
-                            color = Color(0xFF123B5E),
+                            color = if (colors.isDark) Color(0xFF123B5E) else Color(0xFFDDF2FF),
                             border = BorderStroke(1.dp, Color(0xFF39BDF8).copy(alpha = 0.55f))
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Folder,
+                                    Icons.Rounded.Folder,
                                     contentDescription = null,
-                                    tint = Color(0xFF67D8FF),
+                                    tint = if (colors.isDark) Color(0xFF67D8FF) else Color(0xFF0078AD),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                     }
-
-                    HeroSourceType.PERSONAL_DRIVE -> {
-                        GoogleDriveLogo(modifier = Modifier.size(29.dp))
-                    }
-
+                    HeroSourceType.PERSONAL_DRIVE -> GoogleDriveLogo(Modifier.size(29.dp))
                     HeroSourceType.PUBLIC_LINK -> {
-                        GoogleDriveLogo(modifier = Modifier.size(29.dp))
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .size(14.dp),
-                            shape = CircleShape,
-                            color = colors.magenta,
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.72f))
+                        Box(
+                            modifier = Modifier.size(29.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(colors.purple.copy(alpha = if (colors.isDark) 0.43f else 0.13f))
+                                .border(1.dp, colors.purpleBright.copy(alpha = 0.55f), RoundedCornerShape(9.dp)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Link,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(9.dp)
-                                )
-                            }
+                            Icon(
+                                Icons.Rounded.Link,
+                                contentDescription = null,
+                                tint = colors.purpleBright,
+                                modifier = Modifier.size(21.dp)
+                            )
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(5.dp))
             Text(
                 text = title,
-                color = Color.White,
-                fontSize = 9.5.sp,
+                color = colors.textPrimary,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                color = Color.White.copy(alpha = 0.62f),
-                fontSize = 7.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -796,7 +1115,7 @@ private fun RecentSongCard(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Rounded.PlayArrow,
-                        contentDescription = "Phát",
+                        contentDescription = mwString("home.play", "Phát"),
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
@@ -1226,11 +1545,11 @@ private fun OnlineModeSelector(
             .background(
                 // Nền rãnh chìm phía ngoài hai nửa viên thuốc.
                 Brush.verticalGradient(
-                    listOf(
+                    if (colors.isDark) listOf(
                         Color(0xFF01040D),
                         Color(0xFF071020),
                         Color(0xFF0F2138)
-                    )
+                    ) else listOf(colors.cardRaised, colors.card, colors.backgroundSoft)
                 )
             )
             .border(
@@ -1287,7 +1606,7 @@ private fun OnlineModeButton(
         label = "onlineModeBottom"
     )
     val labelColor by animateColorAsState(
-        targetValue = if (selected) Color.White else Color(0xFFAFBCD3),
+        targetValue = if (selected) Color.White else if (colors.isDark) Color(0xFFAFBCD3) else colors.textSecondary,
         animationSpec = tween(durationMillis = 220),
         label = "onlineModeText"
     )
