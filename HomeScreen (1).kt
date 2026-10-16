@@ -1,8 +1,12 @@
 package duc_phi.music
 
 import android.app.Activity
+import android.graphics.Color as AndroidColor
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.Context
+import android.net.Uri
+import android.provider.Settings
 import android.os.SystemClock
 import android.speech.RecognizerIntent
 import android.widget.Toast
@@ -26,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
@@ -35,6 +40,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -45,6 +52,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CompareArrows
+import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
@@ -53,6 +62,9 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.NotificationsNone
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -62,6 +74,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,20 +89,39 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import java.util.Locale
+import java.text.DateFormat
+import java.util.Date
+import org.json.JSONArray
+import org.json.JSONObject
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import coil.compose.AsyncImage
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 internal fun HomeScreen(
@@ -98,7 +130,12 @@ internal fun HomeScreen(
     onOpenLocalFolders: () -> Unit,
     onOpenPersonalDrive: () -> Unit,
     onOpenPublicDrive: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    googleAccountEmail: String?,
+    googleAccountName: String?,
+    googleProfilePhotoUrl: String?,
+    onGoogleLogin: () -> Unit,
+    onGoogleLogout: () -> Unit
 ) {
     val colors = LocalMusicColors.current
     val recent = controller.recentForHome()
@@ -106,6 +143,22 @@ internal fun HomeScreen(
     val driveSongs = controller.newlyAddedFromDrive()
     var showOnlineSearch by remember { mutableStateOf(false) }
     var showNetworkMenu by remember { mutableStateOf(false) }
+    var activeAudioTool by remember { mutableStateOf<AudioToolMode?>(null) }
+    var showGoogleAccount by remember { mutableStateOf(false) }
+    var showNotifications by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    var unreadNotificationCount by remember { mutableIntStateOf(HomeNotificationStore.unreadCount(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // Refresh the unread badge when returning from another app or a notification.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                unreadNotificationCount = HomeNotificationStore.unreadCount(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -127,12 +180,22 @@ internal fun HomeScreen(
                 .padding(padding)
                 .statusBarsPadding()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(13.dp)
         ) {
             item {
                 HomeHeader(
+                    googleAccountEmail = googleAccountEmail,
+                    googleAccountName = googleAccountName,
+                    googleProfilePhotoUrl = googleProfilePhotoUrl,
+                    unreadNotifications = unreadNotificationCount,
                     onLogoFiveTap = { showOnlineSearch = true },
+                    onOpenAccount = { showGoogleAccount = true },
+                    onOpenNotifications = {
+                        HomeNotificationStore.markAllRead(context)
+                        unreadNotificationCount = 0
+                        showNotifications = true
+                    },
                     onSettings = onSettings
                 )
             }
@@ -153,61 +216,20 @@ internal fun HomeScreen(
 
             item {
                 HeroMusicCard(
+                    onOpenNetworkTransfer = { showNetworkMenu = true },
                     onOpenLocalFolders = onOpenLocalFolders,
                     onOpenPersonalDrive = onOpenPersonalDrive,
                     onOpenPublicDrive = onOpenPublicDrive
                 )
             }
 
+            // Keep the audio tools immediately after the source shortcuts,
+            // before the scrolling rows of recently played songs.
             item {
-                // One entry point for all 4 LAN / Internet connection methods.
-                Surface(
-                    modifier = Modifier.fillMaxWidth().clickable { showNetworkMenu = true },
-                    shape = RoundedCornerShape(16.dp),
-                    color = colors.card,
-                    border = BorderStroke(1.dp, colors.border)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(46.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(colors.purple.copy(alpha = 0.15f))
-                                .border(
-                                    BorderStroke(1.dp, colors.purple.copy(alpha = 0.36f)),
-                                    RoundedCornerShape(14.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            TwoPhonesTransferIcon(
-                                tint = colors.purpleBright,
-                                modifier = Modifier.size(33.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                mwString("home.network_title", "Lấy nhạc qua mạng"),
-                                fontWeight = FontWeight.Bold,
-                                color = colors.textPrimary
-                            )
-                            Text(
-                                mwString("home.network_desc", "Kết nối điện thoại và máy tính qua LAN/Wi-Fi hoặc Internet"),
-                                fontSize = 11.sp,
-                                color = colors.textSecondary,
-                                lineHeight = 15.sp
-                            )
-                        }
-                        Icon(
-                            Icons.Rounded.KeyboardArrowRight,
-                            contentDescription = mwString("home.open_connections", "Mở menu kết nối"),
-                            tint = colors.purpleBright
-                        )
-                    }
-                }
+                HomeAudioToolsPanel(
+                    onConvert = { activeAudioTool = AudioToolMode.CONVERT },
+                    onExtract = { activeAudioTool = AudioToolMode.EXTRACT }
+                )
             }
 
             if (recent.isNotEmpty()) {
@@ -301,17 +323,280 @@ internal fun HomeScreen(
         )
     }
 
+    activeAudioTool?.let { mode ->
+        MeloWaveAudioToolDialog(
+            mode = mode,
+            onDismiss = { activeAudioTool = null }
+        )
+    }
+
     if (showOnlineSearch) {
         OnlineSearchDialog(
             controller = controller,
             onDismiss = { showOnlineSearch = false }
         )
     }
+
+    if (showGoogleAccount) {
+        HomeGoogleAccountDialog(
+            email = googleAccountEmail,
+            name = googleAccountName,
+            photoUrl = googleProfilePhotoUrl,
+            onLogin = { showGoogleAccount = false; onGoogleLogin() },
+            onLogout = { showGoogleAccount = false; onGoogleLogout() },
+            onOpenDrive = { showGoogleAccount = false; onOpenPersonalDrive() },
+            onSettings = { showGoogleAccount = false; onSettings() },
+            onDismiss = { showGoogleAccount = false }
+        )
+    }
+
+    if (showNotifications) {
+        HomeNotificationsDialog(onDismiss = { showNotifications = false })
+    }
+}
+
+@Composable
+private fun HomeAudioToolsPanel(
+    onConvert: () -> Unit,
+    onExtract: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(21.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, colors.purple.copy(alpha = if (colors.isDark) 0.40f else 0.24f))
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            lerp(colors.card, colors.purple, if (colors.isDark) 0.22f else 0.06f),
+                            lerp(colors.card, colors.backgroundSoft, 0.55f),
+                            lerp(colors.card, colors.purpleBright, if (colors.isDark) 0.12f else 0.05f)
+                        )
+                    )
+                )
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = colors.purpleBright,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    mwString("audio_tools.section", "Công cụ âm thanh"),
+                    modifier = Modifier.weight(1f),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Surface(
+                    shape = RoundedCornerShape(30.dp),
+                    color = colors.green.copy(alpha = if (colors.isDark) 0.13f else 0.08f),
+                    border = BorderStroke(1.dp, colors.green.copy(alpha = 0.36f))
+                ) {
+                    Text(
+                        text = "Offline",
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                        color = colors.green,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+            // Hai công cụ nằm CÙNG MỘT HÀNG: tối ưu chiều cao trang chủ.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                HomeAudioToolCompactCard(
+                    title = mwString("audio_tools.convert", "Chuyển đổi nhạc"),
+                    subtitle = "MP3 · M4A · WAV",
+                    iconKind = HomeFeatureIconKind.CONVERT,
+                    onClick = onConvert,
+                    modifier = Modifier.weight(1f)
+                )
+                HomeAudioToolCompactCard(
+                    title = mwString("audio_tools.extract", "Tách âm thanh"),
+                    subtitle = mwString("audio_tools.from_video", "Từ video trong máy"),
+                    iconKind = HomeFeatureIconKind.VIDEO,
+                    onClick = onExtract,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * These three badges intentionally share one icon style. All gradient stops come
+ * from LocalMusicColors, so every accent preset, custom hue, and dark/light mode
+ * is handled automatically without adding any drawable resources.
+ */
+private enum class HomeFeatureIconKind { NETWORK, CONVERT, VIDEO }
+
+@Composable
+private fun HomeFeatureIconBadge(
+    kind: HomeFeatureIconKind,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalMusicColors.current
+    val shape = RoundedCornerShape(11.dp)
+
+    // Harmonized gradients: network -> primary/bright, conversion -> primary/
+    // subtle cyan, video -> highlight/primary. Black is mixed in for contrast
+    // so the white glyph stays visible even with amber and light themes.
+    val (rawStart, rawEnd) = when (kind) {
+        HomeFeatureIconKind.NETWORK -> Pair(colors.purpleBright, colors.purple)
+        HomeFeatureIconKind.CONVERT -> Pair(
+            lerp(colors.purple, colors.cyan, 0.13f), colors.purpleBright
+        )
+        HomeFeatureIconKind.VIDEO -> Pair(colors.magenta, colors.purple)
+    }
+    val darken = if (colors.isDark) 0.12f else 0.21f
+    // Keep white foreground contrast on light accents (lime / amber / cyan),
+    // not just on the default purple palette.
+    fun badgeColor(raw: Color, extraShade: Float): Color {
+        var candidate = lerp(raw, Color.Black, extraShade)
+        repeat(8) {
+            if (candidate.luminance() > 0.13f) {
+                candidate = lerp(candidate, Color.Black, 0.18f)
+            }
+        }
+        return candidate
+    }
+    val startColor = badgeColor(rawStart, darken)
+    val endColor = badgeColor(rawEnd, darken + 0.09f)
+
+    Box(
+        modifier = modifier
+            .shadow(
+                elevation = 3.dp,
+                shape = shape,
+                ambientColor = colors.purple.copy(alpha = 0.18f),
+                spotColor = colors.purple.copy(alpha = 0.30f)
+            )
+            .clip(shape)
+            .background(Brush.linearGradient(listOf(startColor, endColor)))
+            .border(
+                width = 0.8.dp,
+                color = Color.White.copy(alpha = if (colors.isDark) 0.27f else 0.36f),
+                shape = shape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (colors.isDark) 0.12f else 0.08f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.10f)
+                    )
+                )
+            )
+        )
+        when (kind) {
+            HomeFeatureIconKind.NETWORK -> TwoPhonesTransferIcon(
+                tint = Color.White,
+                modifier = Modifier.size(29.dp)
+            )
+            HomeFeatureIconKind.CONVERT -> Icon(
+                imageVector = Icons.Rounded.CompareArrows,
+                contentDescription = null,
+                modifier = Modifier.size(26.dp),
+                tint = Color.White
+            )
+            HomeFeatureIconKind.VIDEO -> Icon(
+                imageVector = Icons.Rounded.Movie,
+                contentDescription = null,
+                modifier = Modifier.size(25.dp),
+                tint = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeAudioToolCompactCard(
+    title: String,
+    subtitle: String,
+    iconKind: HomeFeatureIconKind,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalMusicColors.current
+    val accent = if (iconKind == HomeFeatureIconKind.CONVERT) colors.purpleBright else colors.magenta
+    Surface(
+        modifier = modifier.height(76.dp).clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Transparent,
+        border = BorderStroke(
+            1.dp,
+            lerp(colors.border, accent, if (colors.isDark) 0.23f else 0.14f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            colors.card.copy(alpha = if (colors.isDark) 0.93f else 0.97f),
+                            lerp(colors.cardRaised, accent, if (colors.isDark) 0.10f else 0.055f)
+                        )
+                    )
+                )
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            HomeFeatureIconBadge(
+                kind = iconKind,
+                modifier = Modifier.size(38.dp)
+            )
+            Spacer(Modifier.width(7.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = title,
+                    color = colors.textPrimary,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = subtitle,
+                    color = colors.textSecondary,
+                    fontSize = 9.4.sp,
+                    lineHeight = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
 }
 
 @Composable
 private fun HomeHeader(
+    googleAccountEmail: String?,
+    googleAccountName: String?,
+    googleProfilePhotoUrl: String?,
+    unreadNotifications: Int,
     onLogoFiveTap: () -> Unit,
+    onOpenAccount: () -> Unit,
+    onOpenNotifications: () -> Unit,
     onSettings: () -> Unit
 ) {
     val colors = LocalMusicColors.current
@@ -320,13 +605,8 @@ private fun HomeHeader(
 
     fun registerLogoTap() {
         val now = SystemClock.elapsedRealtime()
-        logoTapCount = if (now - lastLogoTapAt <= 1_800L) {
-            logoTapCount + 1
-        } else {
-            1
-        }
+        logoTapCount = if (now - lastLogoTapAt <= 1_800L) logoTapCount + 1 else 1
         lastLogoTapAt = now
-
         if (logoTapCount >= 5) {
             logoTapCount = 0
             lastLogoTapAt = 0L
@@ -335,53 +615,326 @@ private fun HomeHeader(
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(46.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.weight(1f).clickable(onClick = ::registerLogoTap),
+            verticalArrangement = Arrangement.Center
         ) {
-            Surface(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clickable(onClick = ::registerLogoTap),
-                shape = RoundedCornerShape(14.dp),
-                color = Color.Black,
-                border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.62f)),
-                shadowElevation = 7.dp
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(Color.Black)
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.logo),
-                        contentDescription = "Logo MeloWave",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-            Spacer(Modifier.width(11.dp))
-            Column {
-                GradientText(
-                    text = "MeloWave",
-                    brush = Brush.horizontalGradient(listOf(colors.purpleBright, colors.magenta)),
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.ExtraBold
+            GradientText(
+                text = "MeloWave",
+                brush = Brush.horizontalGradient(listOf(colors.textPrimary, colors.purpleBright)),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+            Text(
+                text = mwString("home.tagline", "Âm nhạc của bạn"),
+                color = colors.textSecondary,
+                fontSize = 10.5.sp,
+                maxLines = 1
+            )
+        }
+        Box(modifier = Modifier.size(37.dp), contentAlignment = Alignment.Center) {
+            IconButton(onClick = onOpenNotifications, modifier = Modifier.fillMaxSize()) {
+                Icon(
+                    Icons.Rounded.NotificationsNone,
+                    contentDescription = "Thông báo",
+                    tint = colors.textPrimary,
+                    modifier = Modifier.size(23.dp)
                 )
-                Text(
-                    text = mwString("home.tagline", "Âm nhạc của bạn"),
-                    color = colors.textSecondary,
-                    fontSize = 16.sp
+            }
+            if (unreadNotifications > 0) {
+                Box(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(end = 2.dp, top = 2.dp)
+                        .size(8.dp).clip(CircleShape).background(Color(0xFFFF4557))
                 )
             }
         }
-        IconButton(onClick = onSettings) {
-            Icon(Icons.Rounded.Settings, contentDescription = mwString("settings.title", "Cài đặt"), tint = colors.textPrimary)
+        IconButton(onClick = onSettings, modifier = Modifier.size(37.dp)) {
+            Icon(
+                Icons.Rounded.Settings,
+                contentDescription = mwString("settings.title", "Cài đặt"),
+                tint = colors.textSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        HomeGoogleAvatar(
+            email = googleAccountEmail,
+            name = googleAccountName,
+            photoUrl = googleProfilePhotoUrl,
+            onClick = onOpenAccount,
+            modifier = Modifier.size(35.dp)
+        )
+    }
+}
+
+@Composable
+private fun HomeGoogleAvatar(
+    email: String?,
+    name: String?,
+    photoUrl: String?,
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalMusicColors.current
+    val initial = (name?.trim()?.firstOrNull() ?: email?.firstOrNull())?.uppercaseChar()?.toString()
+    // Only a server-verified PAID account gets the crown. Device trial is not a purchase.
+    val isPaidPremium = !email.isNullOrBlank() &&
+        MeloWarePremiumAccess.accessKind == "paid" &&
+        MeloWarePremiumAccess.canUsePaidFeatures
+    Box(
+        modifier = modifier.then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize()
+                .padding(top = if (isPaidPremium) 3.dp else 0.dp,
+                         end = if (isPaidPremium) 3.dp else 0.dp)
+                .clip(CircleShape)
+                .background(
+                    if (!email.isNullOrBlank()) Brush.linearGradient(listOf(colors.purple, colors.magenta))
+                    else Brush.linearGradient(listOf(colors.cardRaised, colors.card))
+                )
+                .border(1.dp, colors.border.copy(alpha = 0.8f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (email.isNullOrBlank()) {
+                Icon(
+                    Icons.Rounded.AccountCircle,
+                    contentDescription = "Đăng nhập Google",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.fillMaxSize().padding(3.dp)
+                )
+            } else {
+                Text(
+                    text = initial ?: "G",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                if (!photoUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = photoUrl,
+                        contentDescription = "Ảnh đại diện tài khoản Google",
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            }
+        }
+        if (isPaidPremium) {
+            // Tiny gold crown at the avatar's upper-right corner; does not clip with the photo.
+            Surface(
+                modifier = Modifier.align(Alignment.TopEnd).size(19.dp),
+                shape = CircleShape,
+                color = Color(0xFF23162E),
+                border = BorderStroke(1.dp, Color(0xFFFFD54F))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    MeloWarePremiumCrown(modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeGoogleAccountDialog(
+    email: String?,
+    name: String?,
+    photoUrl: String?,
+    onLogin: () -> Unit,
+    onLogout: () -> Unit,
+    onOpenDrive: () -> Unit,
+    onSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = colors.cardRaised,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(19.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    HomeGoogleAvatar(email, name, photoUrl, onClick = null, modifier = Modifier.size(49.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Tài khoản Google", color = colors.textPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (email == null) "Chưa đăng nhập" else (name?.takeIf { it.isNotBlank() } ?: email),
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (email != null && !name.isNullOrBlank()) {
+                            Text(email, color = colors.textSecondary, fontSize = 11.sp, maxLines = 1)
+                        }
+                        if (email != null && MeloWarePremiumAccess.accessKind == "paid" &&
+                            MeloWarePremiumAccess.canUsePaidFeatures
+                        ) {
+                            Text("MeloWave Premium", color = Color(0xFFFFD54F),
+                                fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                        }
+                    }
+                }
+                if (email == null) {
+                    HomeDialogAction(mwString("settings.google_login", "Đăng nhập Google"), onLogin)
+                } else {
+                    HomeDialogAction("Mở Google Drive", onOpenDrive)
+                    HomeDialogAction(mwString("settings.google_logout", "Đăng xuất"), onLogout)
+                }
+                HomeDialogAction(mwString("settings.title", "Cài đặt"), onSettings)
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Đóng", color = colors.textSecondary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeDialogAction(title: String, onClick: () -> Unit) {
+    val colors = LocalMusicColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = colors.card,
+        border = BorderStroke(1.dp, colors.border)
+    ) {
+        Text(
+            title,
+            modifier = Modifier.padding(horizontal = 15.dp, vertical = 12.dp),
+            color = colors.textPrimary,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+// Notification history only includes reminders actually posted by ReminderReceiver.
+internal data class HomeNotice(val createdAt: Long, val title: String, val message: String)
+
+internal object HomeNotificationStore {
+    private const val PREFS = "melowave_in_app_notifications"
+    private const val ENTRIES = "recent_entries"
+    private const val LAST_READ = "last_read_time"
+
+    fun record(context: Context, title: String, message: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val oldEntries = runCatching { JSONArray(prefs.getString(ENTRIES, "[]")) }.getOrDefault(JSONArray())
+        val next = JSONArray().put(
+            JSONObject().put("time", System.currentTimeMillis()).put("title", title).put("message", message)
+        )
+        for (i in 0 until minOf(oldEntries.length(), 19)) {
+            oldEntries.optJSONObject(i)?.let { next.put(it) }
+        }
+        prefs.edit().putString(ENTRIES, next.toString()).apply()
+    }
+
+    fun getAll(context: Context): List<HomeNotice> {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val array = runCatching { JSONArray(prefs.getString(ENTRIES, "[]")) }.getOrDefault(JSONArray())
+        return buildList {
+            for (index in 0 until array.length()) {
+                val obj = array.optJSONObject(index) ?: continue
+                add(HomeNotice(obj.optLong("time"), obj.optString("title"), obj.optString("message")))
+            }
+        }
+    }
+
+    fun unreadCount(context: Context): Int {
+        val seen = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(LAST_READ, 0L)
+        return getAll(context).count { it.createdAt > seen }
+    }
+
+    fun markAllRead(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(LAST_READ, System.currentTimeMillis()).apply()
+    }
+}
+
+@Composable
+private fun HomeNotificationsDialog(onDismiss: () -> Unit) {
+    val colors = LocalMusicColors.current
+    val context = LocalContext.current
+    val notices = remember { HomeNotificationStore.getAll(context) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = colors.cardRaised,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.NotificationsNone, contentDescription = null, tint = colors.purpleBright)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Thông báo", modifier = Modifier.weight(1f), color = colors.textPrimary,
+                        fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                    }
+                }
+                if (notices.isEmpty()) {
+                    Text(
+                        "Chưa có thông báo nào. Các lời nhắc nghe nhạc được gửi từ ứng dụng sẽ xuất hiện tại đây.",
+                        color = colors.textSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier.heightIn(max = 335.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        notices.forEach { notice ->
+                            Surface(
+                                shape = RoundedCornerShape(13.dp),
+                                color = colors.card,
+                                border = BorderStroke(1.dp, colors.border.copy(alpha = 0.65f))
+                            ) {
+                                Column(Modifier.fillMaxWidth().padding(11.dp)) {
+                                    Text(notice.title, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(notice.message, color = colors.textSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+                                    Text(
+                                        remember(notice.createdAt) {
+                                            DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                                                .format(Date(notice.createdAt))
+                                        },
+                                        color = colors.textSecondary.copy(alpha = 0.73f), fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: ActivityNotFoundException) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:${context.packageName}"))
+                            )
+                        }
+                        onDismiss()
+                    },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Cài đặt thông báo", color = colors.purpleBright)
+                }
+            }
         }
     }
 }
@@ -402,10 +955,7 @@ private fun HomeSearchBar(
         if (result.resultCode == Activity.RESULT_OK) {
             val spokenText = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()
-                ?.trim()
-                .orEmpty()
-
+                ?.firstOrNull()?.trim().orEmpty()
             if (spokenText.isNotBlank()) {
                 query = spokenText
                 currentOnSearch(spokenText)
@@ -418,73 +968,31 @@ private fun HomeSearchBar(
 
     fun startVoiceSearch() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_PROMPT, voicePrompt)
         }
-
         try {
             speechLauncher.launch(intent)
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(
-                context,
-                voiceUnavailable,
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(context, voiceUnavailable, Toast.LENGTH_LONG).show()
         }
     }
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = colors.cardRaised,
+        modifier = Modifier.fillMaxWidth().height(51.dp),
+        shape = RoundedCornerShape(23.dp),
+        color = colors.cardRaised.copy(alpha = 0.90f),
         border = BorderStroke(1.dp, colors.border)
     ) {
         Row(
-            modifier = Modifier.padding(start = 16.dp, end = 7.dp, top = 9.dp, bottom = 9.dp),
+            modifier = Modifier.padding(start = 5.dp, end = 5.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BasicTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.weight(1f),
-                textStyle = TextStyle(color = colors.textPrimary, fontSize = 14.sp),
-                singleLine = true,
-                cursorBrush = SolidColor(colors.purpleBright),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(
-                    onSearch = {
-                        if (query.isNotBlank()) currentOnSearch(query)
-                    }
-                ),
-                decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (query.isBlank()) {
-                            Text(
-                                mwString("home.search_hint", "Tìm bài hát, ca sĩ, album, thể loại..."),
-                                color = colors.textMuted,
-                                fontSize = 14.sp
-                            )
-                        }
-                        inner()
-                    }
-                }
-            )
-            IconButton(onClick = ::startVoiceSearch, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Mic,
-                    contentDescription = mwString("home.voice_search", "Tìm kiếm bằng giọng nói"),
-                    tint = colors.purpleBright,
-                    modifier = Modifier.size(21.dp)
-                )
-            }
             IconButton(
                 onClick = { if (query.isNotBlank()) currentOnSearch(query) },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(37.dp)
             ) {
                 Icon(
                     Icons.Rounded.Search,
@@ -493,103 +1001,45 @@ private fun HomeSearchBar(
                     modifier = Modifier.size(21.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun HeroMusicCard(
-    onOpenLocalFolders: () -> Unit,
-    onOpenPersonalDrive: () -> Unit,
-    onOpenPublicDrive: () -> Unit
-) {
-    val colors = LocalMusicColors.current
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(224.dp),
-        shape = RoundedCornerShape(24.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, colors.purple.copy(alpha = if (colors.isDark) 0.55f else 0.32f))
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        if (!colors.isDark) {
-                            // In the bright theme, keep the hero expressive without
-                            // introducing a large dark patch into the home screen.
-                            listOf(
-                                androidx.compose.ui.graphics.lerp(Color.White, colors.purple, 0.10f),
-                                androidx.compose.ui.graphics.lerp(Color.White, colors.magenta, 0.09f),
-                                androidx.compose.ui.graphics.lerp(Color.White, colors.blue, 0.10f)
-                            )
-                        } else if (colors.purple == DarkMusicColors.purple) {
-                            listOf(Color(0xFF15115B), Color(0xFF3A145D), Color(0xFF0C4B70))
-                        } else {
-                            listOf(
-                                androidx.compose.ui.graphics.lerp(colors.purple, Color.Black, 0.60f),
-                                androidx.compose.ui.graphics.lerp(colors.magenta, Color.Black, 0.65f),
-                                androidx.compose.ui.graphics.lerp(colors.blue, Color.Black, 0.70f)
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.weight(1f),
+                textStyle = TextStyle(color = colors.textPrimary, fontSize = 13.sp),
+                singleLine = true,
+                cursorBrush = SolidColor(colors.purpleBright),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {
+                    if (query.isNotBlank()) currentOnSearch(query)
+                }),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isBlank()) {
+                            Text(
+                                mwString("home.search_hint", "Tìm bài hát, ca sĩ, album, thể loại..."),
+                                color = colors.textMuted,
+                                fontSize = 12.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
-                    )
-                )
-                .padding(horizontal = 18.dp, vertical = 17.dp)
-        ) {
+                        inner()
+                    }
+                }
+            )
             Box(
                 modifier = Modifier
-                    .size(190.dp)
-                    .align(Alignment.CenterEnd)
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(colors.magenta.copy(alpha = if (colors.isDark) 0.42f else 0.10f), Color.Transparent)
-                        )
-                    )
-            )
-
-            Column(modifier = Modifier.fillMaxSize()) {
-                Text(
-                    text = mwString("home.unlimited", "Nhạc không\ngiới hạn"),
-                    color = if (colors.isDark) Color.White else colors.textPrimary,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    lineHeight = 30.sp
-                )
-                Spacer(Modifier.height(7.dp))
-                Text(
-                    text = mwString("home.hero_desc", "Nghe nhạc Offline và Google Drive\nchất lượng cao"),
-                    color = if (colors.isDark) Color.White.copy(alpha = 0.78f) else colors.textSecondary,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp
-                )
-                Spacer(Modifier.weight(1f))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    HeroSourceAction(
-                        title = mwString("home.local_music", "Nhạc máy"),
-                        subtitle = mwString("home.audio_folder", "Thư mục âm thanh"),
-                        sourceType = HeroSourceType.LOCAL_FOLDER,
-                        onClick = onOpenLocalFolders,
-                        modifier = Modifier.weight(1f)
-                    )
-                    HeroSourceAction(
-                        title = "Google Drive",
-                        subtitle = mwString("home.my_drive", "Drive của tôi"),
-                        sourceType = HeroSourceType.PERSONAL_DRIVE,
-                        onClick = onOpenPersonalDrive,
-                        modifier = Modifier.weight(1f)
-                    )
-                    HeroSourceAction(
-                        title = mwString("home.drive_link", "Link Drive"),
-                        subtitle = mwString("home.shared_folder", "Thư mục chia sẻ"),
-                        sourceType = HeroSourceType.PUBLIC_LINK,
-                        onClick = onOpenPublicDrive,
-                        modifier = Modifier.weight(1f)
+                    .background(colors.purple.copy(alpha = if (colors.isDark) 0.26f else 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                IconButton(onClick = ::startVoiceSearch, modifier = Modifier.size(39.dp)) {
+                    Icon(
+                        Icons.Rounded.Mic,
+                        contentDescription = mwString("home.voice_search", "Tìm kiếm bằng giọng nói"),
+                        tint = colors.purpleBright,
+                        modifier = Modifier.size(23.dp)
                     )
                 }
             }
@@ -597,42 +1047,199 @@ private fun HeroMusicCard(
     }
 }
 
+/**
+ * Banner: artwork WebP keeps its details; Kotlin draws all titles and action buttons.
+ * All four shortcuts share ONE row: device / Google Drive / Drive link / network transfer.
+ */
+@Composable
+private fun HeroMusicCard(
+    onOpenNetworkTransfer: () -> Unit,
+    onOpenLocalFolders: () -> Unit,
+    onOpenPersonalDrive: () -> Unit,
+    onOpenPublicDrive: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val shape = RoundedCornerShape(22.dp)
+    val artwork = heroBannerArtwork(colors)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = shape,
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, colors.purple.copy(alpha = if (colors.isDark) 0.76f else 0.36f))
+    ) {
+        Column(
+            modifier = Modifier.background(
+                Brush.verticalGradient(
+                    listOf(colors.cardRaised, colors.card, colors.backgroundSoft)
+                )
+            )
+        ) {
+            Box(modifier = Modifier.fillMaxWidth().height(155.dp)) {
+                Image(
+                    painter = painterResource(id = artwork.first),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    // 1536:640 banner preserves the top of the headphone arch on regular phones.
+                    // Prefer TOP and RIGHT when additional cropping is needed.
+                    contentScale = ContentScale.Crop,
+                    alignment = Alignment.TopEnd,
+                    colorFilter = artwork.second
+                )
+                Box(
+                    modifier = Modifier.fillMaxSize().background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                (if (colors.isDark) Color(0xFF120527) else Color.White).copy(alpha = 0.27f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+                )
+                Column(modifier = Modifier.padding(start = 13.dp, top = 13.dp)) {
+                    Text(
+                        text = mwString("home.unlimited", "Nhạc không\ngiới hạn"),
+                        color = if (colors.isDark) Color.White else colors.textPrimary,
+                        fontSize = 25.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        lineHeight = 27.sp,
+                        maxLines = 2
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        text = mwString("home.hero_desc", "Nghe nhạc Offline và Google Drive\nchất lượng cao"),
+                        modifier = Modifier.fillMaxWidth(0.63f),
+                        color = if (colors.isDark) Color.White.copy(alpha = 0.89f) else colors.textSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            // Four equal-width shortcuts INSIDE the banner: no separate network card.
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .padding(start = 9.dp, end = 9.dp, top = 8.dp, bottom = 11.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                HeroSourceAction(
+                    title = mwString("home.local_music", "Nhạc máy"),
+                    sourceType = HeroSourceType.LOCAL_FOLDER,
+                    onClick = onOpenLocalFolders,
+                    modifier = Modifier.weight(1f)
+                )
+                HeroSourceAction(
+                    title = "Google Drive",
+                    sourceType = HeroSourceType.PERSONAL_DRIVE,
+                    onClick = onOpenPersonalDrive,
+                    modifier = Modifier.weight(1f)
+                )
+                HeroSourceAction(
+                    title = mwString("home.drive_link", "Link Drive"),
+                    sourceType = HeroSourceType.PUBLIC_LINK,
+                    onClick = onOpenPublicDrive,
+                    modifier = Modifier.weight(1f)
+                )
+                HeroSourceAction(
+                    title = mwString("home.network_title", "Lấy nhạc qua mạng"),
+                    sourceType = HeroSourceType.NETWORK_TRANSFER,
+                    onClick = onOpenNetworkTransfer,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Tám màu có sẵn: 8 ảnh × dark/light.
+ * Màu tuỳ chỉnh: tái sử dụng ảnh gốc và xoay hue bằng ColorMatrix,
+ * cho phép tai nghe/đường sóng đổi ngay cả khi kéo thanh chọn màu.
+ */
+private fun heroBannerArtwork(colors: MusicColors): Pair<Int, ColorFilter?> {
+    val option = MusicAccentOptions.firstOrNull { entry ->
+        colors.purple == (if (colors.isDark) entry.darkPrimary else entry.lightPrimary)
+    }
+    if (option == null) {
+        val original = if (colors.isDark) DarkMusicColors.purpleBright else LightMusicColors.purpleBright
+        val angle = heroHue(colors.purpleBright) - heroHue(original)
+        val drawable = if (colors.isDark) R.drawable.hero_headphones_purple_dark
+                       else R.drawable.hero_headphones_purple_light
+        return drawable to heroHueFilter(angle)
+    }
+    val imageRes = if (colors.isDark) {
+        when (option.id) {
+            "blue" -> R.drawable.hero_headphones_blue_dark
+            "teal" -> R.drawable.hero_headphones_teal_dark
+            "green" -> R.drawable.hero_headphones_green_dark
+            "orange" -> R.drawable.hero_headphones_orange_dark
+            "pink" -> R.drawable.hero_headphones_pink_dark
+            "red" -> R.drawable.hero_headphones_red_dark
+            "amber" -> R.drawable.hero_headphones_amber_dark
+            else -> R.drawable.hero_headphones_purple_dark
+        }
+    } else {
+        when (option.id) {
+            "blue" -> R.drawable.hero_headphones_blue_light
+            "teal" -> R.drawable.hero_headphones_teal_light
+            "green" -> R.drawable.hero_headphones_green_light
+            "orange" -> R.drawable.hero_headphones_orange_light
+            "pink" -> R.drawable.hero_headphones_pink_light
+            "red" -> R.drawable.hero_headphones_red_light
+            "amber" -> R.drawable.hero_headphones_amber_light
+            else -> R.drawable.hero_headphones_purple_light
+        }
+    }
+    return imageRes to null
+}
+
+private fun heroHue(color: Color): Float {
+    val hsv = FloatArray(3)
+    AndroidColor.colorToHSV(color.toArgb(), hsv)
+    return hsv[0]
+}
+
+/** Xoay sắc độ trong RGB, giữ độ sáng/chi tiết của ảnh WebP cho màu tùy chỉnh. */
+private fun heroHueFilter(degrees: Float): ColorFilter {
+    val radians = Math.toRadians(degrees.toDouble())
+    val c = cos(radians).toFloat()
+    val s = sin(radians).toFloat()
+    return ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+        0.213f + 0.787f*c - 0.213f*s, 0.715f - 0.715f*c - 0.715f*s, 0.072f - 0.072f*c + 0.928f*s, 0f, 0f,
+        0.213f - 0.213f*c + 0.143f*s, 0.715f + 0.285f*c + 0.140f*s, 0.072f - 0.072f*c - 0.283f*s, 0f, 0f,
+        0.213f - 0.213f*c - 0.787f*s, 0.715f - 0.715f*c + 0.715f*s, 0.072f + 0.928f*c + 0.072f*s, 0f, 0f,
+        0f, 0f, 0f, 1f, 0f
+    )))
+}
+
 private enum class HeroSourceType {
     LOCAL_FOLDER,
     PERSONAL_DRIVE,
-    PUBLIC_LINK
+    PUBLIC_LINK,
+    NETWORK_TRANSFER
 }
 
 @Composable
 private fun HeroSourceAction(
     title: String,
-    subtitle: String,
     sourceType: HeroSourceType,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMusicColors.current
     Surface(
-        modifier = modifier
-            .height(66.dp)
-            .clickable(onClick = onClick),
+        modifier = modifier.height(78.dp).clickable(onClick = onClick),
         shape = RoundedCornerShape(15.dp),
-        color = if (colors.isDark) Color(0xFF050B18).copy(alpha = 0.68f)
-                else Color.White.copy(alpha = 0.90f),
-        border = BorderStroke(
-            1.dp,
-            if (colors.isDark) Color.White.copy(alpha = 0.15f) else colors.border
-        )
+        color = if (colors.isDark) colors.background.copy(alpha = 0.85f)
+            else Color.White.copy(alpha = 0.91f),
+        border = BorderStroke(1.dp, if (colors.isDark) Color.White.copy(alpha = 0.15f) else colors.border)
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp, vertical = 7.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
-            Box(
-                modifier = Modifier.size(31.dp),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
                 when (sourceType) {
                     HeroSourceType.LOCAL_FOLDER -> {
                         Surface(
@@ -643,7 +1250,7 @@ private fun HeroSourceAction(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Folder,
+                                    Icons.Rounded.Folder,
                                     contentDescription = null,
                                     tint = if (colors.isDark) Color(0xFF67D8FF) else Color(0xFF0078AD),
                                     modifier = Modifier.size(20.dp)
@@ -651,17 +1258,20 @@ private fun HeroSourceAction(
                             }
                         }
                     }
-
-                    HeroSourceType.PERSONAL_DRIVE -> {
-                        GoogleDriveLogo(modifier = Modifier.size(29.dp))
+                    HeroSourceType.NETWORK_TRANSFER -> {
+                        // Theme-aware gradient matches audio tool badges. Preserve
+                        // the original two-phone arrows; only their presentation changes.
+                        HomeFeatureIconBadge(
+                            kind = HomeFeatureIconKind.NETWORK,
+                            modifier = Modifier.size(33.dp)
+                        )
                     }
-
+                    HeroSourceType.PERSONAL_DRIVE -> GoogleDriveLogo(Modifier.size(29.dp))
                     HeroSourceType.PUBLIC_LINK -> {
+                        // Giữ nguyên icon gốc: logo Google Drive + huy hiệu liên kết màu hồng.
                         GoogleDriveLogo(modifier = Modifier.size(29.dp))
                         Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .size(14.dp),
+                            modifier = Modifier.align(Alignment.BottomEnd).size(14.dp),
                             shape = CircleShape,
                             color = colors.magenta,
                             border = BorderStroke(1.dp, Color.White.copy(alpha = 0.72f))
@@ -678,20 +1288,15 @@ private fun HeroSourceAction(
                     }
                 }
             }
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(3.dp))
             Text(
                 text = title,
-                color = if (colors.isDark) Color.White else colors.textPrimary,
+                color = colors.textPrimary,
                 fontSize = 9.5.sp,
+                lineHeight = 11.5.sp,
+                textAlign = TextAlign.Center,
                 fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                color = if (colors.isDark) Color.White.copy(alpha = 0.62f) else colors.textSecondary,
-                fontSize = 7.5.sp,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
