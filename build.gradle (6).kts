@@ -12,8 +12,8 @@ android {
         applicationId = "duc_phi.music"
         minSdk = 24
         targetSdk = 36
-        versionCode = 28
-        versionName = "2.1.0"
+        versionCode = 32
+        versionName = "2.1.2"
     }
 
     buildTypes {
@@ -49,6 +49,13 @@ android {
         }
     }
     packaging {
+        // AGP 8.4.0 workaround for Android 16 KB memory pages:
+        // compress native .so libraries in generated APKs so they are extracted
+        // at install time instead of needing 16 KB ZIP alignment.
+        // The 64-bit WebRTC .so files in versionCode 31 already have 16 KB ELF alignment.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -92,6 +99,9 @@ dependencies {
     // Google Play In-App Updates: kept for mandatory update on app launch
     implementation("com.google.android.play:app-update:2.1.0")
     implementation("com.google.android.play:app-update-ktx:2.1.0")
+    // MP3 encoder: Java LAME (LGPL-3.0); provides net.sourceforge.lame.mp3.Lame.
+    // Add https://nexus.terrestris.de/repository/public/ to settings.gradle.kts dependencyResolutionManagement.repositories.
+    implementation("com.github.nwaldispuehl:java-lame:3.98.4")
     // WebRTC DataChannel - ban stripped, doi package livekit.org.webrtc
     implementation("io.github.webrtc-sdk:android-prefixed-stripped:150.7871.01")
     implementation("com.google.android.gms:play-services-ads:23.0.0")
