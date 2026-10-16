@@ -1,125 +1,105 @@
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.compose)
+    id("com.android.application")
+    kotlin("android")
     id("com.google.gms.google-services")
 }
 
 android {
-    namespace = "ducphi.tunnerinstrument"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    namespace = "duc_phi.music"
+    compileSdk = 36
 
-    packaging {
-        jniLibs {
-            useLegacyPackaging = false
-        }
-    }
     defaultConfig {
-        applicationId = "ducphi.tunnerinstrument"
+        applicationId = "duc_phi.music"
         minSdk = 24
         targetSdk = 36
-        versionCode = 55
+        versionCode = 32
         versionName = "2.1.2"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // Bộ lọc NDK để ép cân thư viện C++ (Giảm ~15MB)
-        ndk {
-            abiFilters.add("armeabi-v7a")
-            abiFilters.add("arm64-v8a")
-        }
-
-        externalNativeBuild {
-            cmake {
-                arguments("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384")
-            }
-        }
     }
 
     buildTypes {
-        release {
+        getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                getDefaultProguardFile("proguard-android-optimize.txt")
             )
         }
     }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
+
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.11"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            freeCompilerArgs.addAll(
+                "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
+                "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+                "-opt-in=androidx.media3.common.util.UnstableApi"
+            )
+        }
+    }
+    packaging {
+        // AGP 8.4.0 workaround for Android 16 KB memory pages:
+        // compress native .so libraries in generated APKs so they are extracted
+        // at install time instead of needing 16 KB ZIP alignment.
+        // The 64-bit WebRTC .so files in versionCode 31 already have 16 KB ELF alignment.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
 }
 
 dependencies {
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
+    // Firebase BOM và các dịch vụ Firebase
+    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
+    implementation("com.google.firebase:firebase-database")
+    implementation("com.google.firebase:firebase-auth") // Firebase anonymous auth cho ket noi Internet
 
+    // Jetpack Compose BOM
+    val composeBom = platform("androidx.compose:compose-bom:2024.04.01")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    // AndroidX Core & Activity
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-compose:1.9.0")
+
+    // Compose UI
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-
+    implementation("com.google.android.gms:play-services-auth:21.6.0")
+    implementation("com.google.android.gms:play-services-cast-framework:22.0.0")
+    implementation("androidx.fragment:fragment-ktx:1.7.1")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
+    // Image loading & Coroutines
+    implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // Media3 (Audio & Video Transformer)
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-transformer:1.3.1")
+    implementation("androidx.media3:media3-effect:1.3.1")
+    // Google Play Billing: prepare MeloWare Premium (6-month and 12-month prepaid plans)
+    implementation("com.android.billingclient:billing:9.1.0")
+    // Google Play In-App Updates: kept for mandatory update on app launch
     implementation("com.google.android.play:app-update:2.1.0")
     implementation("com.google.android.play:app-update-ktx:2.1.0")
-    implementation("com.google.android.play:review:2.0.1")
-    implementation("com.google.android.play:review-ktx:2.0.1")
-
-    implementation("com.google.android.gms:play-services-auth:21.1.0")
-
-    // Google Mobile Ads SDK - dang dung App ID va Banner ID thu nghiem cua Google.
-    implementation("com.google.android.gms:play-services-ads:25.4.0")
-    implementation("io.coil-kt:coil-compose:2.5.0")
-    implementation("com.google.oboe:oboe:1.9.0")
-    implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
-
-    implementation("com.google.firebase:firebase-firestore")
-    // Realtime Database Presence + anonymous Firebase Authentication
-    implementation("com.google.firebase:firebase-database")
-    implementation("com.google.firebase:firebase-auth")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
-    implementation("com.google.firebase:firebase-analytics")
-    implementation("com.google.code.gson:gson:2.11.0")
-
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    val camerax_version = "1.4.1"
-    implementation("androidx.camera:camera-core:${camerax_version}")
-    implementation("androidx.camera:camera-camera2:${camerax_version}")
-    implementation("androidx.camera:camera-lifecycle:${camerax_version}")
-    implementation("androidx.camera:camera-video:${camerax_version}")
-    implementation("androidx.camera:camera-view:${camerax_version}")
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-
-    implementation("com.google.firebase:firebase-messaging-ktx:23.4.0")
-
-    // Đã XÓA dòng: implementation("net.alphatab:alphaTab:1.8.4")
-
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    // WebRTC DataChannel - ban stripped, doi package livekit.org.webrtc
+    implementation("io.github.webrtc-sdk:android-prefixed-stripped:150.7871.01")
+    implementation("com.google.android.gms:play-services-ads:23.0.0")
 }
