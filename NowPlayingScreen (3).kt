@@ -1,14 +1,23 @@
 package duc_phi.music
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.RectF
+import android.util.Base64
+import android.net.Uri
+import android.speech.RecognizerIntent
 import android.graphics.Color as AndroidColor
 import android.view.View
 import android.view.ContextThemeWrapper
 import android.view.ViewGroup
+import android.widget.Toast
+import android.webkit.WebResourceError
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -19,12 +28,21 @@ import android.webkit.WebViewClient
 import android.os.Build
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -49,17 +67,30 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Phonelink
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Download
@@ -69,8 +100,10 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.MicExternalOn
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
@@ -78,9 +111,12 @@ import androidx.compose.material.icons.rounded.Piano
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
@@ -123,24 +159,41 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
+import org.json.JSONArray
+import org.json.JSONTokener
 import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.framework.CastButtonFactory
 import androidx.compose.ui.window.Dialog
@@ -150,11 +203,21 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.min
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import java.util.Locale
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.UUID
 
 @Composable
-internal fun NowPlayingScreen(controller: MusicController) {
+internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> Unit) {
     val colors = LocalMusicColors.current
     val song = controller.currentSong
     var showEqualizer by remember { mutableStateOf(false) }
@@ -164,6 +227,20 @@ internal fun NowPlayingScreen(controller: MusicController) {
     var karaokeMode by rememberSaveable(song?.id) { mutableStateOf(false) }
     var wifiSharePage by remember { mutableStateOf(WifiSharePage.NONE) }
     var showCastScanPanel by remember { mutableStateOf(false) }
+    var showArtworkOptions by remember { mutableStateOf(false) }
+    var googleArtworkFor by remember { mutableStateOf<SongItem?>(null) }
+    var artworkPickerSong by remember { mutableStateOf<SongItem?>(null) }
+    // Do not save the selected image until the user has adjusted its square crop.
+    var pendingArtworkCrop by remember { mutableStateOf<Pair<SongItem, Uri>?>(null) }
+    val artworkPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { selectedUri ->
+        val target = artworkPickerSong
+        artworkPickerSong = null
+        if (selectedUri != null && target != null) {
+            pendingArtworkCrop = target to selectedUri
+        }
+    }
     val screenListState = rememberLazyListState()
 
     BackHandler { controller.goBackFromPlayer() }
@@ -218,7 +295,11 @@ internal fun NowPlayingScreen(controller: MusicController) {
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(colors.background, Color(0xFF0A0B22), colors.background)
+                    if (colors.isDark) {
+                        listOf(colors.background, Color(0xFF0A0B22), colors.background)
+                    } else {
+                        listOf(colors.background, colors.backgroundSoft, colors.background)
+                    }
                 )
             )
             .statusBarsPadding()
@@ -232,104 +313,162 @@ internal fun NowPlayingScreen(controller: MusicController) {
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-        item {
-            NowPlayingHeader(
-                controller = controller,
-                karaokeActive = karaokeMode,
-                onBack = controller::goBackFromPlayer,
-                onLyrics = { karaokeMode = !karaokeMode },
-                castRouteButton = castRouteButton,
-                onCastRequested = { showCastScanPanel = true },
-                onWifiPlayback = { wifiSharePage = WifiSharePage.CHOOSER },
-                onTools = if (controller.canUseLocalAudioTools(song)) {
-                    { actionSong = song }
-                } else null
-            )
-        }
+            item {
+                NowPlayingHeader(
+                    controller = controller,
+                    karaokeActive = karaokeMode,
+                    onBack = controller::goBackFromPlayer,
+                    onLyrics = { karaokeMode = !karaokeMode },
+                    castRouteButton = castRouteButton,
+                    onCastRequested = { showCastScanPanel = true },
+                    onWifiPlayback = { wifiSharePage = WifiSharePage.CHOOSER },
+                    onTools = if (controller.canUseLocalAudioTools(song)) {
+                        { actionSong = song }
+                    } else null
+                )
+            }
 
-        item {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                if (song.source == SongSource.MOVIE) {
-                    MoviePlayerSurface(
+            item {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (song.source == SongSource.MOVIE) {
+                        MoviePlayerSurface(
+                            controller = controller,
+                            song = song,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 520.dp)
+                                .aspectRatio(16f / 9f)
+                                .heightIn(min = 200.dp)
+                        )
+                    } else if (karaokeMode) {
+                        KaraokeBackdrop(
+                            controller = controller,
+                            song = song,
+                            modifier = Modifier
+                                .fillMaxWidth(0.94f)
+                                .widthIn(max = 380.dp)
+                                .aspectRatio(1f)
+                        )
+                    } else {
+                        ArtworkImage(
+                            song = song,
+                            artworkUrl = controller.artworkFor(song),
+                            modifier = Modifier
+                                .fillMaxWidth(0.90f)
+                                .widthIn(max = 360.dp)
+                                .aspectRatio(1f),
+                            cornerRadius = 24
+                        )
+                    }
+                }
+            }
+
+            item {
+                TrackTitleBlock(
+                    controller = controller,
+                    song = song,
+                    onEditArtwork = { showArtworkOptions = true },
+                    karaokeActive = karaokeMode
+                )
+            }
+
+            item {
+                // Gom tiến trình, cụm Play và các nút công cụ vào một khối để đẩy chúng lên cao hơn.
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    PlaybackProgress(
+                        positionMs = controller.positionMs,
+                        durationMs = controller.durationMs,
+                        onSeek = controller::seekTo
+                    )
+                    MainPlaybackControls(controller)
+                    PlayerActions(
                         controller = controller,
                         song = song,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .widthIn(max = 520.dp)
-                            .aspectRatio(16f / 9f)
-                            .heightIn(min = 200.dp)
+                        onEqualizer = { showEqualizer = true },
+                        onTimer = { showTimer = true },
+                        onQueue = { showQueue = !showQueue },
+                        queueVisible = showQueue
                     )
-                } else if (karaokeMode) {
-                    KaraokeBackdrop(
+                }
+            }
+
+            if (showQueue) {
+                item(key = "now_playing_queue") {
+                    QueuePanel(
                         controller = controller,
-                        song = song,
-                        modifier = Modifier
-                            .fillMaxWidth(0.94f)
-                            .widthIn(max = 380.dp)
-                            .aspectRatio(1f)
-                    )
-                } else {
-                    ArtworkImage(
-                        song = song,
-                        artworkUrl = controller.artworkFor(song),
-                        modifier = Modifier
-                            .fillMaxWidth(0.90f)
-                            .widthIn(max = 360.dp)
-                            .aspectRatio(1f),
-                        cornerRadius = 24
+                        onClose = { showQueue = false },
+                        onTools = { selected -> actionSong = selected }
                     )
                 }
             }
         }
 
-        item {
-            TrackTitleBlock(
-                controller = controller,
-                song = song
-            )
-        }
+    }
 
-        item {
-            // Gom tiến trình, cụm Play và các nút công cụ vào một khối để đẩy chúng lên cao hơn.
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                PlaybackProgress(
-                    positionMs = controller.positionMs,
-                    durationMs = controller.durationMs,
-                    onSeek = controller::seekTo
+    if (showArtworkOptions) {
+        ArtworkOptionsDialog(
+            customArtworkSelected = controller.hasCustomArtwork(song),
+            onChoosePhoto = {
+                showArtworkOptions = false
+                artworkPickerSong = song
+                artworkPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
-                MainPlaybackControls(controller)
-                PlayerActions(
-                    controller = controller,
-                    song = song,
-                    onEqualizer = { showEqualizer = true },
-                    onTimer = { showTimer = true },
-                    onQueue = { showQueue = !showQueue },
-                    queueVisible = showQueue
+            },
+            onSearchGoogle = {
+                showArtworkOptions = false
+                googleArtworkFor = song
+            },
+            onRestoreAutomatic = {
+                controller.restoreAutomaticArtwork(song)
+                showArtworkOptions = false
+            },
+            onDismiss = { showArtworkOptions = false }
+        )
+    }
+
+    googleArtworkFor?.let { target ->
+        GoogleCoverSearchDialog(
+            initialQuery = listOf(target.title, target.artist)
+                .filter { it.isNotBlank() && !it.equals("Unknown Artist", ignoreCase = true) }
+                .joinToString(" ").trim(),
+            onImageChosen = { downloadedUri ->
+                googleArtworkFor = null
+                pendingArtworkCrop = target to downloadedUri
+            },
+            onChooseFromDevice = {
+                googleArtworkFor = null
+                artworkPickerSong = target
+                artworkPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
+            },
+            onDismiss = { googleArtworkFor = null }
+        )
+    }
+
+    pendingArtworkCrop?.let { selection ->
+        ArtworkCropDialog(
+            controller = controller,
+            selectedUri = selection.second,
+            onSave = { cropBounds ->
+                controller.setCustomArtwork(selection.first, selection.second, cropBounds)
+                pendingArtworkCrop = null
+            },
+            onDismiss = {
+                controller.discardSearchedArtworkTemp(selection.second)
+                pendingArtworkCrop = null
             }
-        }
-
-        if (showQueue) {
-            item(key = "now_playing_queue") {
-                QueuePanel(
-                    controller = controller,
-                    onClose = { showQueue = false },
-                    onTools = { selected -> actionSong = selected }
-                )
-            }
-        }
-        }
-
+        )
     }
 
     if (showEqualizer) {
-        EqualizerDialog(
-            controller = controller,
-            onDismiss = { showEqualizer = false }
-        )
+        EqualizerDialog(controller = controller,
+            onOpenPremium = { showEqualizer = false; onOpenPremium() },
+            onDismiss = { showEqualizer = false })
     }
 
     if (showTimer) {
@@ -362,27 +501,12 @@ internal fun NowPlayingScreen(controller: MusicController) {
         )
     }
 
-    when (wifiSharePage) {
-        WifiSharePage.CHOOSER -> WifiShareChoiceDialog(
-            onBrowser = {
-                wifiSharePage = WifiSharePage.BROWSER
-                if (!controller.wifiHostActive && !controller.wifiHostBusy) {
-                    controller.toggleWifiHost()
-                }
-            },
-            onMeloWare = { wifiSharePage = WifiSharePage.APP },
-            onDismiss = { wifiSharePage = WifiSharePage.NONE }
-        )
-        WifiSharePage.BROWSER -> WifiHostDialog(
-            controller = controller,
-            onDismiss = { wifiSharePage = WifiSharePage.NONE }
-        )
-        WifiSharePage.APP -> MeloWareWifiAppDialog(
-            controller = controller,
-            onDismiss = { wifiSharePage = WifiSharePage.NONE }
-        )
-        WifiSharePage.NONE -> Unit
-    }
+    WifiShareDialogs(
+        controller = controller,
+        page = wifiSharePage,
+        onNavigate = { wifiSharePage = it },
+        onDismiss = { wifiSharePage = WifiSharePage.NONE }
+    )
 
     actionSong?.let { selectedSong ->
         SongToolsHost(
@@ -420,10 +544,11 @@ private fun NowPlayingHeader(
 
         Spacer(Modifier.weight(1f))
 
+        // Giữ nguyên nút karaoke lớn trên thanh trên cùng: nút này chỉ bật/tắt khung lời.
         IconButton(onClick = onLyrics) {
             Icon(
                 imageVector = Icons.Rounded.MicExternalOn,
-                contentDescription = "Micro karaoke - Mở lời bài hát",
+                contentDescription = if (karaokeActive) "Ẩn lời bài hát" else "Mở lời bài hát karaoke",
                 tint = if (karaokeActive) colors.purpleBright else colors.textSecondary,
                 modifier = Modifier.size(25.dp)
             )
@@ -529,7 +654,7 @@ private fun CastScanPanelDialog(
                     ) {
                         Icon(Icons.Rounded.Tv, contentDescription = null,
                             tint = if (controller.castConnected) colors.purpleBright
-                                   else colors.textSecondary,
+                            else colors.textSecondary,
                             modifier = Modifier.size(25.dp))
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
@@ -551,7 +676,7 @@ private fun CastScanPanelDialog(
 
                 Text(
                     "Kết nối điện thoại và TV/loa vào cùng mạng Wi-Fi. " +
-                    "Nhấn Tìm thiết bị để mở danh sách Google Cast và chọn nơi phát nhạc.",
+                            "Nhấn Tìm thiết bị để mở danh sách Google Cast và chọn nơi phát nhạc.",
                     color = colors.textSecondary, fontSize = 12.sp
                 )
 
@@ -565,7 +690,7 @@ private fun CastScanPanelDialog(
                         modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(9.dp))
                     Text(if (controller.castConnected) "Tìm / đổi thiết bị Cast"
-                         else "Bắt đầu tìm thiết bị", fontWeight = FontWeight.Bold)
+                    else "Bắt đầu tìm thiết bị", fontWeight = FontWeight.Bold)
                 }
                 Text(
                     "Bảng chọn thiết bị sẽ chỉ xuất hiện khi bạn nhấn nút trên.",
@@ -887,6 +1012,82 @@ private fun moviePlayerHtml(videoId: String, origin: String): String {
     """.trimIndent()
 }
 
+private val lyricWordPattern = Regex("\\S+")
+
+/**
+ * Enhanced LRC uses its own <time> markers. Ordinary LRC has line timestamps
+ * only, so individual words are timed approximately between consecutive lines.
+ */
+private fun karaokeWordCount(
+    line: LyricLine,
+    positionMs: Long,
+    nextLineStartMs: Long?,
+    trackEndMs: Long
+): Int {
+    val start = line.timestampMs ?: return 0
+    val wordMatches = lyricWordPattern.findAll(line.text).toList()
+    if (wordMatches.isEmpty() || positionMs + 120L < start) return 0
+
+    if (line.wordTimings.size == wordMatches.size) {
+        return line.wordTimings.count { it.timestampMs <= positionMs + 120L }
+            .coerceIn(0, wordMatches.size)
+    }
+
+    val next = nextLineStartMs?.takeIf { it > start }
+    // If the following line is close, use its actual time. Otherwise limit
+    // interpolation so a long instrumental break does not crawl across a line.
+    val estimatedDurationMs = (wordMatches.size * 520L).coerceIn(2_200L, 9_000L)
+    val endByLine = if (next != null && next - start <= 12_000L) next else start + estimatedDurationMs
+    val endByTrack = trackEndMs.takeIf { it > start } ?: Long.MAX_VALUE
+    val lineEnd = minOf(endByLine, endByTrack)
+    val duration = (lineEnd - start).coerceAtLeast(500L)
+    val progress = ((positionMs - start).coerceAtLeast(0L).toDouble() / duration)
+        .coerceIn(0.0, 1.0)
+    return (1 + (progress * wordMatches.size).toInt()).coerceIn(0, wordMatches.size)
+}
+
+private fun karaokeColoredWords(
+    line: LyricLine,
+    highlightedCount: Int,
+    highlightColor: Color,
+    remainingColor: Color
+): AnnotatedString = buildAnnotatedString {
+    append(line.text)
+    lyricWordPattern.findAll(line.text).forEachIndexed { index, match ->
+        addStyle(
+            SpanStyle(
+                color = if (index < highlightedCount) highlightColor else remainingColor,
+                fontWeight = if (index < highlightedCount) FontWeight.ExtraBold else FontWeight.SemiBold
+            ),
+            start = match.range.first,
+            end = match.range.last + 1
+        )
+    }
+}
+
+/** Android's share sheet includes Zalo and Messenger when installed and able to receive text. */
+private fun shareLyricsWithAndroid(context: Context, song: SongItem, lyrics: LyricsContent) {
+    val plainText = lyrics.lines.joinToString("\n") { it.text.trim() }.trim()
+    if (plainText.isBlank()) return
+    val shareText = buildString {
+        append("Lời bài hát: ").append(song.title)
+        if (song.artist.isNotBlank()) append("\nCa sĩ: ").append(song.artist)
+        append("\n\n").append(plainText)
+        append("\n\nNguồn lời: ").append(lyrics.sourceName)
+        append(" · Chia sẻ từ MeloWare")
+    }
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Lời bài hát - ${song.title}")
+        putExtra(Intent.EXTRA_TEXT, shareText)
+    }
+    val chooser = Intent.createChooser(shareIntent, "Chia sẻ lời bài hát qua Zalo, Messenger...")
+    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(chooser) }.onFailure {
+        Toast.makeText(context, "Không mở được bảng chia sẻ lời bài hát.", Toast.LENGTH_SHORT).show()
+    }
+}
+
 @Composable
 private fun KaraokeBackdrop(
     controller: MusicController,
@@ -898,11 +1099,26 @@ private fun KaraokeBackdrop(
     val lyrics = controller.lyricsFor(song)
     val loading = controller.lyricsLoading(song)
     val error = controller.lyricsError(song)
-    val lyricListState = rememberLazyListState()
-
-    LaunchedEffect(song.id) {
-        controller.loadLyrics(song)
+    val lyricScrollState = rememberScrollState()
+    val lineOffsets = remember(song.id, lyrics?.recordId) {
+        androidx.compose.runtime.mutableStateMapOf<Int, Int>()
     }
+
+    // Hide the decorative standalone music note without touching lyric timestamps.
+    val hideIntroMarker = lyrics?.lines?.takeIf { it.size > 1 }?.firstOrNull()
+        ?.text?.trim()?.let { marker ->
+            marker.isNotEmpty() && marker.all { it in "♪♫♬♩" }
+        } == true
+    val lyricStartIndex = if (hideIntroMarker) 1 else 0
+    val displayedLyrics = lyrics?.lines?.drop(lyricStartIndex).orEmpty()
+
+    val lyricPrimary = if (colors.isDark) Color.White else colors.textPrimary
+    val lyricSecondary = if (colors.isDark) Color.White.copy(alpha = 0.70f)
+        else colors.textSecondary.copy(alpha = 0.92f)
+    val lyricTertiary = if (colors.isDark) Color.White.copy(alpha = 0.55f)
+        else colors.textSecondary.copy(alpha = 0.76f)
+
+    LaunchedEffect(song.id) { controller.loadLyrics(song) }
 
     val activeLineIndex = if (lyrics?.synced == true && lyrics.lines.isNotEmpty()) {
         lyrics.lines.indexOfLast { line ->
@@ -913,9 +1129,15 @@ private fun KaraokeBackdrop(
         -1
     }
 
-    LaunchedEffect(activeLineIndex, lyrics?.recordId) {
-        if (activeLineIndex >= 0 && lyrics?.synced == true) {
-            lyricListState.animateScrollToItem((activeLineIndex - 2).coerceAtLeast(0))
+    // Scroll to a few lines above the active line. Use a fully composed Column
+    // so a text selection can span ANY adjacent lyric lines (LazyColumn only
+    // composes visible lines and previously prevented cross-line selection).
+    val targetLine = (activeLineIndex - lyricStartIndex - 2).coerceAtLeast(0)
+    val targetTop = lineOffsets[targetLine]
+    LaunchedEffect(song.id, lyrics?.recordId) { lyricScrollState.scrollTo(0) }
+    LaunchedEffect(activeLineIndex, lyrics?.recordId, targetTop) {
+        if (lyrics?.synced == true && activeLineIndex >= 0 && targetTop != null) {
+            lyricScrollState.animateScrollTo(targetTop.coerceIn(0, lyricScrollState.maxValue))
         }
     }
 
@@ -923,6 +1145,11 @@ private fun KaraokeBackdrop(
         modifier = modifier
             .clip(shape)
             .background(colors.card)
+            .border(
+                1.dp,
+                colors.border.copy(alpha = if (colors.isDark) 0.25f else 0.90f),
+                shape
+            )
     ) {
         ArtworkImage(
             song = song,
@@ -934,74 +1161,24 @@ private fun KaraokeBackdrop(
             cornerRadius = 26
         )
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0x99020411),
-                            Color(0xDD08051A),
-                            Color(0xF6050713)
-                        )
-                    )
+            modifier = Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    if (colors.isDark) {
+                        listOf(Color(0x99020411), Color(0xDD08051A), Color(0xF6050713))
+                    } else {
+                        listOf(Color(0xEEF4F5FE), Color(0xF7F7F8FF), Color(0xFFF4F7FC))
+                    }
                 )
+            )
         )
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = colors.purple.copy(alpha = 0.22f),
-                    border = BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.65f))
-                ) {
-                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Rounded.MicExternalOn,
-                            contentDescription = null,
-                            tint = colors.purpleBright,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        song.title,
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        song.artist,
-                        color = Color.White.copy(alpha = 0.68f),
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Text(
-                    "LRCLIB",
-                    color = colors.purpleBright,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(Modifier.height(10.dp))
-
             when {
                 loading -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(32.dp),
@@ -1009,18 +1186,17 @@ private fun KaraokeBackdrop(
                                 color = colors.purpleBright
                             )
                             Spacer(Modifier.height(12.dp))
-                            Text("Đang tìm lời bài hát...", color = Color.White.copy(alpha = 0.86f))
+                            Text("Đang tìm lời bài hát...", color = lyricPrimary.copy(alpha = 0.86f))
                             Text(
                                 "Tìm theo tên bài hát và ca sĩ",
-                                color = Color.White.copy(alpha = 0.55f),
+                                color = lyricTertiary,
                                 fontSize = 11.sp
                             )
                         }
                     }
                 }
-
                 error != null -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1028,12 +1204,12 @@ private fun KaraokeBackdrop(
                             Icon(
                                 Icons.Rounded.MicExternalOn,
                                 contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.62f),
+                                tint = lyricSecondary,
                                 modifier = Modifier.size(38.dp)
                             )
                             Text(
                                 error,
-                                color = Color.White.copy(alpha = 0.84f),
+                                color = lyricPrimary.copy(alpha = 0.84f),
                                 fontSize = 13.sp,
                                 textAlign = TextAlign.Center
                             )
@@ -1043,9 +1219,8 @@ private fun KaraokeBackdrop(
                         }
                     }
                 }
-
                 lyrics?.instrumental == true -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
                                 Icons.Rounded.MusicNote,
@@ -1056,55 +1231,84 @@ private fun KaraokeBackdrop(
                             Spacer(Modifier.height(12.dp))
                             Text(
                                 "Bản nhạc không lời",
-                                color = Color.White,
+                                color = lyricPrimary,
                                 fontSize = 19.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
-
-                lyrics != null && lyrics.lines.isNotEmpty() -> {
-                    LazyColumn(
-                        state = lyricListState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(top = 58.dp, bottom = 96.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                lyrics != null && displayedLyrics.isNotEmpty() -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(lyricScrollState)
+                            .padding(top = 4.dp, bottom = 16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        itemsIndexed(
-                            items = lyrics.lines,
-                            key = { index, line -> "${line.timestampMs ?: -1L}_$index" }
-                        ) { index, line ->
-                            val active = lyrics.synced && index == activeLineIndex
-                            Text(
-                                text = line.text,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = line.timestampMs != null) {
-                                        line.timestampMs?.let(controller::seekTo)
-                                    }
-                                    .padding(horizontal = 4.dp, vertical = if (active) 4.dp else 0.dp),
-                                color = when {
-                                    active -> Color.White
-                                    lyrics.synced -> Color.White.copy(alpha = 0.48f)
-                                    else -> Color.White.copy(alpha = 0.88f)
-                                },
-                                fontSize = if (active) 20.sp else 15.sp,
-                                lineHeight = if (active) 27.sp else 22.sp,
-                                fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Medium,
-                                textAlign = TextAlign.Center
-                            )
+                        // Exactly ONE selection scope for the entire song:
+                        // long-press one line, drag handles over several lines, Copy.
+                        SelectionContainer {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                displayedLyrics.forEachIndexed { visibleIndex, line ->
+                                    val index = visibleIndex + lyricStartIndex
+                                    val active = lyrics.synced && index == activeLineIndex
+                                    val highlightedCount = if (active) karaokeWordCount(
+                                        line = line,
+                                        positionMs = controller.positionMs,
+                                        nextLineStartMs = lyrics.lines.getOrNull(index + 1)?.timestampMs,
+                                        trackEndMs = when {
+                                            controller.durationMs > 1_000L -> controller.durationMs
+                                            song.durationMs > 1_000L -> song.durationMs
+                                            else -> lyrics.durationMs
+                                        }
+                                    ) else 0
+                                    Text(
+                                        text = if (active) karaokeColoredWords(
+                                            line,
+                                            highlightedCount,
+                                            colors.purpleBright,
+                                            lyricPrimary.copy(alpha = if (colors.isDark) 0.72f else 0.78f)
+                                        ) else AnnotatedString(line.text),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onGloballyPositioned { coordinates ->
+                                                val top = coordinates.positionInParent().y.roundToInt()
+                                                if (lineOffsets[visibleIndex] != top) {
+                                                    lineOffsets[visibleIndex] = top
+                                                }
+                                            }
+                                            .clickable { line.timestampMs?.let(controller::seekTo) }
+                                            .padding(
+                                                horizontal = 4.dp,
+                                                vertical = if (active) 4.dp else 0.dp
+                                            ),
+                                        color = when {
+                                            active -> lyricPrimary
+                                            lyrics.synced -> lyricSecondary
+                                            else -> lyricPrimary.copy(alpha = 0.88f)
+                                        },
+                                        fontSize = if (active) 21.sp else 16.sp,
+                                        lineHeight = if (active) 28.sp else 23.sp,
+                                        fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Medium,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-
                 else -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 "Chưa có dữ liệu lời bài hát",
-                                color = Color.White.copy(alpha = 0.88f),
+                                color = lyricPrimary.copy(alpha = 0.88f),
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -1120,13 +1324,109 @@ private fun KaraokeBackdrop(
     }
 }
 
+private enum class WifiSharePage { NONE, CHOOSER, BROWSER, APP, LAPTOP, INTERNET }
 
-private enum class WifiSharePage { NONE, CHOOSER, BROWSER, APP }
+/** Opens exactly the same 4 connection options as the Wi-Fi button on Now Playing. */
+@Composable
+internal fun MeloWareNetworkMenuDialog(
+    controller: MusicController,
+    onDismiss: () -> Unit
+) {
+    var page by remember { mutableStateOf(WifiSharePage.CHOOSER) }
+    WifiShareDialogs(
+        controller = controller,
+        page = page,
+        onNavigate = { page = it },
+        onDismiss = onDismiss
+    )
+}
+
+/** Shared routing: Home and Now Playing use the existing dialogs, never a duplicate UI. */
+@Composable
+private fun WifiShareDialogs(
+    controller: MusicController,
+    page: WifiSharePage,
+    onNavigate: (WifiSharePage) -> Unit,
+    onDismiss: () -> Unit
+) {
+    when (page) {
+        WifiSharePage.CHOOSER -> WifiShareChoiceDialog(
+            onBrowser = {
+                onNavigate(WifiSharePage.BROWSER)
+                if (!controller.wifiHostActive && !controller.wifiHostBusy) {
+                    controller.toggleWifiHost()
+                }
+            },
+            onMeloWare = { onNavigate(WifiSharePage.APP) },
+            onLaptop = { onNavigate(WifiSharePage.LAPTOP) },
+            onInternet = { onNavigate(WifiSharePage.INTERNET) },
+            onDismiss = onDismiss
+        )
+        WifiSharePage.BROWSER -> WifiHostDialog(controller = controller, onDismiss = onDismiss)
+        WifiSharePage.APP -> MeloWareWifiAppDialog(controller = controller, onDismiss = onDismiss)
+        WifiSharePage.LAPTOP -> MeloWareLaptopDialog(controller = controller, onDismiss = onDismiss)
+        WifiSharePage.INTERNET -> MeloWareInternetDialog(controller = controller, onDismiss = onDismiss)
+        WifiSharePage.NONE -> Unit
+    }
+}
+
+
+/** Two phones with opposite arrows for MeloWare <-> MeloWare LAN sharing. */
+@Composable
+internal fun TwoPhonesTransferIcon(
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier.size(32.dp)) {
+        // Draw using a normalized 36x36 grid, so the icon remains sharp on any density.
+        val unit = size.minDimension / 36f
+        val originX = (size.width - 36f * unit) / 2f
+        val originY = (size.height - 36f * unit) / 2f
+        fun p(x: Float, y: Float) = Offset(originX + x * unit, originY + y * unit)
+
+        // Both phones are intentionally identical in size.
+        fun phone(x: Float) {
+            drawRoundRect(
+                color = tint,
+                topLeft = p(x, 6.5f),
+                size = Size(10f * unit, 23f * unit),
+                cornerRadius = CornerRadius(2.5f * unit),
+                style = Stroke(width = 2f * unit)
+            )
+            drawLine(
+                color = tint,
+                start = p(x + 3.3f, 10f),
+                end = p(x + 6.7f, 10f),
+                strokeWidth = 1.4f * unit,
+                cap = StrokeCap.Round
+            )
+            drawCircle(color = tint, radius = 0.9f * unit, center = p(x + 5f, 26.5f))
+        }
+        phone(0.5f)
+        phone(25.5f)
+
+        // Upper arrow points right (phone A -> phone B).
+        val arrowStroke = 2.1f * unit
+        fun arrowLine(x1: Float, y1: Float, x2: Float, y2: Float) {
+            drawLine(tint, p(x1, y1), p(x2, y2), arrowStroke, cap = StrokeCap.Round)
+        }
+        arrowLine(13f, 13f, 23f, 13f)
+        arrowLine(19.6f, 9.8f, 23f, 13f)
+        arrowLine(19.6f, 16.2f, 23f, 13f)
+
+        // Lower arrow points left (phone B -> phone A).
+        arrowLine(23f, 23f, 13f, 23f)
+        arrowLine(16.4f, 19.8f, 13f, 23f)
+        arrowLine(16.4f, 26.2f, 13f, 23f)
+    }
+}
 
 @Composable
 private fun WifiShareChoiceDialog(
     onBrowser: () -> Unit,
     onMeloWare: () -> Unit,
+    onLaptop: () -> Unit,
+    onInternet: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = LocalMusicColors.current
@@ -1137,18 +1437,62 @@ private fun WifiShareChoiceDialog(
             color = colors.card,
             border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.46f))
         ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Wifi, contentDescription = null, tint = colors.purpleBright)
                     Spacer(Modifier.width(10.dp))
-                    Text("Chia sẻ nhạc qua Wi-Fi", modifier = Modifier.weight(1f),
+                    Text(mwString("share.menu.title", "Kết nối & chia sẻ"), modifier = Modifier.weight(1f),
                         color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                        Icon(Icons.Rounded.Close, contentDescription = mwString("common.close", "Đóng"), tint = colors.textSecondary)
                     }
                 }
-                Text("Chọn cách kết nối với thiết bị khác cùng mạng Wi-Fi.",
+                Text(mwString("share.menu.subtitle", "Chọn cách kết nối qua Wi-Fi nội bộ hoặc Internet."),
                     color = colors.textSecondary, fontSize = 12.sp)
+                // 1. Phone <-> computer: the phone creates the link, Chrome selects a folder.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onLaptop),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.backgroundSoft,
+                    border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.45f))
+                ) {
+                    Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Phonelink, contentDescription = null,
+                            tint = colors.purpleBright, modifier = Modifier.size(27.dp))
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(mwString("share.phone_pc.title", "1. Chia sẻ điện thoại và máy tính"), color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Text(mwString("share.phone_pc.desc", "Mở link trên Chrome laptop, chọn thư mục để nghe hoặc tải nhạc."),
+                                color = colors.textSecondary, fontSize = 11.sp)
+                        }
+                        Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
+                    }
+                }
+                // 2. Phone <-> phone: preserve the existing MeloWare sharing logic.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onMeloWare),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.backgroundSoft,
+                    border = BorderStroke(1.dp, colors.border)
+                ) {
+                    Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TwoPhonesTransferIcon(
+                            tint = colors.purpleBright
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(mwString("share.phone_phone.title", "2. Điện thoại và điện thoại"), color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Text(mwString("share.phone_phone.desc", "Kết nối hai điện thoại cài MeloWare để chia sẻ nhạc."),
+                                color = colors.textSecondary, fontSize = 11.sp)
+                        }
+                        Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
+                    }
+                }
+                // 3. Link for any device: preserve the old browser HTTP share.
                 Surface(
                     modifier = Modifier.fillMaxWidth().clickable(onClick = onBrowser),
                     shape = RoundedCornerShape(16.dp),
@@ -1156,34 +1500,35 @@ private fun WifiShareChoiceDialog(
                     border = BorderStroke(1.dp, colors.border)
                 ) {
                     Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Share, contentDescription = null,
+                        Icon(Icons.Rounded.Link, contentDescription = null,
                             tint = colors.purpleBright, modifier = Modifier.size(27.dp))
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("1. Chia sẻ qua trình duyệt", color = colors.textPrimary,
+                            Text(mwString("share.link.title", "3. Chia sẻ link (mọi thiết bị)"), color = colors.textPrimary,
                                 fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Spacer(Modifier.height(3.dp))
-                            Text("Tạo đường dẫn HTTP, mở bằng Chrome, VLC hoặc máy tính.",
+                            Text(mwString("share.link.desc", "Mở link chia sẻ nhạc bằng trình duyệt, VLC hoặc thiết bị khác."),
                                 color = colors.textSecondary, fontSize = 11.sp)
                         }
                         Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
                     }
                 }
+                // 4. Internet P2P: independent from the three existing LAN sharing options.
                 Surface(
-                    modifier = Modifier.fillMaxWidth().clickable(onClick = onMeloWare),
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onInternet),
                     shape = RoundedCornerShape(16.dp),
                     color = colors.backgroundSoft,
-                    border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.45f))
+                    border = BorderStroke(1.dp, colors.border)
                 ) {
                     Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.MusicNote, contentDescription = null,
+                        Icon(Icons.Rounded.Public, contentDescription = null,
                             tint = colors.purpleBright, modifier = Modifier.size(27.dp))
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("2. Chia sẻ qua MeloWare", color = colors.textPrimary,
+                            Text(mwString("share.internet.title", "4. Kết nối qua Internet"), color = colors.textPrimary,
                                 fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Spacer(Modifier.height(3.dp))
-                            Text("Hai điện thoại cài MeloWare: một máy gửi, một máy nhận.",
+                            Text(mwString("share.internet.desc", "Hai người dùng MeloWare ghép nối từ hai mạng khác nhau."),
                                 color = colors.textSecondary, fontSize = 11.sp)
                         }
                         Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.textSecondary)
@@ -1220,10 +1565,11 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Wifi, contentDescription = null, tint = colors.purpleBright)
                     Spacer(Modifier.width(9.dp))
-                    Text("Kết nối MeloWare", modifier = Modifier.weight(1f),
+                    Text(mwString("phone_phone.dialog.title", "Kết nối MeloWare"), modifier = Modifier.weight(1f),
                         color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                    ShareGuideButton(ShareGuideType.PHONE_PHONE)
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                        Icon(Icons.Rounded.Close, contentDescription = mwString("common.close", "Đóng"), tint = colors.textSecondary)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -1233,17 +1579,17 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (!receiverMode) colors.purple else colors.backgroundSoft
                         )
-                    ) { Text("Máy gửi", color = if (!receiverMode) Color.White else colors.textSecondary) }
+                    ) { Text(mwString("phone_phone.sender", "Máy gửi"), color = if (!receiverMode) Color.White else colors.textSecondary) }
                     Button(
                         onClick = { receiverMode = true },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (receiverMode) colors.purple else colors.backgroundSoft
                         )
-                    ) { Text("Máy nhận", color = if (receiverMode) Color.White else colors.textSecondary) }
+                    ) { Text(mwString("phone_phone.receiver", "Máy nhận"), color = if (receiverMode) Color.White else colors.textSecondary) }
                 }
                 if (!receiverMode) {
-                    Text("Máy A có thể gửi bài đang phát và chọn thêm thư mục nhạc cho máy B duyệt.",
+                    Text(mwString("phone_phone.sender_hint", "Máy A có thể gửi bài đang phát và chọn thêm thư mục nhạc cho máy B duyệt."),
                         color = colors.textSecondary, fontSize = 12.sp)
                     Text(controller.currentSong?.title ?: "Chưa chọn bài hát", color = colors.textPrimary,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -1325,25 +1671,25 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                                 clipboard.setPrimaryClip(ClipData.newPlainText("MeloWare LAN", url))
                                 controller.statusMessage = "Đã sao chép địa chỉ MeloWare"
                             }
-                        }) { Text("Sao chép địa chỉ kết nối", color = colors.purpleBright) }
+                        }) { Text(mwString("phone_phone.copy_address", "Sao chép địa chỉ kết nối"), color = colors.purpleBright) }
                         Text(if (controller.wifiLanDiscovery.isAdvertising)
                             "Các máy MeloWare cùng Wi-Fi có thể tìm thấy máy này."
-                            else "Đang công bố thiết bị trên mạng...",
+                        else "Đang công bố thiết bị trên mạng...",
                             color = colors.textSecondary, fontSize = 11.sp)
                         OutlinedButton(
                             onClick = controller::stopWifiHost,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Icon(Icons.Rounded.StopCircle, null); Spacer(Modifier.width(6.dp)); Text("Dừng chia sẻ") }
+                        ) { Icon(Icons.Rounded.StopCircle, null); Spacer(Modifier.width(6.dp)); Text(mwString("phone_phone.stop_share", "Dừng chia sẻ")) }
                     } else {
                         Button(
                             onClick = controller::startSharingToMeloWare,
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !controller.wifiHostBusy,
                             colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
-                        ) { Icon(Icons.Rounded.Wifi, null); Spacer(Modifier.width(8.dp)); Text("Bật chia sẻ qua MeloWare") }
+                        ) { Icon(Icons.Rounded.Wifi, null); Spacer(Modifier.width(8.dp)); Text(mwString("phone_phone.start_share", "Bật chia sẻ qua MeloWare")) }
                     }
                 } else {
-                    Text("Hai máy cần kết nối cùng Wi-Fi. Chọn thiết bị để phát bài hát ngay trong MeloWare.",
+                    Text(mwString("phone_phone.receiver_hint", "Hai máy cần kết nối cùng Wi-Fi. Chọn thiết bị để phát bài hát ngay trong MeloWare."),
                         color = colors.textSecondary, fontSize = 12.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Thiết bị tìm thấy: ${controller.wifiLanDiscovery.peers.size}",
@@ -1352,14 +1698,14 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                         TextButton(onClick = {
                             controller.stopSearchingMeloWare()
                             controller.startSearchingMeloWare()
-                        }) { Text("Quét lại", color = colors.purpleBright) }
+                        }) { Text(mwString("phone_phone.rescan", "Quét lại"), color = colors.purpleBright) }
                     }
                     if (controller.wifiLanDiscovery.isSearching && controller.wifiLanDiscovery.peers.isEmpty()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp,
                                 color = colors.purpleBright)
                             Spacer(Modifier.width(8.dp))
-                            Text("Đang tìm điện thoại MeloWare...", color = colors.textSecondary, fontSize = 12.sp)
+                            Text(mwString("phone_phone.searching", "Đang tìm điện thoại MeloWare..."), color = colors.textSecondary, fontSize = 12.sp)
                         }
                     }
                     controller.wifiLanDiscovery.error?.let { Text(it, color = colors.red, fontSize = 12.sp) }
@@ -1392,7 +1738,7 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                                             modifier = Modifier.weight(1f)) {
                                             Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(17.dp))
                                             Spacer(Modifier.width(3.dp))
-                                            Text("Nghe đồng bộ", fontSize = 11.sp)
+                                            Text(mwString("phone_phone.sync", "Nghe đồng bộ"), fontSize = 11.sp)
                                         }
                                         TextButton(onClick = {
                                             controller.openMeloWareLibrary(peer)
@@ -1400,7 +1746,7 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                                         }, modifier = Modifier.weight(1f)) {
                                             Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(17.dp))
                                             Spacer(Modifier.width(3.dp))
-                                            Text("Duyệt thư mục", fontSize = 11.sp)
+                                            Text(mwString("phone_phone.browse", "Duyệt thư mục"), fontSize = 11.sp)
                                         }
                                     }
                                 }
@@ -1412,7 +1758,7 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                             value = manualWifiUrl,
                             onValueChange = { manualWifiUrl = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Hoặc dán URL từ máy A", fontSize = 12.sp) },
+                            label = { Text(mwString("phone_phone.manual_url", "Hoặc dán URL từ máy A"), fontSize = 12.sp) },
                             singleLine = true
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1421,14 +1767,14 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                                 enabled = manualWifiUrl.isNotBlank(),
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
-                            ) { Text("Nghe đồng bộ", fontSize = 11.sp) }
+                            ) { Text(mwString("phone_phone.sync", "Nghe đồng bộ"), fontSize = 11.sp) }
                             OutlinedButton(
                                 onClick = {
                                     if (controller.openMeloWareLibraryUrl(manualWifiUrl)) showRemoteLibrary = true
                                 },
                                 enabled = manualWifiUrl.isNotBlank(),
                                 modifier = Modifier.weight(1f)
-                            ) { Text("Duyệt thư mục", fontSize = 11.sp) }
+                            ) { Text(mwString("phone_phone.browse", "Duyệt thư mục"), fontSize = 11.sp) }
                         }
                     }
                     controller.wifiPeerMessage?.let { Text(it, color = colors.textSecondary, fontSize = 12.sp) }
@@ -1446,7 +1792,7 @@ private fun MeloWareWifiAppDialog(controller: MusicController, onDismiss: () -> 
                         OutlinedButton(
                             onClick = controller::stopReceivingMeloWare,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Icon(Icons.Rounded.StopCircle, null); Spacer(Modifier.width(6.dp)); Text("Ngắt kết nối") }
+                        ) { Icon(Icons.Rounded.StopCircle, null); Spacer(Modifier.width(6.dp)); Text(mwString("common.disconnect", "Ngắt kết nối")) }
                     }
                     if (controller.wifiLanDiscovery.peers.isEmpty()) {
                         Text("Nếu không thấy thiết bị: kiểm tra cùng mạng Wi-Fi, tắt AP isolation trên router và bật Máy gửi trên điện thoại A.",
@@ -1650,11 +1996,12 @@ private fun WifiHostDialog(
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Phát nhạc qua Wi-Fi", color = colors.textPrimary, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                        Text("Mở đường dẫn trên thiết bị cùng mạng", color = colors.textSecondary, fontSize = 11.sp)
+                        Text(mwString("link.dialog.title", "Phát nhạc qua Wi-Fi"), color = colors.textPrimary, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                        Text(mwString("link.dialog.subtitle", "Mở đường dẫn trên thiết bị cùng mạng"), color = colors.textSecondary, fontSize = 11.sp)
                     }
+                    ShareGuideButton(ShareGuideType.LINK_ANY_DEVICE)
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Đóng", tint = colors.textSecondary)
+                        Icon(Icons.Rounded.Close, contentDescription = mwString("common.close", "Đóng"), tint = colors.textSecondary)
                     }
                 }
 
@@ -1662,7 +2009,7 @@ private fun WifiHostDialog(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = colors.purpleBright)
                         Spacer(Modifier.width(10.dp))
-                        Text("Đang chuẩn bị file và máy chủ nội bộ...", color = colors.textSecondary)
+                        Text(mwString("link.preparing", "Đang chuẩn bị file và máy chủ nội bộ..."), color = colors.textSecondary)
                     }
                 }
 
@@ -1685,7 +2032,7 @@ private fun WifiHostDialog(
                         )
                     }
                     Text(
-                        "Thiết bị nhận phải kết nối cùng Wi-Fi với điện thoại. Có thể mở URL bằng trình duyệt, VLC hoặc thiết bị âm thanh hỗ trợ URL mạng.",
+                        mwString("link.device_note", "Thiết bị nhận phải kết nối cùng Wi-Fi với điện thoại. Có thể mở URL bằng trình duyệt, VLC hoặc thiết bị âm thanh hỗ trợ URL mạng."),
                         color = colors.textSecondary,
                         fontSize = 11.sp
                     )
@@ -1703,7 +2050,7 @@ private fun WifiHostDialog(
                         ) {
                             Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(5.dp))
-                            Text("Sao chép")
+                            Text(mwString("common.copy", "Sao chép"))
                         }
                         Button(
                             onClick = {
@@ -1718,7 +2065,7 @@ private fun WifiHostDialog(
                         ) {
                             Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(5.dp))
-                            Text("Chia sẻ")
+                            Text(mwString("common.share", "Chia sẻ"))
                         }
                     }
                     OutlinedButton(
@@ -1730,7 +2077,7 @@ private fun WifiHostDialog(
                     ) {
                         Icon(Icons.Rounded.StopCircle, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
-                        Text("Dừng máy chủ Wi-Fi")
+                        Text(mwString("link.stop_server", "Dừng máy chủ Wi-Fi"))
                     }
                 } else if (!controller.wifiHostBusy) {
                     Button(
@@ -1740,8 +2087,1031 @@ private fun WifiHostDialog(
                     ) {
                         Icon(Icons.Rounded.Wifi, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
-                        Text("Bắt đầu phát qua Wi-Fi")
+                        Text(mwString("link.start_server", "Bắt đầu phát qua Wi-Fi"))
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtworkOptionsDialog(
+    customArtworkSelected: Boolean,
+    onChoosePhoto: () -> Unit,
+    onSearchGoogle: () -> Unit,
+    onRestoreAutomatic: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        mwString("cover.dialog_title", "Tùy chỉnh ảnh bìa"),
+                        modifier = Modifier.weight(1f),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp,
+                        color = colors.textPrimary
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close,
+                            contentDescription = mwString("common.close", "Đóng"),
+                            tint = colors.textSecondary)
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(15.dp))
+                        .background(colors.backgroundSoft)
+                        .clickable(onClick = onChoosePhoto)
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Rounded.AddPhotoAlternate,
+                        contentDescription = null,
+                        tint = colors.purpleBright,
+                        modifier = Modifier.size(28.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(mwString("cover.choose", "Chọn ảnh từ điện thoại"),
+                            color = colors.textPrimary, fontWeight = FontWeight.SemiBold)
+                        Text(mwString("cover.choose_desc", "Lưu riêng cho bài hát này"),
+                            color = colors.textSecondary, fontSize = 12.sp)
+                    }
+                }
+                // Search results stay inside MeloWave in a WebView; no paid image API.
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(15.dp))
+                        .background(colors.backgroundSoft)
+                        .clickable(onClick = onSearchGoogle)
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Rounded.Search,
+                        contentDescription = null,
+                        tint = colors.purpleBright,
+                        modifier = Modifier.size(28.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(mwString("cover.google_option", "Tìm ảnh trực tuyến"),
+                            color = colors.textPrimary, fontWeight = FontWeight.SemiBold)
+                        Text(mwString("cover.google_option_desc", "Tìm và chọn ảnh ngay trong MeloWave"),
+                            color = colors.textSecondary, fontSize = 12.sp)
+                    }
+                }
+                if (customArtworkSelected) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(colors.backgroundSoft)
+                            .clickable(onClick = onRestoreAutomatic)
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Restore, contentDescription = null,
+                            tint = colors.purpleBright, modifier = Modifier.size(28.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(mwString("cover.restore", "Khôi phục ảnh tự động"),
+                                color = colors.textPrimary, fontWeight = FontWeight.SemiBold)
+                            Text(mwString("cover.restore_desc", "Dùng lại ảnh gốc hoặc ảnh online"),
+                                color = colors.textSecondary, fontSize = 12.sp)
+                        }
+                    }
+                }
+                Text(
+                    mwString("cover.note", "Ảnh tùy chỉnh chỉ lưu trong MeloWave, không sửa file nhạc gốc."),
+                    fontSize = 12.sp,
+                    color = colors.textSecondary
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The existing Google Images page remains the source of results, but it is not
+ * displayed. A limited set of image URLs from the rendered page is shown in a
+ * native Compose grid. Google does not provide this as a supported public API:
+ * changes to the page, consent screens and network restrictions can break it.
+ * No extra account, PHP endpoint or paid search service is used.
+ */
+private fun googleCoverSearchUrl(query: String): String = Uri.Builder()
+    .scheme("https")
+    .authority("www.google.com")
+    .appendPath("search")
+    .appendQueryParameter("tbm", "isch")
+    .appendQueryParameter("q", query.trim())
+    .build().toString()
+
+private data class MwCoverSearchImage(val thumbnail: String, val original: String?)
+
+/**
+ * Inspect only thumbnails already rendered in the user's WebView session.
+ * Use dimensions and URL checks instead of Google-specific class selectors;
+ * this is still best-effort because Google can change its DOM at any time.
+ * No JavaScript-to-Android bridge is exposed to untrusted web content.
+ */
+private val mwCoverImageExtractionScript = """
+    (function () {
+        var result = [];
+        var seen = {};
+        var photos = document.querySelectorAll('img');
+        for (var i = 0; i < photos.length && result.length < 120; i++) {
+            var img = photos[i];
+            if (img.closest('header, nav, footer')) continue;
+            var box = img.getBoundingClientRect();
+            var width = Math.max(img.naturalWidth || 0, box.width || 0);
+            var height = Math.max(img.naturalHeight || 0, box.height || 0);
+            if (width < 72 || height < 72) continue;
+            var candidates = [img.currentSrc, img.src, img.getAttribute('data-src')];
+            var thumb = '';
+            for (var j = 0; j < candidates.length; j++) {
+                var link = candidates[j] || '';
+                if (link.indexOf('//') === 0) link = 'https:' + link;
+                if (link.indexOf('https://') === 0) { thumb = link; break; }
+            }
+            if (!thumb || thumb.length > 3500 || seen[thumb]) continue;
+            if (/googlelogo|branding|favicon|\/logos\//i.test(thumb)) continue;
+            var original = '';
+            var anchor = img.closest('a[href]');
+            if (anchor) {
+                try {
+                    var u = new URL(anchor.href, location.href);
+                    var found = u.searchParams.get('imgurl') || u.searchParams.get('img_url');
+                    if (found && found.indexOf('https://') === 0 && found.length < 3500) {
+                        original = found;
+                    }
+                } catch (error) {}
+            }
+            seen[thumb] = 1;
+            result.push([thumb, original]);
+        }
+        return result;
+    })()
+""".trimIndent()
+
+private fun mwParseCoverImageResults(response: String): List<MwCoverSearchImage> {
+    return try {
+        val parsed = JSONTokener(response).nextValue()
+        val photos = when (parsed) {
+            is JSONArray -> parsed
+            is String -> JSONArray(parsed)
+            else -> return emptyList()
+        }
+        buildList {
+            for (i in 0 until min(photos.length(), 120)) {
+                val pair = photos.optJSONArray(i) ?: continue
+                val thumbnail = pair.optString(0).trim()
+                if (!thumbnail.startsWith("https://") || thumbnail.length > 3500) continue
+                val original = pair.optString(1).trim().takeIf {
+                    it.startsWith("https://") && it.length < 3500 && it != thumbnail
+                }
+                add(MwCoverSearchImage(thumbnail, original))
+            }
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+@Composable
+private fun GoogleCoverSearchDialog(
+    initialQuery: String,
+    onImageChosen: (Uri) -> Unit,
+    onChooseFromDevice: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val colors = LocalMusicColors.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    var query by rememberSaveable(initialQuery) { mutableStateOf(initialQuery) }
+    var pageLoading by remember { mutableStateOf(true) }
+    var pageRevision by remember { mutableIntStateOf(0) }
+    var downloading by remember { mutableStateOf(false) }
+    var pageError by remember { mutableStateOf<String?>(null) }
+    var imageError by remember { mutableStateOf<String?>(null) }
+    var selectedImage by remember { mutableStateOf<MwCoverSearchImage?>(null) }
+    var finishedScanning by remember { mutableStateOf(false) }
+    val imageResults = remember { mutableStateListOf<MwCoverSearchImage>() }
+    val resultGridState = rememberLazyGridState()
+    val downloadFailedMessage = mwString(
+        "cover.google_download_failed", "Không tải được ảnh từ trang này."
+    )
+
+    fun captureRenderedImages(webView: WebView) {
+        webView.evaluateJavascript(mwCoverImageExtractionScript) { result ->
+            val known = imageResults.mapTo(HashSet<String>()) { it.thumbnail }
+            for (photo in mwParseCoverImageResults(result)) {
+                if (imageResults.size >= 120) break
+                if (known.add(photo.thumbnail)) imageResults.add(photo)
+            }
+        }
+    }
+
+    val imageWebView = remember(context) {
+        WebView(context).apply {
+            setBackgroundColor(AndroidColor.WHITE)
+            settings.apply {
+                javaScriptEnabled = true // Google Images uses JS for lazy-loaded thumbnails.
+                domStorageEnabled = true
+                loadsImagesAutomatically = true
+                allowFileAccess = false
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
+            }
+            CookieManager.getInstance().setAcceptCookie(true)
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?, request: WebResourceRequest?
+                ): Boolean {
+                    val url = request?.url ?: return true
+                    // The hidden page never needs to navigate to unrelated sites.
+                    val host = url.host.orEmpty().lowercase(Locale.ROOT)
+                    return url.scheme != "https" ||
+                        !(host == "google.com" || host.endsWith(".google.com") ||
+                            host == "google.com.vn" || host.endsWith(".google.com.vn") ||
+                            host == "google.co.jp" || host.endsWith(".google.co.jp"))
+                }
+
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                    pageLoading = true
+                    pageError = null
+                    finishedScanning = false
+                    imageResults.clear()
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    pageLoading = false
+                    pageRevision++
+                    view?.let { captureRenderedImages(it) }
+                }
+
+                override fun onReceivedError(
+                    view: WebView?, request: WebResourceRequest?, error: WebResourceError?
+                ) {
+                    if (request?.isForMainFrame == true) {
+                        pageLoading = false
+                        finishedScanning = true
+                        pageError = error?.description?.toString()
+                            ?: "Không thể mở trang tìm kiếm ảnh."
+                    }
+                }
+            }
+        }
+    }
+
+    DisposableEffect(imageWebView) {
+        imageWebView.loadUrl(googleCoverSearchUrl(initialQuery))
+        onDispose {
+            runCatching { imageWebView.stopLoading() }
+            runCatching { imageWebView.loadUrl("about:blank") }
+            runCatching { imageWebView.destroy() }
+        }
+    }
+
+    // Google loads results in several waves. Poll a few times, scrolling the
+    // *hidden* page to reveal thumbnails while keeping Compose UI unchanged.
+    LaunchedEffect(imageWebView, pageRevision) {
+        if (pageRevision <= 0) return@LaunchedEffect
+        resultGridState.scrollToItem(0)
+        finishedScanning = false
+        repeat(12) { pass ->
+            captureRenderedImages(imageWebView)
+            if (pass in listOf(2, 5, 8)) {
+                imageWebView.evaluateJavascript(
+                    "window.scrollBy(0, Math.max(window.innerHeight * 0.8, 500));", null
+                )
+            }
+            delay(650)
+        }
+        finishedScanning = true
+    }
+
+    // Continue retrieving the same search results as the user scrolls the grid.
+    LaunchedEffect(resultGridState.firstVisibleItemIndex, imageResults.size, pageRevision) {
+        if (pageRevision > 0 && imageResults.size in 9..119 &&
+            resultGridState.firstVisibleItemIndex + 15 >= imageResults.size
+        ) {
+            imageWebView.evaluateJavascript(
+                "window.scrollBy(0, Math.max(window.innerHeight, 600));", null
+            )
+            delay(400)
+            captureRenderedImages(imageWebView)
+        }
+    }
+
+    LaunchedEffect(selectedImage) {
+        val choice = selectedImage ?: return@LaunchedEffect
+        downloading = true
+        imageError = null
+        try {
+            var localImage: Uri? = null
+            var lastError: Exception? = null
+            for (url in listOfNotNull(choice.original, choice.thumbnail).distinct()) {
+                try {
+                    localImage = downloadGoogleCoverImage(context.applicationContext, url)
+                    break
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    lastError = failure
+                }
+            }
+            if (localImage == null) throw lastError ?: IOException(downloadFailedMessage)
+            onImageChosen(localImage)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            imageError = "$downloadFailedMessage ${failure.localizedMessage.orEmpty()}".trim()
+        } finally {
+            downloading = false
+            selectedImage = null
+        }
+    }
+
+    // Voice results are passed directly to the search, rather than relying on
+    // Compose state to update between the speech callback and WebView load.
+    fun submitQuery(searchText: String) {
+        val keyword = searchText.trim()
+        if (keyword.isBlank() || downloading) return
+        query = keyword
+        imageError = null
+        pageError = null
+        pageLoading = true
+        finishedScanning = false
+        imageResults.clear()
+        imageWebView.loadUrl(googleCoverSearchUrl(keyword))
+        focusManager.clearFocus()
+        keyboard?.hide()
+    }
+
+    // Uses Android's own voice-recognition activity, as on the MeloWave home
+    // screen. No RECORD_AUDIO permission, external API, or new dependency.
+    val coverVoiceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenText = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            if (spokenText.isNotBlank()) submitQuery(spokenText)
+        }
+    }
+
+    val voicePrompt = mwString(
+        "cover.voice_prompt", "Nói tên bài hát, nghệ sĩ hoặc từ khóa để tìm ảnh bìa"
+    )
+    val voiceUnavailable = mwString(
+        "home.voice_unavailable", "Thiết bị chưa có dịch vụ nhận dạng giọng nói."
+    )
+    fun startCoverVoiceSearch() {
+        if (downloading) return
+        focusManager.clearFocus()
+        keyboard?.hide()
+        val voiceIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, voicePrompt)
+        }
+        try {
+            coverVoiceLauncher.launch(voiceIntent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(context, voiceUnavailable, Toast.LENGTH_LONG).show()
+        } catch (_: SecurityException) {
+            Toast.makeText(context, voiceUnavailable, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+            color = colors.background
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(enabled = !downloading, onClick = onDismiss) {
+                        Icon(Icons.Rounded.ArrowBack,
+                            contentDescription = mwString("common.back", "Quay lại"),
+                            tint = colors.textPrimary)
+                    }
+                    Text(
+                        mwString("cover.google_title", "Tìm ảnh bìa"),
+                        modifier = Modifier.weight(1f),
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    IconButton(onClick = onDismiss, enabled = !downloading) {
+                        Icon(Icons.Rounded.Close,
+                            contentDescription = mwString("common.close", "Đóng"),
+                            tint = colors.textSecondary)
+                    }
+                }
+                // One native search field: search, editable keyword, clear,
+                // and voice input. No Google page chrome is shown to the user.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().height(58.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    color = colors.cardRaised,
+                    border = BorderStroke(
+                        1.dp,
+                        colors.purple.copy(alpha = if (colors.isDark) 0.47f else 0.27f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize().padding(start = 6.dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { submitQuery(query) },
+                            enabled = query.isNotBlank() && !downloading,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.Search,
+                                contentDescription = mwString("cover.google_search", "Tìm"),
+                                tint = if (query.isNotBlank()) colors.purpleBright else colors.textMuted,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            modifier = Modifier.weight(1f),
+                            enabled = !downloading,
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 15.sp
+                            ),
+                            cursorBrush = SolidColor(colors.purpleBright),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = { submitQuery(query) }
+                            ),
+                            decorationBox = { innerTextField ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (query.isBlank()) {
+                                        Text(
+                                            mwString("cover.google_hint", "Nhập từ khóa tìm ảnh..."),
+                                            color = colors.textMuted,
+                                            maxLines = 1,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        )
+                        if (query.isNotBlank()) {
+                            IconButton(
+                                onClick = { query = "" },
+                                enabled = !downloading,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Close,
+                                    contentDescription = mwString("cover.clear_keyword", "Xóa từ khóa"),
+                                    tint = colors.textSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            modifier = Modifier.size(42.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = colors.purple.copy(alpha = if (colors.isDark) 0.23f else 0.12f)
+                        ) {
+                            IconButton(
+                                onClick = ::startCoverVoiceSearch,
+                                enabled = !downloading,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Mic,
+                                    contentDescription = mwString("home.voice_search", "Tìm kiếm bằng giọng nói"),
+                                    tint = colors.purpleBright,
+                                    modifier = Modifier.size(23.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    // Keep the original Google search page as an invisible data
+                    // source. Its logos, bars and text never appear in our UI.
+                    AndroidView(
+                        factory = {
+                            (imageWebView.parent as? ViewGroup)?.removeView(imageWebView)
+                            imageWebView
+                        },
+                        modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.01f }
+                    )
+                    Box(Modifier.fillMaxSize().background(colors.background)) {
+                        if (imageResults.isNotEmpty()) {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(3),
+                                state = resultGridState,
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp),
+                                contentPadding = PaddingValues(bottom = 16.dp)
+                            ) {
+                                items(imageResults, key = { it.thumbnail }) { photo ->
+                                    Box(
+                                        modifier = Modifier.aspectRatio(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(colors.card)
+                                            .clickable(enabled = !downloading) {
+                                                selectedImage = photo
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        AsyncImage(
+                                            model = photo.thumbnail,
+                                            contentDescription = mwString(
+                                                "cover.change", "Chọn ảnh bìa"
+                                            ),
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                if (pageLoading || !finishedScanning) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        CircularProgressIndicator(color = colors.purpleBright)
+                                        Text(mwString("cover.search_loading", "Đang tìm hình ảnh..."),
+                                            color = colors.textSecondary, fontSize = 13.sp)
+                                    }
+                                } else {
+                                    Text(
+                                        mwString("cover.search_empty",
+                                            "Chưa lấy được kết quả. Hãy thử từ khóa khác hoặc chọn ảnh trong máy."),
+                                        color = colors.textSecondary,
+                                        textAlign = TextAlign.Center,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.padding(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                        if (downloading) {
+                            Box(
+                                modifier = Modifier.fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.55f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    CircularProgressIndicator(color = Color.White)
+                                    Text(mwString("cover.google_downloading", "Đang tải ảnh..."),
+                                        color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+                val issue = imageError ?: pageError
+                if (issue != null) {
+                    Text(issue, fontSize = 12.sp, color = colors.red)
+                }
+                // Fixed bottom action: prominent, thumb-friendly gallery access.
+                Button(
+                    onClick = onChooseFromDevice,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    enabled = !downloading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.purple,
+                        contentColor = Color.White,
+                        disabledContainerColor = colors.cardRaised,
+                        disabledContentColor = colors.textMuted
+                    )
+                ) {
+                    Icon(
+                        Icons.Rounded.AddPhotoAlternate,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        mwString("cover.choose", "Chọn ảnh từ điện thoại"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Safely turn a user-selected WebView image URL into a file:// URI for the
+ * existing square cropper. Limit download size and reject non-image responses.
+ * This requires neither a Google Image Search API key nor a new server endpoint.
+ */
+private suspend fun downloadGoogleCoverImage(context: Context, source: String): Uri =
+    withContext(Dispatchers.IO) {
+        val maxBytes = 12 * 1024 * 1024
+        val folder = File(context.cacheDir, "melowave_web_cover_search")
+        if (!folder.isDirectory && !folder.mkdirs()) {
+            throw IOException("Không tạo được thư mục tạm")
+        }
+        val file = File.createTempFile("cover_", ".img", folder)
+        try {
+            if (source.startsWith("data:image/", ignoreCase = true)) {
+                val comma = source.indexOf(',')
+                if (comma <= 0 || !source.substring(0, comma).contains(";base64", ignoreCase = true)) {
+                    throw IOException("Ảnh dữ liệu không được hỗ trợ")
+                }
+                val encoded = source.substring(comma + 1)
+                if (encoded.length > (maxBytes * 4 / 3 + 2048)) {
+                    throw IOException("Ảnh quá lớn")
+                }
+                val decoded = Base64.decode(encoded, Base64.DEFAULT)
+                if (decoded.size > maxBytes) throw IOException("Ảnh quá lớn")
+                FileOutputStream(file).use { it.write(decoded) }
+            } else {
+                var imageUrl = URL(source)
+                if (imageUrl.protocol != "https") throw IOException("Chỉ hỗ trợ ảnh HTTPS")
+                var redirects = 0
+                var done = false
+                while (!done) {
+                    val connection = imageUrl.openConnection() as HttpURLConnection
+                    connection.instanceFollowRedirects = false
+                    connection.connectTimeout = 12000
+                    connection.readTimeout = 18000
+                    connection.setRequestProperty("Accept", "image/jpeg,image/png,image/webp,image/gif,image/*;q=0.8")
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; MeloWave)")
+                    connection.setRequestProperty("Referer", "https://www.google.com/")
+                    try {
+                        val status = connection.responseCode
+                        if (status in 300..399) {
+                            val location = connection.getHeaderField("Location")
+                                ?: throw IOException("Liên kết ảnh không hợp lệ")
+                            redirects++
+                            if (redirects > 4) throw IOException("Liên kết chuyển hướng quá nhiều")
+                            imageUrl = URL(imageUrl, location)
+                            if (imageUrl.protocol != "https") {
+                                throw IOException("Chuyển hướng ảnh không an toàn")
+                            }
+                        } else {
+                            if (status !in 200..299) {
+                                throw IOException("Máy chủ ảnh trả lỗi HTTP $status")
+                            }
+                            if (connection.contentLengthLong > maxBytes) {
+                                throw IOException("Ảnh lớn hơn 12 MB")
+                            }
+                            val mediaType = connection.contentType.orEmpty()
+                                .substringBefore(';').trim().lowercase(Locale.ROOT)
+                            if (mediaType.isNotBlank() &&
+                                !mediaType.startsWith("image/") &&
+                                mediaType != "application/octet-stream") {
+                                throw IOException("Địa chỉ không trả về tệp hình ảnh")
+                            }
+                            connection.inputStream.use { input ->
+                                FileOutputStream(file).use { output ->
+                                    val buffer = ByteArray(8192)
+                                    var total = 0L
+                                    while (true) {
+                                        val count = input.read(buffer)
+                                        if (count < 0) break
+                                        total += count
+                                        if (total > maxBytes) throw IOException("Ảnh lớn hơn 12 MB")
+                                        output.write(buffer, 0, count)
+                                    }
+                                }
+                            }
+                            done = true
+                        }
+                    } finally {
+                        connection.disconnect()
+                    }
+                }
+            }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (file.length() == 0L || bounds.outWidth <= 0 || bounds.outHeight <= 0 ||
+                max(bounds.outWidth, bounds.outHeight) > 20000) {
+                throw IOException("Định dạng ảnh không được hỗ trợ")
+            }
+            Uri.fromFile(file)
+        } catch (failure: Exception) {
+            file.delete()
+            throw failure
+        }
+    }
+
+/**
+ * Interactive square artwork cropper. The crop is calculated in normalized original-image
+ * coordinates; MusicController applies the same rectangle to the decoded bitmap when saving.
+ * The user's original photo and the song metadata are never modified.
+ */
+@Composable
+private fun ArtworkCropDialog(
+    controller: MusicController,
+    selectedUri: Uri,
+    onSave: (RectF) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    var preview by remember(selectedUri) { mutableStateOf<Bitmap?>(null) }
+    var loadError by remember(selectedUri) { mutableStateOf<String?>(null) }
+    var zoom by remember(selectedUri) { mutableFloatStateOf(1f) }
+    var pan by remember(selectedUri) { mutableStateOf(Offset.Zero) }
+    var frameSidePx by remember(selectedUri) { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(selectedUri) {
+        try {
+            preview = controller.loadArtworkForCrop(selectedUri)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            loadError = error.localizedMessage ?: "Không thể mở hình ảnh"
+        }
+    }
+
+    // At zoom 1, ContentScale.Crop already fills the square. At higher zoom levels,
+    // clamp panning so that no blank area is exposed beyond the square preview.
+    fun clampPan(proposed: Offset, cropZoom: Float): Offset {
+        val image = preview ?: return Offset.Zero
+        val minEdge = min(image.width, image.height).toFloat().coerceAtLeast(1f)
+        val maxX = (frameSidePx * (image.width / minEdge * cropZoom - 1f) / 2f).coerceAtLeast(0f)
+        val maxY = (frameSidePx * (image.height / minEdge * cropZoom - 1f) / 2f).coerceAtLeast(0f)
+        return Offset(proposed.x.coerceIn(-maxX, maxX), proposed.y.coerceIn(-maxY, maxY))
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            color = colors.card,
+            border = BorderStroke(1.dp, colors.border)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = mwString("cover.crop_title", "Cắt ảnh bìa"),
+                        modifier = Modifier.weight(1f),
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close,
+                            contentDescription = mwString("common.close", "Đóng"),
+                            tint = colors.textSecondary)
+                    }
+                }
+
+                val image = preview
+                when {
+                    image != null -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(15.dp))
+                                .background(Color(0xFF10162C))
+                                .onSizeChanged { frameSidePx = it.width.toFloat() }
+                                .pointerInput(image) {
+                                    detectTransformGestures { _, gesturePan, gestureZoom, _ ->
+                                        val nextZoom = (zoom * gestureZoom).coerceIn(1f, 4f)
+                                        zoom = nextZoom
+                                        pan = clampPan(pan + gesturePan, nextZoom)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = image.asImageBitmap(),
+                                contentDescription = mwString("cover.crop_title", "Cắt ảnh bìa"),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize().graphicsLayer {
+                                    scaleX = zoom
+                                    scaleY = zoom
+                                    translationX = pan.x
+                                    translationY = pan.y
+                                }
+                            )
+                            // Thin square frame to clarify what will be saved.
+                            Box(
+                                modifier = Modifier.fillMaxSize()
+                                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                                        RoundedCornerShape(15.dp))
+                            )
+                        }
+                        Text(
+                            mwString("cover.crop_hint", "Kéo ảnh để căn giữa, chụm 2 ngón để phóng to hoặc dùng thanh kéo."),
+                            color = colors.textSecondary,
+                            fontSize = 12.sp
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                mwString("cover.crop_zoom", "Phóng to"),
+                                color = colors.textSecondary,
+                                fontSize = 12.sp
+                            )
+                            Slider(
+                                value = zoom,
+                                onValueChange = { newZoom ->
+                                    zoom = newZoom
+                                    pan = clampPan(pan, newZoom)
+                                },
+                                valueRange = 1f..4f,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = colors.purpleBright,
+                                    activeTrackColor = colors.purpleBright
+                                )
+                            )
+                            TextButton(onClick = {
+                                zoom = 1f
+                                pan = Offset.Zero
+                            }) {
+                                Text(mwString("cover.crop_reset", "Đặt lại"), color = colors.purpleBright)
+                            }
+                        }
+                    }
+                    loadError != null -> {
+                        Text(loadError.orEmpty(), color = colors.red, fontSize = 14.sp)
+                    }
+                    else -> {
+                        Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = colors.purpleBright)
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                        Text(mwString("common.cancel", "Hủy"), color = colors.textPrimary)
+                    }
+                    Button(
+                        enabled = preview != null && frameSidePx > 0f,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val bitmap = preview ?: return@Button
+                            val minEdge = min(bitmap.width, bitmap.height).toFloat()
+                            val side = (minEdge / zoom).coerceAtLeast(1f)
+                            val scale = frameSidePx * zoom / minEdge
+                            val left = ((bitmap.width - side) / 2f - pan.x / scale)
+                                .coerceIn(0f, bitmap.width - side)
+                            val top = ((bitmap.height - side) / 2f - pan.y / scale)
+                                .coerceIn(0f, bitmap.height - side)
+                            onSave(RectF(
+                                left / bitmap.width,
+                                top / bitmap.height,
+                                (left + side) / bitmap.width,
+                                (top + side) / bitmap.height
+                            ))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                    ) {
+                        Text(mwString("cover.crop_save", "Lưu ảnh bìa"))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LyricsInformationInlineCard(
+    song: SongItem,
+    controller: MusicController,
+    lyrics: LyricsContent,
+    onClose: () -> Unit
+) {
+    val colors = LocalMusicColors.current
+    val context = LocalContext.current
+    val timedCount = lyrics.lines.count { it.timestampMs != null }
+    val enhancedCount = lyrics.lines.count { it.wordTimings.isNotEmpty() }
+    val actualDuration = if (controller.durationMs > 1_000L) controller.durationMs else song.durationMs
+    val mismatched = lyrics.synced && actualDuration > 20_000L && lyrics.durationMs > 20_000L &&
+        kotlin.math.abs(actualDuration - lyrics.durationMs) > 15_000L
+    val detailsText = if (lyrics.synced) {
+        "LRC đồng bộ · $timedCount câu · eLRC $enhancedCount câu"
+    } else {
+        "Lời thường · ${lyrics.lines.size} câu"
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = if (colors.isDark) colors.card else colors.backgroundSoft,
+        border = BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.30f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.Info, contentDescription = null,
+                    tint = colors.purpleBright, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    "Thông tin lời bài hát",
+                    color = colors.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Đóng thông tin",
+                        tint = colors.textSecondary, modifier = Modifier.size(19.dp))
+                }
+            }
+            Text(detailsText, fontSize = 12.sp, color = colors.textPrimary)
+            Text(
+                "Nguồn: ${lyrics.sourceName}",
+                fontSize = 11.sp,
+                color = colors.textSecondary
+            )
+            if (mismatched) {
+                Text(
+                    "Lưu ý: thời lượng lời có thể không khớp bản nhạc.",
+                    fontSize = 11.sp,
+                    color = if (colors.isDark) Color(0xFFFFC06A) else Color(0xFF9A4A00)
+                )
+            }
+            Text(
+                "Nhấn giữ lời bài hát, kéo qua nhiều câu để chọn và sao chép.",
+                color = colors.textSecondary,
+                fontSize = 11.sp
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TextButton(
+                    onClick = {
+                        val fullText = lyrics.lines.joinToString("\n") { it.text.trim() }.trim()
+                        if (fullText.isNotEmpty()) {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                                    as ClipboardManager
+                            clipboard.setPrimaryClip(
+                                ClipData.newPlainText("Lời bài hát - ${song.title}", fullText)
+                            )
+                            Toast.makeText(context,
+                                "Đã sao chép toàn bộ lời bài hát", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Rounded.ContentCopy, contentDescription = null,
+                        modifier = Modifier.size(17.dp), tint = colors.purpleBright)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Sao chép tất cả", color = colors.purpleBright, fontSize = 11.sp)
+                }
+                TextButton(
+                    onClick = { shareLyricsWithAndroid(context, song, lyrics) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Rounded.Share, contentDescription = null,
+                        modifier = Modifier.size(17.dp), tint = colors.purpleBright)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Chia sẻ lời", color = colors.purpleBright, fontSize = 11.sp)
                 }
             }
         }
@@ -1751,10 +3121,15 @@ private fun WifiHostDialog(
 @Composable
 private fun TrackTitleBlock(
     controller: MusicController,
-    song: SongItem
+    song: SongItem,
+    onEditArtwork: () -> Unit,
+    karaokeActive: Boolean
 ) {
     val colors = LocalMusicColors.current
     val technicalInfo = controller.audioTechnicalInfoFor(song)
+    val lyrics = controller.lyricsFor(song)
+    val hasLyrics = lyrics?.lines?.isNotEmpty() == true
+    var showLyricsInformation by rememberSaveable(song.id) { mutableStateOf(false) }
     LaunchedEffect(song.id, controller.isLoading) {
         if (!controller.isLoading) controller.ensureAudioTechnicalInfo(song)
     }
@@ -1778,7 +3153,34 @@ private fun TrackTitleBlock(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            IconButton(onClick = { controller.toggleFavorite(song) }) {
+            // Các thao tác cạnh tên bài hát: thông tin lời, thêm ảnh và yêu thích.
+            // Nút karaoke lớn trên thanh trên cùng vẫn là nút bật/tắt lời bài hát.
+            if (song.source != SongSource.MOVIE) {
+                // Chỉ hiện nút nhỏ này khi bài hát đã có dữ liệu lời.
+                // Đặt bên trái nút thêm ảnh đúng theo bố cục yêu cầu.
+                if (hasLyrics) {
+                    IconButton(
+                        onClick = { showLyricsInformation = !showLyricsInformation },
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Share,
+                            contentDescription = "Mở thông tin và chia sẻ lời bài hát",
+                            tint = if (showLyricsInformation || karaokeActive) colors.purpleBright else colors.textSecondary,
+                            modifier = Modifier.size(25.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = onEditArtwork, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        imageVector = Icons.Outlined.AddPhotoAlternate,
+                        contentDescription = mwString("cover.change", "Thay ảnh bìa bài hát"),
+                        tint = if (controller.isFavorite(song)) colors.magenta else colors.textSecondary,
+                        modifier = Modifier.size(31.dp)
+                    )
+                }
+            }
+            IconButton(onClick = { controller.toggleFavorite(song) }, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = if (controller.isFavorite(song)) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     contentDescription = "Yêu thích",
@@ -1786,6 +3188,15 @@ private fun TrackTitleBlock(
                     modifier = Modifier.size(31.dp)
                 )
             }
+        }
+        if (showLyricsInformation && lyrics != null && hasLyrics) {
+            Spacer(Modifier.height(8.dp))
+            LyricsInformationInlineCard(
+                song = song,
+                controller = controller,
+                lyrics = lyrics,
+                onClose = { showLyricsInformation = false }
+            )
         }
         Spacer(Modifier.height(8.dp))
         Row(
@@ -1835,13 +3246,13 @@ private fun MetadataChip(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = colors.purpleBright,
+                tint = if (colors.isDark) colors.purpleBright else colors.purple,
                 modifier = Modifier.size(17.dp)
             )
             Spacer(Modifier.width(5.dp))
             Text(
                 text = text,
-                color = colors.purpleBright,
+                color = if (colors.isDark) colors.purpleBright else colors.purple,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
@@ -2127,6 +3538,7 @@ private fun QueuePanel(
 @Composable
 private fun EqualizerDialog(
     controller: MusicController,
+    onOpenPremium: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = LocalMusicColors.current
@@ -2145,6 +3557,7 @@ private fun EqualizerDialog(
             Box(modifier = Modifier.fillMaxSize()) {
                 EqualizerPanel(
                     controller = controller,
+                    onOpenPremium = onOpenPremium,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = 38.dp)
@@ -2250,6 +3663,7 @@ private data class EqPreset(
 @Composable
 internal fun EqualizerPanel(
     controller: MusicController,
+    onOpenPremium: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalMusicColors.current
@@ -2269,6 +3683,7 @@ internal fun EqualizerPanel(
     }
 
     var showAdvancedDialog by rememberSaveable { mutableStateOf(false) }
+    var showPremiumRequired by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         controller.refreshEqualizer()
@@ -2380,8 +3795,12 @@ internal fun EqualizerPanel(
             ) {
                 OutlinedButton(
                     onClick = {
-                        controller.prepareAdvancedEqualizerBands()
-                        showAdvancedDialog = true
+                        if (MeloWarePremiumAccess.equalizerRequiresPremium) {
+                            showPremiumRequired = true
+                        } else {
+                            controller.prepareAdvancedEqualizerBands()
+                            showAdvancedDialog = true
+                        }
                     },
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, palette.border),
@@ -2435,7 +3854,7 @@ internal fun EqualizerPanel(
         }
     }
 
-    if (showAdvancedDialog) {
+    if (showAdvancedDialog && !MeloWarePremiumAccess.equalizerRequiresPremium) {
         AdvancedEqDialog(
             values = listOf(
                 controller.equalizerBand60,
@@ -2448,6 +3867,27 @@ internal fun EqualizerPanel(
             onValueChange = controller::updateAdvancedEqualizerBand,
             onFlat = controller::setAdvancedEqualizerFlat,
             onDismiss = { showAdvancedDialog = false },
+        )
+    }
+    if (showPremiumRequired) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showPremiumRequired = false },
+            title = { Text(mwString("premium.equalizer_locked_title", "Equalizer nâng cao · Premium")) },
+            text = { Text(mwString("premium.equalizer_locked_detail", "Dùng thử đã hết. Kích hoạt Premium để mở EQ nâng cao.")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPremiumRequired = false
+                    onOpenPremium()
+                }) { Text(mwString("premium.view_plans", "Xem gói Premium"), color = palette.purpleBright) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPremiumRequired = false }) {
+                    Text(mwString("common.close", "Đóng"), color = palette.textSecondary)
+                }
+            },
+            containerColor = palette.card,
+            titleContentColor = palette.textPrimary,
+            textContentColor = palette.textSecondary
         )
     }
 }
