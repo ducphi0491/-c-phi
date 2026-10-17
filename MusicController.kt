@@ -3336,6 +3336,28 @@ internal class MusicController(private val context: Context) {
         }
     }
 
+    /**
+     * Read-only source for the waveform analyzer. Never downloads a Drive file:
+     * the playback pipeline has already prepared it in cachedPlaybackUris.
+     * P2P returns a file only after the existing transfer passed SHA-256 check.
+     */
+    internal fun waveformSourceFor(song: SongItem): Uri? = when (song.source) {
+        SongSource.PERSONAL_DRIVE, SongSource.PUBLIC_DRIVE ->
+            cachedPlaybackUris[song.id]?.takeIf { cached ->
+                val file = cached.path?.let(::File)
+                file?.isFile == true && file.length() > 0L
+            }
+        SongSource.INTERNET_P2P ->
+            if (internetSessionLazy.isInitialized()) {
+                internetSession.verifiedWaveformUri(song.uri.pathSegments.firstOrNull().orEmpty())
+            } else null
+        SongSource.MOVIE -> null
+        else -> song.uri.takeIf { source ->
+            source.scheme?.lowercase(Locale.ROOT) in
+                listOf("content", "file", "android.resource", "http", "https")
+        }
+    }
+
     private suspend fun resolvePlaybackUri(song: SongItem): Uri {
         if (song.source != SongSource.PERSONAL_DRIVE && song.source != SongSource.PUBLIC_DRIVE) {
             return song.uri
@@ -3801,12 +3823,44 @@ internal class MusicController(private val context: Context) {
         }
         val target = resolver.insert(collection, values)
             ?: throw IOException("Không thể tạo file trong thư mục Music")
+        var networkConnection: HttpURLConnection? = null
         try {
-            resolver.openInputStream(sourceUri)?.use { input ->
+            val input = when (sourceUri.scheme?.lowercase(Locale.ROOT)) {
+                "http", "https" -> {
+                    val connection = URL(sourceUri.toString()).openConnection() as HttpURLConnection
+                    networkConnection = connection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 20_000
+                    connection.readTimeout = 60_000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("Accept", "audio/*,*/*;q=0.8")
+                    connection.setRequestProperty("User-Agent", "MeloWave-Android/1.0")
+                    val responseCode = connection.responseCode
+                    if (responseCode !in 200..299) {
+                        throw IOException("Không tải được bài hát trực tuyến (HTTP $responseCode)")
+                    }
+                    val responseType = connection.contentType
+                        ?.substringBefore(';')
+                        ?.trim()
+                        ?.lowercase(Locale.ROOT)
+                        .orEmpty()
+                    if (responseType.contains("text/html") ||
+                        responseType.contains("application/json")) {
+                        throw IOException("Máy chủ không trả về dữ liệu âm thanh")
+                    }
+                    connection.inputStream
+                }
+                else -> resolver.openInputStream(sourceUri)
+                    ?: throw IOException("Không đọc được dữ liệu bài hát")
+            }
+            val copiedBytes = input.use { source ->
                 resolver.openOutputStream(target)?.use { output ->
-                    input.copyTo(output, 128 * 1024)
+                    source.copyTo(output, 128 * 1024)
                 } ?: throw IOException("Không mở được file đích")
-            } ?: throw IOException("Không đọc được dữ liệu bài hát")
+            }
+            if (copiedBytes <= 0L) {
+                throw IOException("Dữ liệu bài hát tải về bị rỗng")
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 values.clear()
                 values.put(MediaStore.Audio.Media.IS_PENDING, 0)
@@ -3815,6 +3869,8 @@ internal class MusicController(private val context: Context) {
         } catch (error: Throwable) {
             resolver.delete(target, null, null)
             throw error
+        } finally {
+            networkConnection?.disconnect()
         }
         return "Music/MeloWare/$fileName"
     }
