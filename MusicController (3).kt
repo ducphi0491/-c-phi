@@ -6,7 +6,14 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.RectF
+import android.graphics.ImageDecoder
 import android.media.RingtoneManager
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer as AndroidEqualizer
@@ -16,6 +23,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -62,6 +70,7 @@ import com.google.android.gms.cast.framework.media.CastMediaOptions
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.google.android.gms.common.images.WebImage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -98,7 +107,12 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.max
+import kotlin.math.roundToInt
+import kotlin.math.pow
 
 internal enum class MusicScreen {
     HOME,
@@ -119,6 +133,7 @@ internal enum class LibrarySource {
     LOCAL,
     PERSONAL_DRIVE,
     PUBLIC_DRIVE,
+    INTERNET,
     DOWNLOADED,
     FAVORITES
 }
@@ -140,8 +155,17 @@ internal enum class SongSource {
     PUBLIC_DRIVE,
     DOWNLOADED,
     ONLINE_HTTP,
+    INTERNET_P2P,
     MOVIE,
     APP_RESOURCE
+}
+
+/** Outcome of a MediaStore operation. Android may require a system permission prompt. */
+internal sealed class LocalSongMutationResult {
+    object Completed : LocalSongMutationResult()
+    object LibraryOnly : LocalSongMutationResult()
+    data class NeedsConsent(val intentSender: android.content.IntentSender) : LocalSongMutationResult()
+    data class Failed(val message: String) : LocalSongMutationResult()
 }
 
 internal data class SongItem(
@@ -154,7 +178,9 @@ internal data class SongItem(
     val durationMs: Long = 0L,
     val source: SongSource,
     val mimeType: String? = null,
-    val artworkUrl: String? = null
+    val artworkUrl: String? = null,
+    val genre: String = "",
+    val dateAddedMs: Long = 0L
 ) {
     val durationLabel: String
         get() = if (durationMs > 0L) formatDuration(durationMs) else "--:--"
@@ -209,9 +235,16 @@ internal data class AudioTechnicalInfo(
     val sizeBytes: Long? = null
 )
 
+/** Word-level timestamps are available only in enhanced LRC (<mm:ss.xx> tags). */
+internal data class LyricWordTiming(
+    val offset: Int,
+    val timestampMs: Long
+)
+
 internal data class LyricLine(
     val timestampMs: Long?,
-    val text: String
+    val text: String,
+    val wordTimings: List<LyricWordTiming> = emptyList()
 )
 
 internal data class LyricsContent(
@@ -364,9 +397,17 @@ internal fun formatDuration(milliseconds: Long): String {
 internal class MusicController(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    internal val smartPlaylists = SmartPlaylistRepository(context.applicationContext, scope)
     private var playbackJob: Job? = null
     private var tickerJob: Job? = null
     private var sleepTimerJob: Job? = null
+
+    // Smart Playlist listening session. Database writes are batched so playback stays smooth.
+    private var smartTrackedSongId: String? = null
+    private var smartTrackedListenMs: Long = 0L
+    private var smartTrackedPersistedMs: Long = 0L
+    private var smartTrackedLastTickElapsedMs: Long = 0L
+    private var smartTrackedPlayCounted: Boolean = false
     private val artworkRequests = mutableSetOf<String>()
     private val cachedPlaybackUris = mutableMapOf<String, Uri>()
     private val activeTransformers = mutableSetOf<Transformer>()
@@ -375,7 +416,166 @@ internal class MusicController(private val context: Context) {
     private val lyricsLoadingBySongId = mutableStateMapOf<String, Boolean>()
     private val lyricsErrorBySongId = mutableStateMapOf<String, String>()
     private val lyricsJobs = mutableMapOf<String, Job>()
-    private val audioFxEngine = PersistentAudioFxEngine()
+    private var audioFxEngine = PersistentAudioFxEngine()
+    private val laptopShareLazy = lazy { MeloWareLaptopClient(context.applicationContext) }
+    val laptopShare: MeloWareLaptopClient get() = laptopShareLazy.value
+
+    // Internet WebRTC belongs to the app controller, not to a transient dialog.
+    private val internetSessionLazy = lazy(LazyThreadSafetyMode.NONE) {
+        MeloWareInternetSession(context.applicationContext).apply {
+            onClosed = { reason -> onInternetSessionClosed(reason) }
+            onDownloaded = { scanLocalMusic() }
+            onRemoteListChanged = { reconcileInternetRemoteList() }
+        }
+    }
+    val internetSession: MeloWareInternetSession get() = internetSessionLazy.value
+    val internetLinkedFolders = mutableStateListOf<String>()
+    private var internetWasPlaying = false
+
+    /** Remote songs are only mounted while the approved P2P connection is alive. */
+    fun internetLibrarySongs(): List<SongItem> {
+        if (!internetSessionLazy.isInitialized()) return emptyList()
+        val session = internetSession
+        if (!session.dataChannelOpen || internetLinkedFolders.isEmpty()) return emptyList()
+        return session.remoteAudio.mapNotNull { audio ->
+            val selected = internetLinkedFolders.firstOrNull { audio.folder.startsWith(it) }
+                ?: return@mapNotNull null
+            val (title, artist) = parseTitleArtist(
+                audio.name.substringBeforeLast('.', audio.name), "Nhạc chia sẻ qua Internet"
+            )
+            SongItem(
+                id = "meloware_internet_${session.roomCode}_${audio.id}",
+                title = title,
+                artist = artist,
+                album = "MeloWare Internet",
+                folderName = "Internet · ${session.remoteRootFolder}" +
+                        if (selected.isBlank()) "" else " / ${selected.trimEnd('/')}",
+                uri = Uri.parse("meloware-internet://audio/${audio.id}/${Uri.encode(audio.name)}"),
+                source = SongSource.INTERNET_P2P,
+                mimeType = audio.mime
+            )
+        }
+    }
+
+    private fun reconcileInternetRemoteList() {
+        // A can refresh or replace its shared SAF folder without closing the room.
+        val keys = internetSession.remoteAudio.mapTo(mutableSetOf()) { it.id }
+        val playingId = currentSong?.id
+        val lostCurrent = currentSong?.source == SongSource.INTERNET_P2P &&
+                currentSong?.uri?.pathSegments?.firstOrNull() !in keys
+        if (lostCurrent) {
+            player.stop()
+            internetSession.stopOnline()
+            internetWasPlaying = false
+            isPlaying = false
+            isLoading = false
+            statusMessage = "Máy A đã đổi thư mục chia sẻ. Danh sách nhạc đã cập nhật."
+        }
+        val dropped = queue.removeAll {
+            it.source == SongSource.INTERNET_P2P && it.uri.pathSegments.firstOrNull() !in keys
+        }
+        if (dropped) {
+            currentIndex = if (queue.isEmpty()) -1 else
+                queue.indexOfFirst { it.id == playingId }.takeIf { it >= 0 } ?: 0
+            saveQueue()
+        }
+    }
+
+    fun addInternetFolderToLibrary(folder: String): Boolean {
+        val session = internetSession
+        if (!session.dataChannelOpen) {
+            statusMessage = "Hãy kết nối với máy A trước khi thêm thư mục Internet."
+            return false
+        }
+        if (session.remoteAudio.none { it.folder.startsWith(folder) }) {
+            statusMessage = "Thư mục được chọn chưa có file nhạc để phát."
+            return false
+        }
+        if (internetLinkedFolders.none { folder.startsWith(it) }) {
+            // A selected parent replaces redundant descendant folders.
+            internetLinkedFolders.removeAll { it.startsWith(folder) }
+            internetLinkedFolders.add(folder)
+        }
+        librarySource = LibrarySource.INTERNET
+        libraryTab = LibraryTab.FOLDERS
+        libraryQuery = ""
+        statusMessage = "Đã đưa thư mục nhạc Internet vào Thư viện."
+        return true
+    }
+
+    fun playInternetFolder(folder: String) {
+        if (!addInternetFolderToLibrary(folder)) return
+        val keys = internetSession.remoteAudio.filter { it.folder.startsWith(folder) }.map { it.id }.toSet()
+        val songs = internetLibrarySongs().filter { it.uri.pathSegments.firstOrNull() in keys }
+        if (songs.isNotEmpty()) playCollection(songs, 0)
+    }
+
+    fun playInternetAudio(audioId: String) {
+        val audio = internetSession.remoteAudio.firstOrNull { it.id == audioId } ?: return
+        if (!addInternetFolderToLibrary(audio.folder)) return
+        val collection = internetLibrarySongs()
+        val song = collection.firstOrNull { it.uri.pathSegments.firstOrNull() == audioId } ?: return
+        playSong(song, collection)
+    }
+
+    fun stopInternetPlayback() {
+        if (currentSong?.source != SongSource.INTERNET_P2P) return
+        player.stop()
+        internetSession.stopOnline()
+        internetWasPlaying = false
+        isPlaying = false
+        isLoading = false
+    }
+
+    private fun onInternetSessionClosed(reason: String?) {
+        internetLinkedFolders.clear()
+        val currentId = currentSong?.id
+        val currentWasInternet = currentSong?.source == SongSource.INTERNET_P2P
+        if (currentWasInternet) {
+            player.stop()
+            player.clearMediaItems()
+            isPlaying = false
+            isLoading = false
+            positionMs = 0L
+            durationMs = 1L
+        }
+        internetWasPlaying = false
+        queue.removeAll { it.source == SongSource.INTERNET_P2P }
+        recentSongs.removeAll { it.source == SongSource.INTERNET_P2P }
+        currentIndex = if (queue.isEmpty()) -1 else
+            queue.indexOfFirst { it.id == currentId }.takeIf { it >= 0 } ?: 0
+        if (librarySource == LibrarySource.INTERNET) librarySource = LibrarySource.ALL
+        saveQueue()
+        if (!reason.isNullOrBlank()) statusMessage = reason
+    }
+
+    /** Online playback from PC Chrome via the phone-hosted local HTTP browser bridge. */
+    fun playLaptopFile(selected: LaptopAudioEntry) {
+        if (castConnected) {
+            statusMessage = "Hãy ngắt Google Cast trước khi nghe nhạc máy tính trên điện thoại."
+            return
+        }
+        if (selected.isFolder || !laptopShare.connected) {
+            statusMessage = "Hãy kết nối máy tính trước khi phát nhạc."
+            return
+        }
+        val tracks = laptopShare.entries.filter { !it.isFolder && it.size > 0L }.map { entry ->
+            val titleArtist = parseTitleArtist(entry.name, "Máy tính")
+            SongItem(
+                id = "meloware_pc_" + entry.path.joinToString("/").sha256().take(32),
+                title = titleArtist.first,
+                artist = titleArtist.second,
+                folderName = "Máy tính / " + entry.path.dropLast(1).joinToString("/"),
+                uri = laptopShare.streamUrl(entry),
+                source = SongSource.ONLINE_HTTP,
+                mimeType = entry.mime
+            )
+        }
+        val song = tracks.firstOrNull { it.id == "meloware_pc_" + selected.path.joinToString("/").sha256().take(32) }
+        if (song == null) { statusMessage = "Không tìm thấy bài hát trong thư mục."; return }
+        playSong(song, tracks)
+    }
+
     val wifiLanDiscovery = MeloWareLanDiscovery(context.applicationContext)
     private var wifiAppShareRequested = false
     var wifiAppShareEnabled by mutableStateOf(false)
@@ -437,13 +637,16 @@ internal class MusicController(private val context: Context) {
         private set
 
 
-    val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
-        val attributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .build()
-        setAudioAttributes(attributes, true)
-    }
+    // During real Crossfade, the incoming ExoPlayer becomes the active player.
+    // Compose observes the swap; the outgoing instance remains audible only during fading.
+    private val mediaAudioAttributes = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+        .build()
+    var player: ExoPlayer by mutableStateOf(ExoPlayer.Builder(context).build().apply {
+        setAudioAttributes(mediaAudioAttributes, true)
+    })
+        private set
 
     val queue = mutableStateListOf<SongItem>()
     val localSongs = mutableStateListOf<SongItem>()
@@ -451,6 +654,8 @@ internal class MusicController(private val context: Context) {
     val publicDriveSongs = mutableStateListOf<SongItem>()
     val recentSongs = mutableStateListOf<SongItem>()
     val artworkById = mutableStateMapOf<String, String>()
+    // Private, persistent covers selected by the user. This overrides Internet/embedded artwork.
+    private val customArtworkByKey = mutableStateMapOf<String, String>()
     val favoriteIds = mutableStateMapOf<String, Boolean>()
 
     var currentScreen by mutableStateOf(MusicScreen.HOME)
@@ -475,29 +680,50 @@ internal class MusicController(private val context: Context) {
         private set
 
     // Equalizer state belongs to the player/controller, not to the dialog UI.
-    // This keeps the effect active after the Equalizer window is closed and
-    // lets it reattach automatically whenever ExoPlayer creates a new session.
-    var equalizerBass by mutableIntStateOf(prefs.getInt(KEY_EQ_BASS, 4))
+    // New installs start Flat and bypassed; audio changes only after the listener opts in.
+    var equalizerBass by mutableIntStateOf(prefs.getInt(KEY_EQ_BASS, 0))
         private set
-    var equalizerMid by mutableIntStateOf(prefs.getInt(KEY_EQ_MID, 2))
+    var equalizerMid by mutableIntStateOf(prefs.getInt(KEY_EQ_MID, 0))
         private set
-    var equalizerTreble by mutableIntStateOf(prefs.getInt(KEY_EQ_TREBLE, 3))
+    var equalizerTreble by mutableIntStateOf(prefs.getInt(KEY_EQ_TREBLE, 0))
         private set
-    var equalizerBand60 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_60, 4))
+    var equalizerBand60 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_60, 0))
         private set
-    var equalizerBand230 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_230, 3))
+    var equalizerBand230 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_230, 0))
         private set
-    var equalizerBand910 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_910, 2))
+    var equalizerBand910 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_910, 0))
         private set
-    var equalizerBand3600 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_3600, 2))
+    var equalizerBand3600 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_3600, 0))
         private set
-    var equalizerBand14000 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_14000, 3))
+    var equalizerBand14000 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_14000, 0))
         private set
-    var equalizerSelectedPresetIndex by mutableIntStateOf(prefs.getInt(KEY_EQ_PRESET, 0))
+    var equalizerSelectedPresetIndex by mutableIntStateOf(prefs.getInt(KEY_EQ_PRESET, 1))
         private set
     var equalizerAdvancedMode by mutableStateOf(prefs.getBoolean(KEY_EQ_ADVANCED, false))
         private set
     var equalizerLoudnessEnabled by mutableStateOf(prefs.getBoolean(KEY_EQ_LOUDNESS, false))
+        private set
+    var equalizerLoudnessGainDb by mutableIntStateOf(
+        prefs.getInt(KEY_EQ_LOUDNESS_GAIN_DB, 3).coerceIn(1, 6)
+    )
+        private set
+    var equalizerBassBoostStrength by mutableIntStateOf(
+        prefs.getInt(KEY_EQ_BASS_BOOST, 0).coerceIn(0, 100)
+    )
+        private set
+    var equalizerAutoHeadroomEnabled by mutableStateOf(
+        prefs.getBoolean(KEY_EQ_AUTO_HEADROOM, true)
+    )
+        private set
+    var equalizerHeadroomDb by mutableStateOf(0f)
+        private set
+    var equalizerBassBoostAvailable by mutableStateOf(false)
+        private set
+    var equalizerBassBoostStrengthSupported by mutableStateOf(false)
+        private set
+    var equalizerActualFiveBandLabels by mutableStateOf(
+        listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
+    )
         private set
     var equalizerEnabled by mutableStateOf(prefs.getBoolean(KEY_EQ_ENABLED, false))
         private set
@@ -507,6 +733,51 @@ internal class MusicController(private val context: Context) {
         private set
     var equalizerError by mutableStateOf<String?>(null)
         private set
+    var equalizerWarning by mutableStateOf<String?>(null)
+        private set
+
+    // Master Volume is independent from Android's system media volume.
+    // It scales only MeloWave's local ExoPlayer output and remains active even when EQ is bypassed.
+    var soundMasterVolumePercent by mutableIntStateOf(
+        prefs.getInt(KEY_SOUND_MASTER_VOLUME, 100).coerceIn(0, 100)
+    )
+        private set
+
+    // Sound Studio Pro: saved presets are keyed by the connected audio output,
+    // not by the current song or an ephemeral Android audio-device id.
+    private val systemAudioManager by lazy { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    var soundOutputName by mutableStateOf("Loa điện thoại")
+        private set
+    var soundOutputKey by mutableStateOf("speaker")
+        private set
+    var soundPresetSaved by mutableStateOf(false)
+        private set
+    // Read-only public Compose state: custom setSound... methods below are the only setters.
+    // Using public var properties here generates JVM setters with the same names as those methods.
+    private var soundAutoApplyDeviceEQState by mutableStateOf(prefs.getBoolean(KEY_SOUND_AUTO_EQ, true))
+    val soundAutoApplyDeviceEQ: Boolean
+        get() = soundAutoApplyDeviceEQState
+    private var soundCrossfadeSecondsState by mutableIntStateOf(prefs.getInt(KEY_SOUND_CROSSFADE, 0).coerceIn(0, 10))
+    val soundCrossfadeSeconds: Int
+        get() = soundCrossfadeSecondsState
+    private var soundDeviceCallbacksEnabled = false
+    private var soundOutputInitialized = false
+    private var lastAutoCrossfadeSongId: String? = null
+    private val soundDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = refreshSoundOutput()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = refreshSoundOutput()
+    }
+    private var lastSoundDevicePollElapsedMs = 0L
+    private var crossfadeJob: Job? = null
+    private var crossfadeStandby: ExoPlayer? = null
+    private var crossfadeOutgoing: ExoPlayer? = null
+    private var crossfadeStandbyFxEngine: PersistentAudioFxEngine? = null
+    private var crossfadeOutgoingFxEngine: PersistentAudioFxEngine? = null
+    // These gains preserve the current fade position when Master Volume or EQ protection changes.
+    private var crossfadeIncomingTransitionGain = 1f
+    private var crossfadeOutgoingTransitionGain = 1f
+    private var lastEqualizerPremiumLocked = MeloWarePremiumAccess.equalizerRequiresPremium
+    private var lastGoogleDrivePremiumLocked = MeloWarePremiumAccess.googleDriveRequiresPremium
 
     var shuffleEnabled by mutableStateOf(false)
     var repeatSetting by mutableStateOf(RepeatSetting.OFF)
@@ -514,6 +785,8 @@ internal class MusicController(private val context: Context) {
     var statusMessage by mutableStateOf<String?>(null)
 
     private var personalDriveAccessToken: String? = null
+    var personalDriveUsingReadOnly by mutableStateOf(false)
+        private set
     private var personalDriveInvalidToken: String? = null
     private var pendingPersonalDrivePlaybackId: String? = null
 
@@ -572,8 +845,15 @@ internal class MusicController(private val context: Context) {
         get() = queue.getOrNull(currentIndex)
 
     init {
+        migrateLegacyEqualizerDefaults()
         restoreState()
         configurePlayerListener()
+        runCatching {
+            systemAudioManager.registerAudioDeviceCallback(soundDeviceCallback, Handler(Looper.getMainLooper()))
+            soundDeviceCallbacksEnabled = true
+        }
+        refreshSoundOutput()
+        reapplyOutputVolumes()
         tickerJob = scope.launch {
             while (true) {
                 if (currentSong?.source != SongSource.MOVIE && !castConnected) {
@@ -581,12 +861,64 @@ internal class MusicController(private val context: Context) {
                     val detected = player.duration
                     durationMs = if (detected == C.TIME_UNSET || detected <= 0L) 1L else detected
                 }
+                updateSmartPlaybackTracking()
+                if (SystemClock.elapsedRealtime() - lastSoundDevicePollElapsedMs >= 3_000L) {
+                    lastSoundDevicePollElapsedMs = SystemClock.elapsedRealtime()
+                    refreshSoundOutput()
+                }
+                val premiumEqLocked = MeloWarePremiumAccess.equalizerRequiresPremium
+                if (premiumEqLocked != lastEqualizerPremiumLocked) {
+                    lastEqualizerPremiumLocked = premiumEqLocked
+                    applyEqualizerSettings(force = true)
+                }
+                val drivePremiumLocked = MeloWarePremiumAccess.googleDriveRequiresPremium
+                if (drivePremiumLocked != lastGoogleDrivePremiumLocked) {
+                    lastGoogleDrivePremiumLocked = drivePremiumLocked
+                    if (drivePremiumLocked && currentSong?.let(::isGoogleDriveSong) == true) {
+                        cancelSoundCrossfade()
+                        runCatching { player.pause() }
+                        isPlaying = false
+                        statusMessage = "Google Drive Music cần Premium hoặc Premium Trial còn hiệu lực."
+                    }
+                }
+                maybeAutoSoundCrossfade()
                 delay(if (isPlaying) 250L else 650L)
             }
         }
     }
 
+    private fun migrateLegacyEqualizerDefaults() {
+        if (prefs.getInt(KEY_EQ_TUNING_VERSION, 0) >= 2) return
+        val legacyUntunedDefaults = equalizerBass == 4 && equalizerMid == 2 && equalizerTreble == 3 &&
+            equalizerBand60 == 4 && equalizerBand230 == 3 && equalizerBand910 == 2 &&
+            equalizerBand3600 == 2 && equalizerBand14000 == 3 &&
+            equalizerSelectedPresetIndex == 0 && !equalizerAdvancedMode
+        if (legacyUntunedDefaults) {
+            equalizerBass = 0
+            equalizerMid = 0
+            equalizerTreble = 0
+            equalizerBand60 = 0
+            equalizerBand230 = 0
+            equalizerBand910 = 0
+            equalizerBand3600 = 0
+            equalizerBand14000 = 0
+            equalizerSelectedPresetIndex = 1
+            equalizerBassBoostStrength = 0
+            equalizerLoudnessEnabled = false
+            equalizerLoudnessGainDb = 3
+            equalizerAutoHeadroomEnabled = true
+        }
+        prefs.edit().putInt(KEY_EQ_TUNING_VERSION, 2).apply()
+        persistEqualizerState()
+    }
+
     fun release() {
+        cancelSoundCrossfade()
+        if (soundDeviceCallbacksEnabled) {
+            runCatching { systemAudioManager.unregisterAudioDeviceCallback(soundDeviceCallback) }
+            soundDeviceCallbacksEnabled = false
+        }
+        finishSmartPlaybackTracking(markSkipped = false)
         playbackJob?.cancel()
         tickerJob?.cancel()
         sleepTimerJob?.cancel()
@@ -595,12 +927,23 @@ internal class MusicController(private val context: Context) {
         saveQueue()
         movieWebView = null
         activeTransformers.clear()
+        if (laptopShareLazy.isInitialized()) laptopShareLazy.value.release()
+        if (internetSessionLazy.isInitialized()) {
+            internetSession.onClosed = null
+            internetSession.onDownloaded = null
+            internetSession.onRemoteListChanged = null
+            internetSession.shutdown()
+        }
         closeMeloWareLibrary()
         stopReceivingMeloWare()
         wifiLanDiscovery.stopDiscovery()
         stopWifiHostInternal(clearUserRequest = true)
         unregisterCastListeners()
         audioFxEngine.release()
+        crossfadeStandbyFxEngine?.release()
+        crossfadeStandbyFxEngine = null
+        crossfadeOutgoingFxEngine?.release()
+        crossfadeOutgoingFxEngine = null
         player.release()
         scope.cancel()
     }
@@ -634,22 +977,40 @@ internal class MusicController(private val context: Context) {
         }
 
         lyricsJobs[song.id] = scope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    LrclibLyricsRepository.findLyrics(
-                        context = context,
-                        song = song,
-                        knownDurationMs = knownDurationMs,
-                        forceRefresh = forceRefresh
-                    )
+            var finalResult: Result<LyricsContent>? = null
+            // A slow/unstable LRCLIB response should not appear as an immediate
+            // failure that requires the user to tap the karaoke icon twice.
+            // All retries remain on IO; the UI keeps showing the loading state.
+            for (attempt in 0..1) {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        LrclibLyricsRepository.findLyrics(
+                            context = context,
+                            song = song,
+                            knownDurationMs = knownDurationMs,
+                            forceRefresh = forceRefresh
+                        )
+                    }
                 }
+                val failure = result.exceptionOrNull()
+                if (failure is CancellationException) throw failure
+                finalResult = result
+                if (failure == null || attempt == 1) break
+                // Do not retry permanent input/configuration errors. A short
+                // delay helps with first-open network warm-up and LRCLIB latency.
+                if (failure !is IOException ||
+                    failure.message.orEmpty().startsWith("Tên bài hát đang trống") ||
+                    failure.message.orEmpty().contains("HTTP 400") ||
+                    failure.message.orEmpty().contains("HTTP 401") ||
+                    failure.message.orEmpty().contains("HTTP 403")) break
+                delay(if (failure.message.orEmpty().contains("429")) 2_000L else 1_200L)
             }
             lyricsLoadingBySongId[song.id] = false
             lyricsJobs.remove(song.id)
-            result.onSuccess { content ->
+            finalResult?.onSuccess { content ->
                 lyricsBySongId[song.id] = content
                 lyricsErrorBySongId.remove(song.id)
-            }.onFailure { error ->
+            }?.onFailure { error ->
                 lyricsErrorBySongId[song.id] = error.localizedMessage
                     ?: "Không tìm thấy lời bài hát phù hợp trên LRCLIB."
             }
@@ -674,7 +1035,34 @@ internal class MusicController(private val context: Context) {
         }
     }
 
-    fun selectEqualizerPreset(index: Int, bass: Int, mid: Int, treble: Int) {
+    fun setEqualizerActive(enabled: Boolean) {
+        if (crossfadeJob != null) cancelSoundCrossfade()
+        equalizerEnabled = enabled
+        persistEqualizerState()
+        if (enabled) {
+            applyEqualizerSettings(force = true)
+        } else {
+            audioFxEngine.release()
+            crossfadeStandbyFxEngine?.release()
+            crossfadeStandbyFxEngine = null
+            crossfadeOutgoingFxEngine?.release()
+            crossfadeOutgoingFxEngine = null
+            equalizerReady = false
+            equalizerHasControl = false
+            equalizerError = null
+            equalizerWarning = null
+            equalizerHeadroomDb = 0f
+            reapplyOutputVolumes()
+        }
+    }
+
+    fun selectEqualizerPreset(
+        index: Int,
+        bass: Int,
+        mid: Int,
+        treble: Int,
+        bassBoostStrength: Int = 0
+    ) {
         equalizerEnabled = true
         equalizerSelectedPresetIndex = index.coerceAtLeast(0)
         equalizerAdvancedMode = false
@@ -682,6 +1070,8 @@ internal class MusicController(private val context: Context) {
             equalizerBass = bass.coerceIn(-6, 6)
             equalizerMid = mid.coerceIn(-6, 6)
             equalizerTreble = treble.coerceIn(-6, 6)
+            equalizerBassBoostStrength = if (MeloWarePremiumAccess.equalizerRequiresPremium) 0
+                else bassBoostStrength.coerceIn(0, 100)
         }
         persistEqualizerState()
         applyEqualizerSettings()
@@ -715,7 +1105,7 @@ internal class MusicController(private val context: Context) {
     }
 
     fun prepareAdvancedEqualizerBands() {
-        if (equalizerAdvancedMode) return
+        if (MeloWarePremiumAccess.equalizerRequiresPremium || equalizerAdvancedMode) return
         equalizerBand60 = equalizerBass
         equalizerBand230 = ((equalizerBass + equalizerMid) / 2f).toInt().coerceIn(-6, 6)
         equalizerBand910 = equalizerMid
@@ -725,6 +1115,7 @@ internal class MusicController(private val context: Context) {
     }
 
     fun updateAdvancedEqualizerBand(index: Int, value: Int) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
         val safe = value.coerceIn(-6, 6)
         when (index) {
@@ -742,6 +1133,7 @@ internal class MusicController(private val context: Context) {
     }
 
     fun setAdvancedEqualizerFlat() {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
         equalizerBand60 = 0
         equalizerBand230 = 0
@@ -755,8 +1147,37 @@ internal class MusicController(private val context: Context) {
     }
 
     fun setEqualizerLoudness(enabled: Boolean) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
         equalizerLoudnessEnabled = enabled
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun updateEqualizerLoudnessGainDb(value: Int) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
+        equalizerEnabled = true
+        equalizerLoudnessGainDb = value.coerceIn(1, 6)
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun updateEqualizerBassBoostStrength(value: Int) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
+        equalizerEnabled = true
+        val requested = value.coerceIn(0, 100)
+        equalizerBassBoostStrength = if (
+            audioSessionId > 0 && equalizerBassBoostAvailable &&
+            !equalizerBassBoostStrengthSupported && requested > 0
+        ) 100 else requested
+        equalizerSelectedPresetIndex = 0
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun setEqualizerAutoHeadroom(enabled: Boolean) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
+        equalizerAutoHeadroomEnabled = enabled
         persistEqualizerState()
         applyEqualizerSettings()
     }
@@ -771,16 +1192,384 @@ internal class MusicController(private val context: Context) {
         equalizerBand910 = 0
         equalizerBand3600 = 0
         equalizerBand14000 = 0
+        equalizerBassBoostStrength = 0
+        equalizerLoudnessEnabled = false
+        equalizerLoudnessGainDb = 3
+        equalizerAutoHeadroomEnabled = true
         equalizerSelectedPresetIndex = 1
         equalizerAdvancedMode = false
+        persistEqualizerState()
+        applyEqualizerSettings(force = true)
+    }
+
+    fun refreshEqualizer() {
+        if (!equalizerEnabled) equalizerEnabled = true
+        persistEqualizerState()
+        applyEqualizerSettings(force = true)
+    }
+
+    /** Discover the likely active MEDIA output; API 33+ queries the chosen route.
+     * Older Android versions expose connected outputs but may not expose the chosen route.
+     * No BLUETOOTH_CONNECT permission is requested: device names fall back gracefully.
+     */
+    @Suppress("DEPRECATION")
+    fun refreshSoundOutput() {
+        val connected = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                val attributes = android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+                systemAudioManager.getAudioDevicesForAttributes(attributes).toList()
+                    .ifEmpty { systemAudioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList() }
+            } else {
+                systemAudioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
+            }
+        }.getOrDefault(emptyList())
+        fun isBluetooth(type: Int) = type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            (Build.VERSION.SDK_INT >= 31 && (type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                    type == AudioDeviceInfo.TYPE_BLE_SPEAKER))
+        fun isHeadphone(type: Int) = type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+            type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+            type == AudioDeviceInfo.TYPE_USB_DEVICE || type == AudioDeviceInfo.TYPE_USB_ACCESSORY
+        val legacyBluetoothActive = Build.VERSION.SDK_INT < 33 && runCatching {
+            systemAudioManager.isBluetoothA2dpOn || systemAudioManager.isBluetoothScoOn
+        }.getOrDefault(false)
+        val legacyWiredActive = Build.VERSION.SDK_INT < 33 && runCatching {
+            systemAudioManager.isWiredHeadsetOn
+        }.getOrDefault(false)
+        val detected = when {
+            Build.VERSION.SDK_INT >= 33 -> connected.firstOrNull()
+            legacyBluetoothActive -> connected.firstOrNull { isBluetooth(it.type) }
+            legacyWiredActive -> connected.firstOrNull { isHeadphone(it.type) }
+            else -> connected.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+        } ?: connected.firstOrNull { isBluetooth(it.type) }
+            ?: connected.firstOrNull { isHeadphone(it.type) }
+            ?: connected.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            ?: connected.firstOrNull()
+        val type = detected?.type ?: AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        val rawName = detected?.let { runCatching { it.productName?.toString()?.trim() }.getOrNull() }
+            .orEmpty()
+        val rawAddress = if (Build.VERSION.SDK_INT >= 28) {
+            detected?.let { runCatching { it.address?.trim() }.getOrNull() }.orEmpty()
+        } else ""
+        val category = when {
+            isBluetooth(type) -> "Bluetooth"
+            isHeadphone(type) -> "Tai nghe"
+            else -> "Loa điện thoại"
+        }
+        val generic = rawName.isBlank() || rawName.equals("unknown", true) ||
+            rawName.equals("built-in speaker", true) || rawName.equals("speaker", true)
+        val label = if (generic) category else if (category == "Loa điện thoại") category else "$category · $rawName"
+        val stableIdentity = rawAddress.takeIf {
+            it.isNotBlank() && it != "0" && it != "00:00:00:00:00:00"
+        } ?: rawName.takeUnless { generic }.orEmpty()
+        val key = when {
+            category == "Loa điện thoại" -> "speaker"
+            stableIdentity.isBlank() -> "${category.lowercase(Locale.ROOT)}:$type"
+            else -> "${category.lowercase(Locale.ROOT)}:$type:${stableIdentity.lowercase(Locale.ROOT).sha256().take(16)}"
+        }
+        if (key == soundOutputKey && label == soundOutputName && soundOutputInitialized) return
+        val previousKey = soundOutputKey
+        if (!soundOutputInitialized && key != "speaker" && !prefs.contains(KEY_SOUND_BASE_PROFILE)) {
+            prefs.edit().putString(KEY_SOUND_BASE_PROFILE, soundProfileSnapshot().toString()).apply()
+        }
+        val previousSaved = prefs.contains(soundProfileKey(previousKey))
+        if (soundOutputInitialized && previousKey == "speaker" && key != previousKey && !previousSaved) {
+            // Keep a neutral speaker profile when switching to a saved headset EQ.
+            prefs.edit().putString(KEY_SOUND_BASE_PROFILE, soundProfileSnapshot().toString()).apply()
+        }
+        soundOutputKey = key
+        soundOutputName = label
+        soundPresetSaved = prefs.contains(soundProfileKey(key))
+        soundOutputInitialized = true
+        if (soundAutoApplyDeviceEQ && !MeloWarePremiumAccess.equalizerRequiresPremium) {
+            if (soundPresetSaved) applySavedSoundProfile(key)
+            else if ((previousSaved && previousKey != key) || key == "speaker") {
+                prefs.getString(KEY_SOUND_BASE_PROFILE, null)?.let(::applySoundProfileText)
+            }
+        }
+    }
+
+    private fun soundProfileKey(key: String) = "sound_eq_profile_" + key.sha256().take(32)
+
+    fun setSoundMasterVolume(percent: Int) {
+        val safe = percent.coerceIn(0, 100)
+        if (safe == soundMasterVolumePercent) return
+        soundMasterVolumePercent = safe
+        prefs.edit().putInt(KEY_SOUND_MASTER_VOLUME, safe).apply()
+        // Keep the neutral speaker profile in sync, while explicitly saved device profiles
+        // continue to change only when the listener presses Save.
+        if (soundOutputInitialized && soundOutputKey == "speaker" && !soundPresetSaved) {
+            prefs.edit().putString(KEY_SOUND_BASE_PROFILE, soundProfileSnapshot().toString()).apply()
+        }
+        reapplyOutputVolumes()
+    }
+
+    fun setSoundAutoApplyDeviceEQ(enabled: Boolean) {
+        soundAutoApplyDeviceEQState = enabled
+        prefs.edit().putBoolean(KEY_SOUND_AUTO_EQ, enabled).apply()
+        if (enabled && !MeloWarePremiumAccess.equalizerRequiresPremium) {
+            applySavedSoundProfile(soundOutputKey)
+        }
+    }
+
+    private fun soundProfileSnapshot(): JSONObject = JSONObject().apply {
+        put("masterVolume", soundMasterVolumePercent)
+        put("equalizerEnabled", equalizerEnabled)
+        put("bass", equalizerBass)
+        put("mid", equalizerMid)
+        put("treble", equalizerTreble)
+        put("band60", equalizerBand60)
+        put("band230", equalizerBand230)
+        put("band910", equalizerBand910)
+        put("band3600", equalizerBand3600)
+        put("band14000", equalizerBand14000)
+        put("advanced", equalizerAdvancedMode)
+        put("loudness", equalizerLoudnessEnabled)
+        put("loudnessGainDb", equalizerLoudnessGainDb)
+        put("bassBoost", equalizerBassBoostStrength)
+        put("autoHeadroom", equalizerAutoHeadroomEnabled)
+        put("preset", equalizerSelectedPresetIndex)
+    }
+
+    /** Explicitly saved by the listener: device sound settings are not silently overwritten. */
+    fun saveSoundProfileForCurrentOutput(): Boolean {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return false
+        val data = soundProfileSnapshot()
+        prefs.edit().putString(soundProfileKey(soundOutputKey), data.toString()).apply()
+        soundPresetSaved = true
+        persistEqualizerState()
+        applyEqualizerSettings()
+        return true
+    }
+
+    fun removeSoundProfileForCurrentOutput() {
+        prefs.edit().remove(soundProfileKey(soundOutputKey)).apply()
+        soundPresetSaved = false
+    }
+
+    private fun applySavedSoundProfile(key: String) {
+        prefs.getString(soundProfileKey(key), null)?.let(::applySoundProfileText)
+    }
+
+    private fun applySoundProfileText(text: String) {
+        val data = runCatching { JSONObject(text) }.getOrNull() ?: return
+        if (data.has("masterVolume")) {
+            soundMasterVolumePercent = data.optInt("masterVolume", soundMasterVolumePercent)
+                .coerceIn(0, 100)
+            prefs.edit().putInt(KEY_SOUND_MASTER_VOLUME, soundMasterVolumePercent).apply()
+        }
+        equalizerBass = data.optInt("bass", 0).coerceIn(-6, 6)
+        equalizerMid = data.optInt("mid", 0).coerceIn(-6, 6)
+        equalizerTreble = data.optInt("treble", 0).coerceIn(-6, 6)
+        equalizerBand60 = data.optInt("band60", 0).coerceIn(-6, 6)
+        equalizerBand230 = data.optInt("band230", 0).coerceIn(-6, 6)
+        equalizerBand910 = data.optInt("band910", 0).coerceIn(-6, 6)
+        equalizerBand3600 = data.optInt("band3600", 0).coerceIn(-6, 6)
+        equalizerBand14000 = data.optInt("band14000", 0).coerceIn(-6, 6)
+        equalizerAdvancedMode = data.optBoolean("advanced", false)
+        equalizerLoudnessEnabled = data.optBoolean("loudness", false)
+        equalizerLoudnessGainDb = data.optInt("loudnessGainDb", 3).coerceIn(1, 6)
+        equalizerBassBoostStrength = data.optInt("bassBoost", 0).coerceIn(0, 100)
+        equalizerAutoHeadroomEnabled = data.optBoolean("autoHeadroom", true)
+        equalizerSelectedPresetIndex = data.optInt("preset", 1)
+        // Legacy EQ-only profiles did not store this flag and historically enabled EQ when applied.
+        equalizerEnabled = data.optBoolean("equalizerEnabled", true)
         persistEqualizerState()
         applyEqualizerSettings()
     }
 
-    fun refreshEqualizer() {
-        equalizerEnabled = true
-        persistEqualizerState()
-        applyEqualizerSettings(force = true)
+    fun setSoundCrossfadeSeconds(seconds: Int) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
+        soundCrossfadeSecondsState = seconds.coerceIn(0, 10)
+        prefs.edit().putInt(KEY_SOUND_CROSSFADE, soundCrossfadeSeconds).apply()
+        if (soundCrossfadeSeconds == 0) cancelSoundCrossfade()
+    }
+
+    private fun isSoundCrossfadeAllowed(): Boolean = soundCrossfadeSeconds > 0 &&
+        !MeloWarePremiumAccess.equalizerRequiresPremium && !castConnected &&
+        currentSong?.source !in setOf(SongSource.MOVIE, SongSource.INTERNET_P2P)
+
+    private fun crossfadeMediaSupported(source: SongSource): Boolean = source != SongSource.MOVIE &&
+        source != SongSource.INTERNET_P2P
+
+    /** Do not leave a second player or AudioEffect chain alive after a seek or switch. */
+    private fun cancelSoundCrossfade() {
+        val oldJob = crossfadeJob
+        crossfadeJob = null
+        oldJob?.cancel()
+        crossfadeStandby?.let { standby ->
+            if (standby !== player) runCatching { standby.release() }
+        }
+        crossfadeStandby = null
+        crossfadeOutgoing?.let { outgoing ->
+            if (outgoing !== player) runCatching { outgoing.release() }
+        }
+        crossfadeOutgoing = null
+        crossfadeStandbyFxEngine?.release()
+        crossfadeStandbyFxEngine = null
+        crossfadeOutgoingFxEngine?.release()
+        crossfadeOutgoingFxEngine = null
+        crossfadeIncomingTransitionGain = 1f
+        crossfadeOutgoingTransitionGain = 1f
+        reapplyOutputVolumes()
+    }
+
+    /** True overlapping Crossfade. Both players retain their own EQ chain until fading ends. */
+    private fun trySoundCrossfade(targetIndex: Int, automatic: Boolean): Boolean {
+        if (!isSoundCrossfadeAllowed() || targetIndex !in queue.indices ||
+            targetIndex == currentIndex || crossfadeJob != null || crossfadeOutgoing != null ||
+            !player.isPlaying || !crossfadeMediaSupported(queue[targetIndex].source)) return false
+        val oldPlayer = player
+        val oldFxEngine = audioFxEngine
+        val startingIndex = currentIndex
+        val fromId = currentSong?.id
+        val nextSong = queue[targetIndex]
+        val work = scope.launch(start = CoroutineStart.LAZY) {
+            var incoming: ExoPlayer? = null
+            var incomingFx: PersistentAudioFxEngine? = null
+            var transitioned = false
+            var fxPromoted = false
+            try {
+                val uri = resolvePlaybackUri(nextSong)
+                if (player !== oldPlayer || currentIndex != startingIndex ||
+                    currentSong?.id != fromId || !oldPlayer.isPlaying || castConnected) return@launch
+                val nextPlayer = ExoPlayer.Builder(context).build().apply {
+                    setAudioAttributes(mediaAudioAttributes, false)
+                    volume = 0f
+                    setMediaItem(nextSong.toMediaItem(uri, artworkFor(nextSong)))
+                    prepare()
+                }
+                incoming = nextPlayer
+                crossfadeStandby = nextPlayer
+                val newFx = PersistentAudioFxEngine()
+                incomingFx = newFx
+                crossfadeStandbyFxEngine = newFx
+                val deadline = SystemClock.elapsedRealtime() + if (automatic) 3_000L else 12_000L
+                while (nextPlayer.playbackState != Player.STATE_READY &&
+                    SystemClock.elapsedRealtime() < deadline &&
+                    nextPlayer.playerError == null && oldPlayer.isPlaying) {
+                    delay(45)
+                }
+                if (nextPlayer.playbackState != Player.STATE_READY ||
+                    player !== oldPlayer || !oldPlayer.isPlaying || castConnected ||
+                    currentIndex != startingIndex || currentSong?.id != fromId) return@launch
+                val nextSession = nextPlayer.audioSessionId
+                if (equalizerEnabled && nextSession > 0 && nextSession != C.AUDIO_SESSION_ID_UNSET) {
+                    applyEqualizerToEngine(newFx, nextSession, force = true, updatePublicState = false)
+                }
+                val remaining = oldPlayer.duration.takeIf { it > 0L && it != C.TIME_UNSET }
+                    ?.minus(oldPlayer.currentPosition) ?: Long.MAX_VALUE
+                val fadeMs = if (automatic) {
+                    minOf(soundCrossfadeSeconds * 1_000L, remaining - 250L)
+                } else soundCrossfadeSeconds * 1_000L
+                if (fadeMs < 500L) return@launch
+                finishSmartPlaybackTracking(markSkipped = false)
+                currentIndex = targetIndex
+                beginSmartPlaybackTracking(nextSong)
+                crossfadeStandby = null
+                crossfadeStandbyFxEngine = null
+                crossfadeOutgoing = oldPlayer
+                crossfadeOutgoingFxEngine = oldFxEngine
+                crossfadeIncomingTransitionGain = 0f
+                crossfadeOutgoingTransitionGain = 1f
+                audioFxEngine = newFx
+                fxPromoted = true
+                player = nextPlayer
+                // Crossfade swaps ExoPlayer; the system media notification must
+                // now follow the new player/track rather than the outgoing one.
+                MeloWavePlaybackRuntime.onPlaybackChanged()
+                transitioned = true
+                configurePlayerListener(nextPlayer)
+                audioSessionId = nextSession.takeIf { it > 0 && it != C.AUDIO_SESSION_ID_UNSET } ?: 0
+                if (equalizerEnabled && audioSessionId > 0) {
+                    applyEqualizerToEngine(audioFxEngine, audioSessionId, force = false, updatePublicState = true)
+                }
+                isLoading = false
+                positionMs = 0L
+                durationMs = nextPlayer.duration.takeIf { it > 0L && it != C.TIME_UNSET }
+                    ?: nextSong.durationMs.coerceAtLeast(1L)
+                errorMessage = null
+                addRecent(nextSong)
+                ensureArtwork(nextSong)
+                ensureAudioTechnicalInfo(nextSong)
+                saveQueue()
+                nextPlayer.play()
+                val startTime = SystemClock.elapsedRealtime()
+                while (true) {
+                    val elapsed = SystemClock.elapsedRealtime() - startTime
+                    val progress = (elapsed.toFloat() / fadeMs).coerceIn(0f, 1f)
+                    val angle = progress.toDouble() * PI / 2.0
+                    crossfadeOutgoingTransitionGain = cos(angle).toFloat().coerceIn(0f, 1f)
+                    crossfadeIncomingTransitionGain = sin(angle).toFloat().coerceIn(0f, 1f)
+                    val baseGain = currentOutputGain()
+                    applyPlayerOutputGain(oldPlayer, crossfadeOutgoingTransitionGain, baseGain)
+                    applyPlayerOutputGain(nextPlayer, crossfadeIncomingTransitionGain, baseGain)
+                    if (progress >= 1f || nextPlayer.playerError != null) break
+                    delay(35L)
+                }
+                crossfadeIncomingTransitionGain = 1f
+                crossfadeOutgoingTransitionGain = 0f
+                val finalGain = currentOutputGain()
+                applyPlayerOutputGain(nextPlayer, 1f, finalGain)
+                applyPlayerOutputGain(oldPlayer, 0f, finalGain)
+                oldPlayer.pause()
+                nextPlayer.setAudioAttributes(mediaAudioAttributes, true)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                Log.w("MeloWaveSoundStudio", "Crossfade fallback: ${error.localizedMessage}")
+            } finally {
+                val useNormalSwitch = !automatic && !transitioned &&
+                    coroutineContext[Job]?.isCancelled != true &&
+                    player === oldPlayer && oldPlayer.isPlaying && currentIndex == startingIndex &&
+                    !castConnected
+                if (crossfadeStandby === incoming) crossfadeStandby = null
+                if (crossfadeStandbyFxEngine === incomingFx) crossfadeStandbyFxEngine = null
+                incoming?.let { standby ->
+                    if (standby !== player) runCatching { standby.release() }
+                }
+                if (!fxPromoted) incomingFx?.release()
+                if (crossfadeOutgoing === oldPlayer) {
+                    crossfadeOutgoing = null
+                    if (oldPlayer !== player) runCatching { oldPlayer.release() }
+                }
+                if (crossfadeOutgoingFxEngine === oldFxEngine) {
+                    crossfadeOutgoingFxEngine = null
+                    if (oldFxEngine !== audioFxEngine) oldFxEngine.release()
+                }
+                crossfadeIncomingTransitionGain = 1f
+                crossfadeOutgoingTransitionGain = 1f
+                reapplyOutputVolumes()
+                if (crossfadeJob === coroutineContext[Job]) crossfadeJob = null
+                if (useNormalSwitch) {
+                    currentIndex = targetIndex
+                    prepareCurrent(autoPlay = true)
+                }
+            }
+        }
+        crossfadeJob = work
+        work.start()
+        return true
+    }
+
+    private fun maybeAutoSoundCrossfade() {
+        if (!isSoundCrossfadeAllowed() || crossfadeJob != null || crossfadeOutgoing != null ||
+            !player.isPlaying || repeatSetting == RepeatSetting.ONE || queue.size < 2 ||
+            currentSong?.id == lastAutoCrossfadeSongId) return
+        val validDuration = player.duration
+        if (validDuration == C.TIME_UNSET || validDuration <= 0L) return
+        val remain = validDuration - player.currentPosition
+        if (remain <= 0L || remain > soundCrossfadeSeconds * 1_000L + 350L) return
+        val target = when {
+            shuffleEnabled -> randomOtherIndex(currentIndex)
+            currentIndex < queue.lastIndex -> currentIndex + 1
+            repeatSetting == RepeatSetting.ALL -> 0
+            else -> return
+        }
+        lastAutoCrossfadeSongId = currentSong?.id
+        trySoundCrossfade(target, automatic = true)
     }
 
     private fun persistEqualizerState() {
@@ -796,8 +1585,129 @@ internal class MusicController(private val context: Context) {
             .putInt(KEY_EQ_PRESET, equalizerSelectedPresetIndex)
             .putBoolean(KEY_EQ_ADVANCED, equalizerAdvancedMode)
             .putBoolean(KEY_EQ_LOUDNESS, equalizerLoudnessEnabled)
+            .putInt(KEY_EQ_LOUDNESS_GAIN_DB, equalizerLoudnessGainDb)
+            .putInt(KEY_EQ_BASS_BOOST, equalizerBassBoostStrength)
+            .putBoolean(KEY_EQ_AUTO_HEADROOM, equalizerAutoHeadroomEnabled)
             .putBoolean(KEY_EQ_ENABLED, equalizerEnabled)
             .apply()
+        if (soundOutputInitialized && soundOutputKey == "speaker" && !soundPresetSaved) {
+            prefs.edit().putString(KEY_SOUND_BASE_PROFILE, soundProfileSnapshot().toString()).apply()
+        }
+    }
+
+    private fun activeEqualizerValues(): IntArray =
+        if (equalizerAdvancedMode && !MeloWarePremiumAccess.equalizerRequiresPremium) {
+            intArrayOf(
+                equalizerBand60,
+                equalizerBand230,
+                equalizerBand910,
+                equalizerBand3600,
+                equalizerBand14000
+            )
+        } else {
+            intArrayOf(equalizerBass, equalizerMid, equalizerTreble)
+        }
+
+    private fun calculateAutoHeadroomDb(): Float {
+        if (!equalizerEnabled) return 0f
+        val premiumLocked = MeloWarePremiumAccess.equalizerRequiresPremium
+        // Basic EQ keeps automatic protection active even when Pro controls are locked.
+        val headroomEnabled = if (premiumLocked) true else equalizerAutoHeadroomEnabled
+        if (!headroomEnabled) return 0f
+        val eqBoost = activeEqualizerValues().maxOrNull()?.coerceAtLeast(0)?.toFloat() ?: 0f
+        val bassBoostReserve = if (premiumLocked) 0f
+            else equalizerBassBoostStrength.coerceIn(0, 100) / 100f * 4f
+        // LoudnessEnhancer already limits/compresses peaks. Reserving its full target gain here
+        // cancelled the audible boost, so Auto Headroom now protects only positive EQ and Bass Boost.
+        return (eqBoost + bassBoostReserve).coerceIn(0f, 10f)
+    }
+
+    private fun currentEqualizerOutputGain(): Float {
+        equalizerHeadroomDb = calculateAutoHeadroomDb()
+        if (!equalizerEnabled || equalizerHeadroomDb <= 0f) return 1f
+        return 10.0.pow(-equalizerHeadroomDb.toDouble() / 20.0).toFloat().coerceIn(0.20f, 1f)
+    }
+
+    private fun currentOutputGain(): Float {
+        val masterGain = soundMasterVolumePercent.coerceIn(0, 100) / 100f
+        return (masterGain * currentEqualizerOutputGain()).coerceIn(0f, 1f)
+    }
+
+    /** The only normal path that writes ExoPlayer.volume.
+     * Final gain = Master Volume x Auto Headroom x Crossfade transition.
+     */
+    private fun applyPlayerOutputGain(
+        target: ExoPlayer,
+        transitionGain: Float = 1f,
+        baseGain: Float = currentOutputGain()
+    ) {
+        runCatching {
+            target.volume = (baseGain * transitionGain.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+        }
+    }
+
+    private fun reapplyOutputVolumes() {
+        val baseGain = currentOutputGain()
+        val outgoing = crossfadeOutgoing
+        if (outgoing != null) {
+            applyPlayerOutputGain(outgoing, crossfadeOutgoingTransitionGain, baseGain)
+            applyPlayerOutputGain(player, crossfadeIncomingTransitionGain, baseGain)
+        } else {
+            applyPlayerOutputGain(player, 1f, baseGain)
+        }
+        // A preloaded standby player must stay silent until it is promoted to the active player.
+        crossfadeStandby?.let { standby ->
+            if (standby !== player) applyPlayerOutputGain(standby, 0f, baseGain)
+        }
+    }
+
+    private fun formatEqFrequency(hz: Int): String = when {
+        hz >= 10_000 -> "${(hz / 1000f).roundToInt()} kHz"
+        hz >= 1_000 -> {
+            val khz = hz / 1000f
+            if (kotlin.math.abs(khz - khz.roundToInt()) < 0.05f) "${khz.roundToInt()} kHz"
+            else String.format(Locale.US, "%.1f kHz", khz)
+        }
+        else -> "$hz Hz"
+    }
+
+    private fun applyEqualizerToEngine(
+        engine: PersistentAudioFxEngine,
+        sessionId: Int,
+        force: Boolean,
+        updatePublicState: Boolean
+    ): String? {
+        val attach = engine.attach(sessionId, force)
+        if (updatePublicState) {
+            equalizerHasControl = attach.hasControl
+            equalizerBassBoostAvailable = attach.bassBoostAvailable
+            equalizerBassBoostStrengthSupported = attach.bassBoostStrengthSupported
+            if (attach.mappedFiveBandCentersHz.size == 5) {
+                equalizerActualFiveBandLabels = attach.mappedFiveBandCentersHz.map(::formatEqFrequency)
+            }
+            equalizerError = attach.error
+            equalizerWarning = null
+            equalizerReady = attach.ready
+        }
+        if (!attach.ready) return attach.error
+
+        val premiumLocked = MeloWarePremiumAccess.equalizerRequiresPremium
+        val coreError = if (equalizerAdvancedMode && !premiumLocked) {
+            engine.applyFiveBand(activeEqualizerValues())
+        } else {
+            engine.applyThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+        }
+        val bassError = engine.setBassBoost(if (premiumLocked) 0 else equalizerBassBoostStrength)
+        val loudnessError = engine.setLoudness(
+            enabled = !premiumLocked && equalizerLoudnessEnabled,
+            gainDb = equalizerLoudnessGainDb
+        )
+        if (updatePublicState) {
+            equalizerError = coreError
+            equalizerWarning = listOfNotNull(bassError, loudnessError).joinToString(" · ").takeIf { it.isNotBlank() }
+            equalizerReady = coreError == null
+        }
+        return coreError
     }
 
     private fun attachAndApplyEqualizer(sessionId: Int, force: Boolean = false) {
@@ -807,36 +1717,22 @@ internal class MusicController(private val context: Context) {
             equalizerError = "Phiên âm thanh chưa sẵn sàng."
             return
         }
-
         audioSessionId = sessionId
-        val attach = audioFxEngine.attach(sessionId, force)
-        equalizerReady = attach.ready
-        equalizerHasControl = attach.hasControl
-        equalizerError = attach.error
-        if (!attach.ready) return
-
-        val applyError = if (equalizerAdvancedMode) {
-            audioFxEngine.applyFiveBand(
-                intArrayOf(
-                    equalizerBand60,
-                    equalizerBand230,
-                    equalizerBand910,
-                    equalizerBand3600,
-                    equalizerBand14000
-                )
-            )
-        } else {
-            audioFxEngine.applyThreeBand(equalizerBass, equalizerMid, equalizerTreble)
-        }
-        // LoudnessEnhancer is optional. A device may not provide it while its
-        // Equalizer still works, so a Loudness failure must not disable EQ.
-        audioFxEngine.setLoudness(equalizerLoudnessEnabled)
-        equalizerError = applyError
-        equalizerReady = applyError == null
+        applyEqualizerToEngine(audioFxEngine, sessionId, force, updatePublicState = true)
+        reapplyOutputVolumes()
     }
 
     private fun applyEqualizerSettings(force: Boolean = false) {
-        if (!equalizerEnabled) return
+        if (!equalizerEnabled) {
+            audioFxEngine.release()
+            equalizerReady = false
+            equalizerHasControl = false
+            equalizerError = null
+            equalizerWarning = null
+            equalizerHeadroomDb = 0f
+            reapplyOutputVolumes()
+            return
+        }
         if (currentSong?.source == SongSource.MOVIE || castConnected) {
             equalizerReady = false
             equalizerHasControl = false
@@ -849,9 +1745,18 @@ internal class MusicController(private val context: Context) {
             equalizerReady = false
             equalizerHasControl = false
             equalizerError = "Hãy phát một bài nhạc trước khi điều chỉnh Equalizer."
+            reapplyOutputVolumes()
             return
         }
         attachAndApplyEqualizer(session, force = force)
+        val outgoing = crossfadeOutgoing
+        val outgoingFx = crossfadeOutgoingFxEngine
+        if (outgoing != null && outgoingFx != null) {
+            val outgoingSession = outgoing.audioSessionId
+            if (outgoingSession > 0 && outgoingSession != C.AUDIO_SESSION_ID_UNSET) {
+                applyEqualizerToEngine(outgoingFx, outgoingSession, force = false, updatePublicState = false)
+            }
+        }
     }
 
     fun initializeCast() {
@@ -1351,16 +2256,74 @@ internal class MusicController(private val context: Context) {
         addAll(localSongs)
         addAll(personalDriveSongs)
         addAll(publicDriveSongs)
+        addAll(internetLibrarySongs())
     }.distinctBy { it.id }
+
+    private fun isGoogleDriveSong(song: SongItem): Boolean =
+        song.source == SongSource.PERSONAL_DRIVE || song.source == SongSource.PUBLIC_DRIVE
+
+    private fun premiumAccessibleLibrarySongs(): List<SongItem> =
+        if (MeloWarePremiumAccess.googleDriveRequiresPremium) {
+            allLibrarySongs().filterNot(::isGoogleDriveSong)
+        } else {
+            allLibrarySongs()
+        }
+
+    private fun ensurePremiumPlaybackAccess(song: SongItem): Boolean {
+        if (MeloWarePremiumAccess.googleDriveRequiresPremium && isGoogleDriveSong(song)) {
+            statusMessage = "Google Drive Music là quyền lợi Premium. Hãy kích hoạt Premium hoặc Premium Trial để tiếp tục."
+            return false
+        }
+        return true
+    }
+
+    fun builtInSmartPlaylistSongs(type: BuiltInSmartPlaylist, limit: Int = 0): List<SongItem> =
+        smartPlaylistSongs(type, allLibrarySongs(), smartPlaylists.statsBySongId, limit)
+
+    fun builtInSmartPlaylistCount(type: BuiltInSmartPlaylist): Int =
+        smartPlaylistCount(type, allLibrarySongs(), smartPlaylists.statsBySongId)
+
+    fun customSmartPlaylistSongs(definition: SmartPlaylistDefinition): List<SongItem> =
+        evaluateCustomSmartPlaylistSongs(
+            definition = definition,
+            songs = allLibrarySongs(),
+            stats = smartPlaylists.statsBySongId,
+            isFavorite = ::isFavorite
+        )
+
+    fun customSmartPlaylistCount(definition: SmartPlaylistDefinition): Int =
+        countCustomSmartPlaylistSongs(
+            definition = definition,
+            songs = allLibrarySongs(),
+            stats = smartPlaylists.statsBySongId,
+            isFavorite = ::isFavorite
+        )
+
+    fun saveSmartPlaylist(draft: SmartPlaylistDraft, onSaved: ((Long) -> Unit)? = null) {
+        smartPlaylists.savePlaylist(draft, onSaved)
+    }
+
+    fun deleteSmartPlaylist(playlistId: Long) {
+        smartPlaylists.deletePlaylist(playlistId)
+    }
+
+    fun playbackStats(song: SongItem): SongPlaybackStatsEntity? =
+        smartPlaylists.statsBySongId[song.id]
+
+    fun smartDuplicateGroups(): List<SmartDuplicateGroup> =
+        findSmartDuplicateGroups(localSongs)
 
     fun filteredLibrarySongs(): List<SongItem> {
         val sourceFiltered = when (librarySource) {
-            LibrarySource.ALL -> allLibrarySongs()
+            LibrarySource.ALL -> premiumAccessibleLibrarySongs()
             LibrarySource.LOCAL -> localSongs.filter { it.source == SongSource.LOCAL_MEDIASTORE }
-            LibrarySource.PERSONAL_DRIVE -> personalDriveSongs.toList()
-            LibrarySource.PUBLIC_DRIVE -> publicDriveSongs.toList()
+            LibrarySource.PERSONAL_DRIVE -> if (MeloWarePremiumAccess.googleDriveRequiresPremium) emptyList()
+                else personalDriveSongs.toList()
+            LibrarySource.PUBLIC_DRIVE -> if (MeloWarePremiumAccess.googleDriveRequiresPremium) emptyList()
+                else publicDriveSongs.toList()
+            LibrarySource.INTERNET -> internetLibrarySongs()
             LibrarySource.DOWNLOADED -> localSongs.filter { it.source == SongSource.DOWNLOADED }
-            LibrarySource.FAVORITES -> allLibrarySongs().filter { isFavorite(it) }
+            LibrarySource.FAVORITES -> premiumAccessibleLibrarySongs().filter { isFavorite(it) }
         }
         val query = normalizeText(libraryQuery)
         if (query.isBlank()) return sourceFiltered
@@ -1382,24 +2345,31 @@ internal class MusicController(private val context: Context) {
         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
     fun sourceCount(source: LibrarySource): Int = when (source) {
-        LibrarySource.ALL -> allLibrarySongs().size
+        LibrarySource.ALL -> premiumAccessibleLibrarySongs().size
         LibrarySource.LOCAL -> localSongs.count { it.source == SongSource.LOCAL_MEDIASTORE }
         LibrarySource.PERSONAL_DRIVE -> personalDriveSongs.size
         LibrarySource.PUBLIC_DRIVE -> publicDriveSongs.size
+        LibrarySource.INTERNET -> internetLibrarySongs().size
         LibrarySource.DOWNLOADED -> localSongs.count { it.source == SongSource.DOWNLOADED }
-        LibrarySource.FAVORITES -> allLibrarySongs().count { isFavorite(it) }
+        LibrarySource.FAVORITES -> premiumAccessibleLibrarySongs().count { isFavorite(it) }
     }
 
-    fun recentForHome(limit: Int = 12): List<SongItem> = recentSongs.take(limit)
+    fun recentForHome(limit: Int = 12): List<SongItem> = recentSongs
+        .asSequence()
+        .filter { !MeloWarePremiumAccess.googleDriveRequiresPremium || !isGoogleDriveSong(it) }
+        .take(limit)
+        .toList()
 
     fun recommendations(limit: Int = 8): List<SongItem> {
-        val favorites = allLibrarySongs().filter { isFavorite(it) }
-        val remaining = allLibrarySongs().filterNot { song -> favorites.any { it.id == song.id } }
+        val accessible = premiumAccessibleLibrarySongs()
+        val favorites = accessible.filter { isFavorite(it) }
+        val remaining = accessible.filterNot { song -> favorites.any { it.id == song.id } }
         return (favorites + remaining).distinctBy { it.id }.take(limit)
     }
 
     fun newlyAddedFromDrive(limit: Int = 8): List<SongItem> =
-        (personalDriveSongs.asReversed() + publicDriveSongs.asReversed())
+        if (MeloWarePremiumAccess.googleDriveRequiresPremium) emptyList()
+        else (personalDriveSongs.asReversed() + publicDriveSongs.asReversed())
             .distinctBy { it.id }
             .take(limit)
 
@@ -1423,7 +2393,7 @@ internal class MusicController(private val context: Context) {
                 // If the sender rescans files, refresh the already-authorized folder list.
                 wifiSharedFolderPaths.removeAll { folder -> wifiShareableFolders.none { it.path == folder } }
                 refreshMeloWareSharedFolders()
-                statusMessage = "Đã quét ${songs.size} bài hát trên điện thoại"
+                // Quét và cập nhật thư viện ngầm; không hiển thị Toast khi hoàn tất.
             }.onFailure { throwable ->
                 errorMessage = "Không thể quét nhạc trên điện thoại: ${throwable.localizedMessage ?: "Lỗi không xác định"}"
             }
@@ -1434,12 +2404,17 @@ internal class MusicController(private val context: Context) {
      * Access tokens are kept in memory only. Google Identity Services can silently issue
      * a fresh token on the next authorization request after the user has granted consent.
      */
-    fun setPersonalDriveAuthorization(accessToken: String, accountEmail: String?) {
+    fun setPersonalDriveAuthorization(
+        accessToken: String,
+        accountEmail: String?,
+        isReadOnly: Boolean = false
+    ) {
         if (accessToken.isBlank()) {
             errorMessage = "Google không trả access token cho Drive. Hãy cấp lại quyền."
             return
         }
         personalDriveAccessToken = accessToken
+        personalDriveUsingReadOnly = isReadOnly
         personalDriveInvalidToken = null
         personalDriveAccountEmail = accountEmail?.takeIf { it.isNotBlank() }
         personalDriveNeedsAuthorization = false
@@ -1518,6 +2493,7 @@ internal class MusicController(private val context: Context) {
         forgetAccount: Boolean = false
     ) {
         personalDriveAccessToken = null
+        personalDriveUsingReadOnly = false
         personalDriveInvalidToken = null
         personalDriveBusy = false
         personalDriveError = null
@@ -1632,10 +2608,10 @@ internal class MusicController(private val context: Context) {
             personalDriveError = "Hãy chọn ít nhất một file âm thanh."
             return
         }
-        mergePersonalDriveSongs(selected)
+        val addedSongs = mergePersonalDriveSongs(selected)
         if (playNow) {
             showPersonalDriveDialog = false
-            playCollection(selected, 0)
+            playCollection(addedSongs, 0)
         } else {
             statusMessage = "Đã thêm ${selected.size} bài từ Drive của tôi"
         }
@@ -1657,10 +2633,10 @@ internal class MusicController(private val context: Context) {
                 if (songs.isEmpty()) {
                     personalDriveError = "Thư mục này không có file âm thanh được hỗ trợ."
                 } else {
-                    mergePersonalDriveSongs(songs)
+                    val addedSongs = mergePersonalDriveSongs(songs)
                     if (playNow) {
                         showPersonalDriveDialog = false
-                        playCollection(songs, 0)
+                        playCollection(addedSongs, 0)
                     } else {
                         statusMessage = "Đã thêm ${songs.size} bài từ thư mục ${folder.name}"
                     }
@@ -1669,17 +2645,33 @@ internal class MusicController(private val context: Context) {
         }
     }
 
-    private fun mergePersonalDriveSongs(songs: List<SongItem>) {
-        val merged = (personalDriveSongs + songs).distinctBy { it.id }
+    private fun mergePersonalDriveSongs(songs: List<SongItem>): List<SongItem> {
+        val existingById = personalDriveSongs.associateBy { it.id }
+        val now = System.currentTimeMillis()
+        val stamped = songs.mapIndexed { index, song ->
+            val existing = existingById[song.id]
+            song.copy(
+                genre = song.genre.ifBlank { existing?.genre.orEmpty() },
+                dateAddedMs = existing?.dateAddedMs?.takeIf { it > 0L }
+                    ?: song.dateAddedMs.takeIf { it > 0L }
+                    ?: (now + index)
+            )
+        }
+        val merged = (personalDriveSongs + stamped).distinctBy { it.id }
         personalDriveSongs.clear()
         personalDriveSongs.addAll(merged)
         saveSongList(KEY_PERSONAL_DRIVE_SONGS, personalDriveSongs)
+        return stamped
     }
 
     private fun requirePersonalDriveToken(): String? {
         val token = personalDriveAccessToken
         if (token.isNullOrBlank()) {
-            personalDriveError = "Hãy mở Google Picker và chọn lại file Google Drive."
+            personalDriveError = if (personalDriveUsingReadOnly) {
+                "Phiên Google Drive đã hết hạn. Hãy cấp lại quyền đọc để tiếp tục."
+            } else {
+                "Hãy mở Google Picker và chọn lại file Google Drive."
+            }
             personalDriveNeedsAuthorization = true
             return null
         }
@@ -1813,9 +2805,9 @@ internal class MusicController(private val context: Context) {
             publicDriveError = "Bạn chưa chọn bài hát nào"
             return
         }
-        mergePublicSongs(selected)
+        val addedSongs = mergePublicSongs(selected)
         showPublicDriveDialog = false
-        if (playImmediately) playCollection(selected, 0)
+        if (playImmediately) playCollection(addedSongs, 0)
         else statusMessage = "Đã thêm ${selected.size} bài từ link Drive"
     }
 
@@ -1836,9 +2828,9 @@ internal class MusicController(private val context: Context) {
                 if (songs.isEmpty()) {
                     publicDriveError = "Thư mục này không có file âm thanh được hỗ trợ"
                 } else {
-                    mergePublicSongs(songs)
+                    val addedSongs = mergePublicSongs(songs)
                     showPublicDriveDialog = false
-                    if (playImmediately) playCollection(songs, 0)
+                    if (playImmediately) playCollection(addedSongs, 0)
                     else statusMessage = "Đã thêm ${songs.size} bài từ thư mục Drive"
                 }
             }.onFailure { throwable ->
@@ -1847,11 +2839,23 @@ internal class MusicController(private val context: Context) {
         }
     }
 
-    private fun mergePublicSongs(newSongs: List<SongItem>) {
-        val merged = (publicDriveSongs + newSongs).distinctBy { it.id }
+    private fun mergePublicSongs(newSongs: List<SongItem>): List<SongItem> {
+        val existingById = publicDriveSongs.associateBy { it.id }
+        val now = System.currentTimeMillis()
+        val stamped = newSongs.mapIndexed { index, song ->
+            val existing = existingById[song.id]
+            song.copy(
+                genre = song.genre.ifBlank { existing?.genre.orEmpty() },
+                dateAddedMs = existing?.dateAddedMs?.takeIf { it > 0L }
+                    ?: song.dateAddedMs.takeIf { it > 0L }
+                    ?: (now + index)
+            )
+        }
+        val merged = (publicDriveSongs + stamped).distinctBy { it.id }
         publicDriveSongs.clear()
         publicDriveSongs.addAll(merged)
         saveSongList(KEY_PUBLIC_SONGS, publicDriveSongs)
+        return stamped
     }
 
     fun changeOnlineSearchMode(mode: OnlineSearchMode) {
@@ -2073,15 +3077,25 @@ internal class MusicController(private val context: Context) {
 
     fun playCollection(collection: List<SongItem>, index: Int) {
         if (collection.isEmpty()) return
-        val safeIndex = index.coerceIn(0, collection.lastIndex)
+        val requestedSong = collection.getOrNull(index.coerceIn(0, collection.lastIndex)) ?: return
+        if (!ensurePremiumPlaybackAccess(requestedSong)) return
+        val accessibleCollection = if (MeloWarePremiumAccess.googleDriveRequiresPremium) {
+            collection.filterNot(::isGoogleDriveSong)
+        } else {
+            collection
+        }.distinctBy { it.id }
+        if (accessibleCollection.isEmpty()) return
+        val selectedIndex = accessibleCollection.indexOfFirst { it.id == requestedSong.id }
+            .takeIf { it >= 0 } ?: return
         queue.clear()
-        queue.addAll(collection.distinctBy { it.id })
-        currentIndex = safeIndex.coerceAtMost(queue.lastIndex)
+        queue.addAll(accessibleCollection)
+        currentIndex = selectedIndex
         saveQueue()
         prepareCurrent(autoPlay = true)
     }
 
-    fun playSong(song: SongItem, collection: List<SongItem> = allLibrarySongs()) {
+    fun playSong(song: SongItem, collection: List<SongItem> = premiumAccessibleLibrarySongs()) {
+        if (!ensurePremiumPlaybackAccess(song)) return
         val list = collection.takeIf { it.any { item -> item.id == song.id } } ?: listOf(song)
         val index = list.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
         playCollection(list, index)
@@ -2089,16 +3103,31 @@ internal class MusicController(private val context: Context) {
 
     fun playQueueIndex(index: Int) {
         if (index !in queue.indices) return
+        val target = queue[index]
+        if (!ensurePremiumPlaybackAccess(target)) return
         currentIndex = index
         prepareCurrent(autoPlay = true)
     }
 
+    /** MediaSession pauses playback without accidentally starting an idle/buffering player. */
+    internal fun pauseForSystemMediaControls() {
+        cancelSoundCrossfade()
+        if (player.playWhenReady || player.isPlaying) player.pause()
+        MeloWavePlaybackRuntime.onPlaybackChanged()
+    }
+
     fun togglePlayback() {
+        if (crossfadeOutgoing != null) cancelSoundCrossfade()
         if (castConnected) {
             castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.togglePlayback()
             return
         }
         val song = currentSong
+        if (song != null && !ensurePremiumPlaybackAccess(song)) {
+            runCatching { player.pause() }
+            isPlaying = false
+            return
+        }
         if (song?.source == SongSource.MOVIE) {
             movieWebView?.evaluateJavascript(
                 "window.tunertoolsToggle ? window.tunertoolsToggle() : 'not_ready';",
@@ -2108,10 +3137,12 @@ internal class MusicController(private val context: Context) {
         }
         when {
             song == null -> {
-                val first = allLibrarySongs().firstOrNull() ?: return
+                val first = premiumAccessibleLibrarySongs().firstOrNull() ?: return
                 playSong(first)
             }
-            player.currentMediaItem?.mediaId != song.id -> prepareCurrent(autoPlay = true)
+            player.currentMediaItem?.mediaId != song.id ||
+                    (song.source == SongSource.INTERNET_P2P && player.playbackState == Player.STATE_IDLE) ->
+                prepareCurrent(autoPlay = true)
             player.playbackState == Player.STATE_ENDED -> {
                 player.seekTo(0L)
                 player.play()
@@ -2146,11 +3177,13 @@ internal class MusicController(private val context: Context) {
             repeatSetting == RepeatSetting.ALL -> 0
             else -> return
         }
+        if (trySoundCrossfade(target, automatic = false)) return
         currentIndex = target
         prepareCurrent(autoPlay = true)
     }
 
     fun seekTo(position: Long) {
+        if (crossfadeOutgoing != null || crossfadeStandby != null) cancelSoundCrossfade()
         val safePosition = position.coerceAtLeast(0L)
         if (castConnected) {
             castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.seek(safePosition)
@@ -2166,6 +3199,7 @@ internal class MusicController(private val context: Context) {
             player.seekTo(safePosition)
         }
         positionMs = safePosition
+        MeloWavePlaybackRuntime.onSeekChanged()
     }
 
     fun cycleRepeat() {
@@ -2187,9 +3221,172 @@ internal class MusicController(private val context: Context) {
 
     fun isFavorite(song: SongItem): Boolean = favoriteIds[song.id] == true
 
-    fun artworkFor(song: SongItem): String? = artworkById[song.id] ?: song.artworkUrl
+    private fun customArtworkKey(songId: String) = songId.sha256().take(32)
+
+    private fun customArtworkPreferenceKey(hash: String) = "melowave_custom_cover_$hash"
+
+    fun hasCustomArtwork(song: SongItem): Boolean =
+        customArtworkByKey.containsKey(customArtworkKey(song.id))
+
+    fun artworkFor(song: SongItem): String? =
+        customArtworkByKey[customArtworkKey(song.id)] ?: artworkById[song.id] ?: song.artworkUrl
+
+    /**
+     * Copy the selected image into app-private storage: no gallery permission is required,
+     * and the photo stays available even after the photo picker's URI grant expires.
+     * Original MP3/FLAC metadata and the remote cover are never overwritten.
+     */
+    fun setCustomArtwork(song: SongItem, photoUri: Uri, normalizedCrop: RectF? = null) {
+        if (MeloWarePremiumAccess.albumStudioRequiresPremium) {
+            discardSearchedArtworkTemp(photoUri)
+            statusMessage = "Album Studio Pro là quyền lợi Premium."
+            return
+        }
+        scope.launch {
+            val hash = customArtworkKey(song.id)
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    runCatching {
+                        val folder = File(context.filesDir, "melowave_custom_covers")
+                        if (!folder.isDirectory && !folder.mkdirs()) {
+                            throw IOException("Không tạo được thư mục ảnh bìa")
+                        }
+                        val out = File(folder, "${hash}_${UUID.randomUUID()}.jpg")
+                        try {
+                            val decoded = decodeChosenArtwork(photoUri)
+                            try {
+                                val ready = if (normalizedCrop != null) {
+                                    cropChosenArtwork(decoded, normalizedCrop)
+                                } else decoded
+                                try {
+                                    FileOutputStream(out).use { stream ->
+                                        if (!ready.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
+                                            throw IOException("Không thể lưu ảnh JPEG")
+                                        }
+                                    }
+                                } finally {
+                                    if (ready !== decoded) ready.recycle()
+                                }
+                            } finally {
+                                decoded.recycle()
+                            }
+                            if (out.length() <= 0L) throw IOException("Ảnh không có dữ liệu")
+                            Uri.fromFile(out).toString()
+                        } catch (failure: Exception) {
+                            out.delete()
+                            throw failure
+                        }
+                    }
+                } finally {
+                    // Delete only our own temporary WebView image, after the copy/crop
+                    // finishes (never before the coroutine has opened the input file).
+                    discardSearchedArtworkTemp(photoUri)
+                }
+            }
+            result.onSuccess { savedUri ->
+                val oldUri = customArtworkByKey.put(hash, savedUri)
+                prefs.edit().putString(customArtworkPreferenceKey(hash), savedUri).apply()
+                scope.launch(Dispatchers.IO) { deleteOldCustomCover(oldUri) }
+                statusMessage = "Đã cập nhật ảnh bìa cho ${song.title}"
+            }.onFailure { failure ->
+                statusMessage = "Không đổi được ảnh bìa: ${failure.localizedMessage ?: "Ảnh không hợp lệ"}"
+            }
+        }
+    }
+
+    /** Never touch Gallery photos; only delete cache files created by the WebView picker. */
+    fun discardSearchedArtworkTemp(photoUri: Uri) {
+        if (photoUri.scheme != "file") return
+        runCatching {
+            val folder = File(context.cacheDir, "melowave_web_cover_search").canonicalFile
+            val item = photoUri.path?.let(::File)?.canonicalFile ?: return
+            if (item.parentFile == folder && item.name.startsWith("cover_") &&
+                item.name.endsWith(".img")) {
+                item.delete()
+            }
+        }
+    }
+
+    fun restoreAutomaticArtwork(song: SongItem) {
+        if (MeloWarePremiumAccess.albumStudioRequiresPremium) {
+            statusMessage = "Album Studio Pro là quyền lợi Premium."
+            return
+        }
+        val hash = customArtworkKey(song.id)
+        val oldUri = customArtworkByKey.remove(hash)
+        prefs.edit().remove(customArtworkPreferenceKey(hash)).apply()
+        scope.launch(Dispatchers.IO) { deleteOldCustomCover(oldUri) }
+        statusMessage = "Đã khôi phục ảnh bìa tự động"
+        if (artworkById[song.id].isNullOrBlank() && song.artworkUrl.isNullOrBlank()) {
+            ensureArtwork(song)
+        }
+    }
+
+    private fun deleteOldCustomCover(savedUri: String?) {
+        if (savedUri.isNullOrBlank()) return
+        runCatching {
+            val file = Uri.parse(savedUri).path?.let(::File)?.canonicalFile ?: return
+            val folder = File(context.filesDir, "melowave_custom_covers").canonicalFile
+            // Never delete content outside the directory controlled by MeloWave.
+            if (file.parentFile == folder) file.delete()
+        }
+    }
+
+    /** Decode on a worker thread so a large gallery photo cannot freeze the player UI. */
+    suspend fun loadArtworkForCrop(photoUri: Uri): Bitmap =
+        withContext(Dispatchers.IO) { decodeChosenArtwork(photoUri) }
+
+    /** The normalized crop comes from the on-screen square preview, not from the audio file. */
+    private fun cropChosenArtwork(bitmap: Bitmap, normalized: RectF): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val cropWidth = ((normalized.right - normalized.left).coerceIn(0f, 1f) * width)
+            .roundToInt().coerceAtLeast(1)
+        val cropHeight = ((normalized.bottom - normalized.top).coerceIn(0f, 1f) * height)
+            .roundToInt().coerceAtLeast(1)
+        val side = minOf(cropWidth, cropHeight, width, height).coerceAtLeast(1)
+        val left = (normalized.left.coerceIn(0f, 1f) * width).roundToInt()
+            .coerceIn(0, width - side)
+        val top = (normalized.top.coerceIn(0f, 1f) * height).roundToInt()
+            .coerceIn(0, height - side)
+        return Bitmap.createBitmap(bitmap, left, top, side, side)
+    }
+
+    private fun decodeChosenArtwork(photoUri: Uri): Bitmap {
+        val resolver = context.contentResolver
+        val maxEdge = 1200
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, photoUri)) {
+                    decoder, imageInfo, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val width = imageInfo.size.width
+                val height = imageInfo.size.height
+                if (width <= 0 || height <= 0) throw IOException("Ảnh không hợp lệ")
+                val factor = maxOf(width, height).toFloat() / maxEdge.toFloat()
+                if (factor > 1f) {
+                    decoder.setTargetSize(
+                        maxOf(1, (width / factor).toInt()),
+                        maxOf(1, (height / factor).toInt())
+                    )
+                }
+            }
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(photoUri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, bounds)
+            Unit
+        } ?: throw IOException("Không thể đọc ảnh")
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Ảnh không hợp lệ")
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxEdge) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        return resolver.openInputStream(photoUri)?.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: throw IOException("Không thể giải mã ảnh")
+    }
 
     fun ensureArtwork(song: SongItem) {
+        // P2P files have no persistent URI outside the live Internet session.
+        if (song.source == SongSource.INTERNET_P2P) return
         if (!artworkFor(song).isNullOrBlank()) return
         if (!artworkRequests.add(song.id)) return
         scope.launch {
@@ -2212,6 +3409,26 @@ internal class MusicController(private val context: Context) {
     }
 
     fun downloadSongForOffline(song: SongItem) {
+        if (song.source == SongSource.INTERNET_P2P) {
+            val id = song.uri.pathSegments.firstOrNull()
+            val audio = internetSession.remoteAudio.firstOrNull { it.id == id }
+            if (audio == null || !internetSession.dataChannelOpen) {
+                statusMessage = "Máy A đã ngắt mạng. Hãy kết nối lại để tải nhạc."
+            } else {
+                internetSession.downloadAudio(audio)
+                statusMessage = internetSession.transferMessage
+            }
+            return
+        }
+        if (song.id.startsWith("meloware_pc_")) {
+            if (laptopShare.downloadPlayingUri(song.uri) {
+                    statusMessage = "Đã tải bài hát vào Music/meloware_laptop"
+                    scanLocalMusic()
+                }) {
+                statusMessage = "Đang tải nhạc từ máy tính vào Music/meloware_laptop..."
+            } else statusMessage = "Không thể tải: hãy kết nối lại Chrome rồi chọn bài từ thư mục máy tính."
+            return
+        }
         if (song.source == SongSource.MOVIE) {
             statusMessage = "Movie không hỗ trợ tải trực tiếp âm thanh của video bằng chức năng này."
             return
@@ -2230,6 +3447,194 @@ internal class MusicController(private val context: Context) {
                 errorMessage = "Không tải được bài hát: ${throwable.localizedMessage ?: "Lỗi không xác định"}"
             }
         }
+    }
+
+    /** Local file management is intentionally limited to MediaStore entries on this device. */
+    fun canManageLocalSong(song: SongItem): Boolean =
+        canUseLocalAudioTools(song) && song.uri.scheme == "content" &&
+            song.uri.authority == MediaStore.AUTHORITY
+
+    private fun localSongLabelKey(songId: String): String =
+        "local_song_label_" + songId.sha256().take(32)
+
+    private fun withSavedLocalLabel(song: SongItem): SongItem {
+        val encoded = prefs.getString(localSongLabelKey(song.id), null) ?: return song
+        return runCatching {
+            val saved = JSONObject(encoded)
+            song.copy(
+                title = saved.optString("title").ifBlank { song.title },
+                artist = saved.optString("artist").ifBlank { song.artist }
+            )
+        }.getOrDefault(song)
+    }
+
+    /**
+     * Update the Android media library metadata and maintain a durable in-app label.
+     * This does NOT rewrite the embedded ID3/FLAC tags inside the audio file.
+     */
+    suspend fun updateLocalSongInfo(
+        song: SongItem, title: String, artist: String,
+        consentGranted: Boolean = false
+    ): LocalSongMutationResult {
+        if (!canManageLocalSong(song)) {
+            return LocalSongMutationResult.Failed("Chỉ sửa thông tin của nhạc lưu trên thiết bị.")
+        }
+        val newTitle = title.trim()
+        val newArtist = artist.trim().ifBlank { "Nghệ sĩ chưa biết" }
+        if (newTitle.isBlank() || newTitle.length > 200 || newArtist.length > 200) {
+            return LocalSongMutationResult.Failed("Tên bài hát và nghệ sĩ không được vượt quá 200 ký tự; tên bài hát không được trống.")
+        }
+        val resolver = context.contentResolver
+        val attempt = withContext(Dispatchers.IO) {
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.Audio.Media.TITLE, newTitle)
+                    put(MediaStore.Audio.Media.ARTIST, newArtist)
+                }
+                val changed = resolver.update(song.uri, values, null, null)
+                if (changed > 0) LocalSongMutationResult.Completed
+                else {
+                    // Some media providers won't modify TITLE/ARTIST. Keep a durable
+                    // in-app label rather than silently failing the user's edit.
+                    val stillExists = resolver.query(
+                        song.uri, arrayOf(MediaStore.Audio.Media._ID), null, null, null
+                    )?.use { it.moveToFirst() } == true
+                    if (stillExists) LocalSongMutationResult.LibraryOnly
+                    else LocalSongMutationResult.Failed("Không tìm thấy tệp nhạc trên thiết bị.")
+                }
+            } catch (security: SecurityException) {
+                when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            security is android.app.RecoverableSecurityException ->
+                        LocalSongMutationResult.NeedsConsent(security.userAction.actionIntent.intentSender)
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !consentGranted -> {
+                        runCatching<LocalSongMutationResult> {
+                            LocalSongMutationResult.NeedsConsent(
+                                MediaStore.createWriteRequest(resolver, listOf(song.uri)).intentSender
+                            )
+                        }.getOrElse {
+                            LocalSongMutationResult.Failed("Không xin được quyền sửa bài hát: ${it.localizedMessage ?: "Không xác định"}")
+                        }
+                    }
+                    else -> LocalSongMutationResult.Failed("Android chưa cấp quyền sửa bài hát: ${security.localizedMessage ?: "Bị từ chối"}")
+                }
+            } catch (failure: Exception) {
+                LocalSongMutationResult.Failed("Sửa thông tin thất bại: ${failure.localizedMessage ?: "Lỗi không xác định"}")
+            }
+        }
+        if (attempt is LocalSongMutationResult.Completed ||
+            attempt is LocalSongMutationResult.LibraryOnly) {
+            prefs.edit().putString(localSongLabelKey(song.id), JSONObject().apply {
+                put("title", newTitle)
+                put("artist", newArtist)
+            }.toString()).apply()
+            fun replace(list: MutableList<SongItem>) {
+                val idx = list.indexOfFirst { it.id == song.id }
+                if (idx >= 0) list[idx] = list[idx].copy(title = newTitle, artist = newArtist)
+            }
+            replace(localSongs)
+            replace(queue)
+            replace(recentSongs)
+            saveQueue()
+            saveSongList(KEY_RECENTS, recentSongs)
+            lyricsJobs.remove(song.id)?.cancel()
+            lyricsBySongId.remove(song.id)
+            lyricsErrorBySongId.remove(song.id)
+            statusMessage = if (attempt is LocalSongMutationResult.LibraryOnly)
+                "Đã lưu tên bài hát và nghệ sĩ trong MeloWave (Android không cho cập nhật MediaStore)."
+            else "Đã cập nhật tên bài hát và nghệ sĩ"
+        }
+        return attempt
+    }
+
+    /**
+     * On Android 11+ the system deletes via MediaStore.createDeleteRequest itself.
+     * The 'consentGranted' continuation just synchronizes app state after RESULT_OK.
+     */
+    suspend fun deleteLocalSongFromDevice(
+        song: SongItem, consentGranted: Boolean = false
+    ): LocalSongMutationResult {
+        if (!canManageLocalSong(song)) {
+            return LocalSongMutationResult.Failed("Chỉ có thể xóa tệp nhạc trên điện thoại.")
+        }
+        val resolver = context.contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!consentGranted) {
+                return runCatching<LocalSongMutationResult> {
+                    LocalSongMutationResult.NeedsConsent(
+                        MediaStore.createDeleteRequest(resolver, listOf(song.uri)).intentSender
+                    )
+                }.getOrElse {
+                    LocalSongMutationResult.Failed("Không tạo được yêu cầu xóa: ${it.localizedMessage ?: "Lỗi không xác định"}")
+                }
+            }
+            // Android has confirmed and performed this deletion through the OS dialog.
+            onLocalSongDeleted(song)
+            return LocalSongMutationResult.Completed
+        }
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val count = resolver.delete(song.uri, null, null)
+                if (count > 0) LocalSongMutationResult.Completed
+                else LocalSongMutationResult.Failed("Không xóa được tệp nhạc. File có thể đã bị di chuyển hoặc xóa trước đó.")
+            } catch (security: SecurityException) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    security is android.app.RecoverableSecurityException
+                ) LocalSongMutationResult.NeedsConsent(security.userAction.actionIntent.intentSender)
+                else LocalSongMutationResult.Failed("Không có quyền xóa tệp nhạc: ${security.localizedMessage ?: "Bị từ chối"}")
+            } catch (failure: Exception) {
+                LocalSongMutationResult.Failed("Xóa bài hát thất bại: ${failure.localizedMessage ?: "Lỗi không xác định"}")
+            }
+        }
+        if (result is LocalSongMutationResult.Completed) onLocalSongDeleted(song)
+        return result
+    }
+
+    private fun onLocalSongDeleted(song: SongItem) {
+        val removedIndex = queue.indexOfFirst { it.id == song.id }
+        val wasCurrent = currentSong?.id == song.id
+        if (wasCurrent) {
+            player.stop()
+            player.clearMediaItems()
+            isPlaying = false
+            isLoading = false
+            positionMs = 0L
+            durationMs = 1L
+            if (castConnected) {
+                castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+            }
+            if (hostedSongId == song.id) stopWifiHostInternal(clearUserRequest = false)
+        }
+        localSongs.removeAll { it.id == song.id }
+        recentSongs.removeAll { it.id == song.id }
+        queue.removeAll { it.id == song.id }
+        currentIndex = when {
+            queue.isEmpty() -> -1
+            removedIndex < 0 -> currentIndex.coerceIn(0, queue.lastIndex)
+            removedIndex < currentIndex -> (currentIndex - 1).coerceAtLeast(0)
+            else -> currentIndex.coerceIn(0, queue.lastIndex)
+        }
+        if (wasCurrent && currentScreen == MusicScreen.NOW_PLAYING) {
+            currentScreen = previousScreen
+        }
+        favoriteIds.remove(song.id)
+        val removedCover = customArtworkByKey.remove(customArtworkKey(song.id))
+        scope.launch(Dispatchers.IO) { deleteOldCustomCover(removedCover) }
+        prefs.edit()
+            .remove(customArtworkPreferenceKey(customArtworkKey(song.id)))
+            .remove(localSongLabelKey(song.id))
+            .remove("art_${song.id.sha256().take(32)}")
+            .putStringSet(KEY_FAVORITES, favoriteIds.keys.toSet())
+            .apply()
+        cachedPlaybackUris.remove(song.id)
+        audioTechnicalInfoById.remove(song.id)
+        artworkById.remove(song.id)
+        lyricsJobs.remove(song.id)?.cancel()
+        lyricsBySongId.remove(song.id)
+        lyricsErrorBySongId.remove(song.id)
+        saveSongList(KEY_RECENTS, recentSongs)
+        saveQueue()
+        statusMessage = "Đã xóa bài hát khỏi điện thoại"
     }
 
     fun canUseLocalAudioTools(song: SongItem): Boolean =
@@ -2566,6 +3971,7 @@ internal class MusicController(private val context: Context) {
         SongSource.PERSONAL_DRIVE -> "Google Drive"
         SongSource.PUBLIC_DRIVE -> "Drive chia sẻ"
         SongSource.ONLINE_HTTP -> "Music Preview"
+        SongSource.INTERNET_P2P -> "MeloWare Internet"
         SongSource.MOVIE -> "Movie"
         SongSource.APP_RESOURCE -> "Ứng dụng"
     }
@@ -2578,18 +3984,36 @@ internal class MusicController(private val context: Context) {
             SongSource.DOWNLOADED -> "OFFLINE $ext"
             SongSource.LOCAL_MEDIASTORE -> ext.takeIf { it != "AUDIO" } ?: "OFFLINE"
             SongSource.ONLINE_HTTP -> if (song.id.startsWith("meloware_lan_")) "MELOWARE LAN" else "MUSIC"
+            SongSource.INTERNET_P2P -> "INTERNET P2P"
             SongSource.MOVIE -> "MOVIE"
             SongSource.APP_RESOURCE -> "DEMO"
         }
     }
 
-    private fun configurePlayerListener() {
-        player.addListener(object : Player.Listener {
+    private fun configurePlayerListener(target: ExoPlayer = player) {
+        target.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(value: Boolean) {
-                if (currentSong?.source != SongSource.MOVIE) isPlaying = value
+                if (target !== player) return
+                // Movie/Cast/P2P have separate playback lifecycles. Do not start
+                // an Android FGS that cannot display a supported media session.
+                if (value && !castConnected && currentSong?.source !in setOf(
+                        SongSource.MOVIE, SongSource.INTERNET_P2P)) {
+                    MeloWavePlaybackRuntime.ensureService(context)
+                }
+                MeloWavePlaybackRuntime.onPlaybackChanged()
+                if (currentSong?.source != SongSource.MOVIE) {
+                    isPlaying = value
+                    if (value && currentSong != null) {
+                        smartTrackedLastTickElapsedMs = SystemClock.elapsedRealtime()
+                    } else {
+                        persistSmartPlaybackProgress()
+                    }
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (target !== player) return
+                MeloWavePlaybackRuntime.onPlaybackChanged()
                 if (currentSong?.source == SongSource.MOVIE) return
                 isLoading = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
                 if (playbackState == Player.STATE_READY) {
@@ -2600,16 +4024,17 @@ internal class MusicController(private val context: Context) {
                         updateSongDuration(currentSong?.id, readyDuration)
                     }
                     val readySessionId = player.audioSessionId
-                    if (
-                        equalizerEnabled &&
-                        readySessionId > 0 &&
-                        readySessionId != C.AUDIO_SESSION_ID_UNSET
-                    ) {
-                        attachAndApplyEqualizer(readySessionId)
+                    if (readySessionId > 0 && readySessionId != C.AUDIO_SESSION_ID_UNSET) {
+                        // Keep the session available even when Equalizer is disabled.
+                        // Visual Experience uses the same ExoPlayer session for FFT capture.
+                        audioSessionId = readySessionId
+                        if (equalizerEnabled) attachAndApplyEqualizer(readySessionId)
                     }
                 } else if (playbackState == Player.STATE_ENDED) {
+                    finishSmartPlaybackTracking(markSkipped = false)
                     when (repeatSetting) {
                         RepeatSetting.ONE -> {
+                            currentSong?.let(::beginSmartPlaybackTracking)
                             player.seekTo(0L)
                             player.play()
                         }
@@ -2620,23 +4045,88 @@ internal class MusicController(private val context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (target !== player) return
+                MeloWavePlaybackRuntime.onPlaybackChanged()
                 if (currentSong?.source == SongSource.MOVIE) return
+                persistSmartPlaybackProgress()
                 isLoading = false
                 isPlaying = false
                 errorMessage = "Không thể phát bài hát. ${error.errorCodeName}: ${error.cause?.localizedMessage ?: error.localizedMessage}"
             }
 
             override fun onAudioSessionIdChanged(id: Int) {
-                if (equalizerEnabled && id > 0 && id != C.AUDIO_SESSION_ID_UNSET) {
-                    attachAndApplyEqualizer(id, force = true)
+                if (target !== player) return
+                audioSessionId = if (id > 0 && id != C.AUDIO_SESSION_ID_UNSET) id else 0
+                if (equalizerEnabled && audioSessionId > 0) {
+                    attachAndApplyEqualizer(audioSessionId, force = true)
                 }
             }
         })
     }
 
     private fun prepareCurrent(autoPlay: Boolean) {
+        cancelSoundCrossfade()
         val song = currentSong ?: return
+        if (!ensurePremiumPlaybackAccess(song)) {
+            runCatching { player.pause() }
+            isLoading = false
+            isPlaying = false
+            return
+        }
+        beginSmartPlaybackTracking(song)
+        // Start the real foreground music service while the app is visible,
+        // before resolving Drive/cache/network sources asynchronously.
+        if (autoPlay && !castConnected && song.source != SongSource.MOVIE &&
+            song.source != SongSource.INTERNET_P2P) {
+            MeloWavePlaybackRuntime.ensureService(context)
+        }
+        MeloWavePlaybackRuntime.onPlaybackChanged()
         playbackJob?.cancel()
+        // Stop an old Internet stream before switching to a local/Drive source.
+        if (internetWasPlaying && song.source != SongSource.INTERNET_P2P) {
+            player.stop()
+            if (internetSessionLazy.isInitialized()) internetSession.stopOnline()
+            internetWasPlaying = false
+        }
+        if (song.source == SongSource.INTERNET_P2P) {
+            if (castConnected) {
+                errorMessage = "Hãy ngắt Google Cast trước khi phát nhạc WebRTC Internet."
+                return
+            }
+            if (!internetSession.dataChannelOpen) {
+                isLoading = false
+                errorMessage = "Máy A không còn kết nối Internet."
+                return
+            }
+            internetWasPlaying = true
+            isLoading = true
+            isPlaying = false
+            errorMessage = null
+            player.stop()
+            player.clearMediaItems()
+            val remoteId = song.uri.pathSegments.firstOrNull().orEmpty()
+            internetSession.playInLibrary(
+                remoteId,
+                song.toMediaItem(song.uri, artworkFor(song)),
+                onReady = { source ->
+                    if (currentSong?.id == song.id && internetSession.dataChannelOpen) {
+                        player.setMediaSource(source)
+                        player.prepare()
+                        if (autoPlay) player.play()
+                    }
+                },
+                onError = { reason ->
+                    if (currentSong?.id == song.id) {
+                        isLoading = false
+                        isPlaying = false
+                        errorMessage = reason
+                    }
+                }
+            )
+            addRecent(song)
+            saveQueue()
+            return
+        }
         // Keep the HTTP port/token stable while the user is sharing, so the
         // receiving MeloWare can follow the next song without rediscovering A.
         if (hostedSongId != null && hostedSongId != song.id && !wifiHostRequestedByUser) {
@@ -2698,6 +4188,7 @@ internal class MusicController(private val context: Context) {
             if (currentSong?.id != song.id) return@launch
             player.stop()
             player.setMediaItem(song.toMediaItem(resolvedUri, artworkFor(song)))
+            reapplyOutputVolumes()
             player.prepare()
             if (autoPlay) player.play()
             addRecent(song)
@@ -2705,6 +4196,28 @@ internal class MusicController(private val context: Context) {
             ensureAudioTechnicalInfo(song)
             saveQueue()
             if (wifiHostRequestedByUser) startWifiHostForCurrentSong(showMessage = false)
+        }
+    }
+
+    /**
+     * Read-only source for the waveform analyzer. Never downloads a Drive file:
+     * the playback pipeline has already prepared it in cachedPlaybackUris.
+     * P2P returns a file only after the existing transfer passed SHA-256 check.
+     */
+    internal fun waveformSourceFor(song: SongItem): Uri? = when (song.source) {
+        SongSource.PERSONAL_DRIVE, SongSource.PUBLIC_DRIVE ->
+            cachedPlaybackUris[song.id]?.takeIf { cached ->
+                val file = cached.path?.let(::File)
+                file?.isFile == true && file.length() > 0L
+            }
+        SongSource.INTERNET_P2P ->
+            if (internetSessionLazy.isInitialized()) {
+                internetSession.verifiedWaveformUri(song.uri.pathSegments.firstOrNull().orEmpty())
+            } else null
+        SongSource.MOVIE -> null
+        else -> song.uri.takeIf { source ->
+            source.scheme?.lowercase(Locale.ROOT) in
+                listOf("content", "file", "android.resource", "http", "https")
         }
     }
 
@@ -2735,7 +4248,8 @@ internal class MusicController(private val context: Context) {
             "mp3" -> "MP3"
             else -> "Chất lượng gốc"
         }
-        val size = if (song.source == SongSource.ONLINE_HTTP || song.source == SongSource.MOVIE) {
+        val size = if (song.source == SongSource.ONLINE_HTTP ||
+            song.source == SongSource.INTERNET_P2P || song.source == SongSource.MOVIE) {
             "Trực tuyến"
         } else {
             "Đang đọc..."
@@ -2746,6 +4260,9 @@ internal class MusicController(private val context: Context) {
     private fun readAudioTechnicalInfo(song: SongItem): AudioTechnicalInfo {
         if (song.source == SongSource.MOVIE) {
             return AudioTechnicalInfo("Video online", "STREAM", "Trực tuyến")
+        }
+        if (song.source == SongSource.INTERNET_P2P) {
+            return provisionalAudioTechnicalInfo(song)
         }
         val uri = cachedPlaybackUris[song.id] ?: song.uri
         val extension = resolvedExtension(song).uppercase(Locale.ROOT).ifBlank { "AUDIO" }
@@ -2781,7 +4298,9 @@ internal class MusicController(private val context: Context) {
         return AudioTechnicalInfo(
             qualityLabel = quality,
             extensionLabel = extension,
-            sizeLabel = sizeBytes?.let(::formatFileSize) ?: if (song.source == SongSource.ONLINE_HTTP) "Trực tuyến" else "Không rõ dung lượng",
+            sizeLabel = sizeBytes?.let(::formatFileSize) ?:
+            if (song.source == SongSource.ONLINE_HTTP || song.source == SongSource.INTERNET_P2P)
+                "Trực tuyến" else "Không rõ dung lượng",
             bitrateKbps = bitrateKbps,
             sampleRateHz = sampleRateHz,
             sizeBytes = sizeBytes
@@ -3031,7 +4550,102 @@ internal class MusicController(private val context: Context) {
         else -> "application/octet-stream"
     }
 
+    private fun beginSmartPlaybackTracking(song: SongItem) {
+        if (song.source == SongSource.MOVIE) {
+            finishSmartPlaybackTracking(markSkipped = false)
+            return
+        }
+        if (smartTrackedSongId == song.id) {
+            smartTrackedLastTickElapsedMs = SystemClock.elapsedRealtime()
+            return
+        }
+        val previousWasSkipped = smartTrackedSongId != null &&
+                !smartTrackedPlayCounted &&
+                smartTrackedListenMs >= 1_000L &&
+                smartTrackedListenMs < smartPlaybackThresholdMs()
+        finishSmartPlaybackTracking(markSkipped = previousWasSkipped)
+        smartTrackedSongId = song.id
+        smartTrackedListenMs = 0L
+        smartTrackedPersistedMs = 0L
+        smartTrackedPlayCounted = false
+        smartTrackedLastTickElapsedMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun updateSmartPlaybackTracking() {
+        val trackedId = smartTrackedSongId ?: return
+        val song = currentSong
+        if (song == null || song.id != trackedId || song.source == SongSource.MOVIE) return
+
+        val now = SystemClock.elapsedRealtime()
+        if (smartTrackedLastTickElapsedMs <= 0L) {
+            smartTrackedLastTickElapsedMs = now
+            return
+        }
+        val delta = (now - smartTrackedLastTickElapsedMs).coerceIn(0L, 2_000L)
+        smartTrackedLastTickElapsedMs = now
+        if (!isPlaying || delta <= 0L) return
+
+        smartTrackedListenMs += delta
+        val threshold = smartPlaybackThresholdMs()
+        val shouldCountPlay = !smartTrackedPlayCounted && smartTrackedListenMs >= threshold
+        val shouldFlushProgress = smartTrackedListenMs - smartTrackedPersistedMs >= 15_000L
+        if (shouldCountPlay || shouldFlushProgress) {
+            val unpersisted = (smartTrackedListenMs - smartTrackedPersistedMs).coerceAtLeast(0L)
+            smartPlaylists.recordListening(
+                songId = trackedId,
+                listenDeltaMs = unpersisted,
+                incrementPlayCount = shouldCountPlay,
+                incrementSkipCount = false
+            )
+            smartTrackedPersistedMs = smartTrackedListenMs
+            if (shouldCountPlay) smartTrackedPlayCounted = true
+        }
+    }
+
+    private fun persistSmartPlaybackProgress(incrementSkip: Boolean = false) {
+        val trackedId = smartTrackedSongId ?: return
+        val threshold = smartPlaybackThresholdMs()
+        val shouldCountPlay = !smartTrackedPlayCounted && smartTrackedListenMs >= threshold
+        val unpersisted = (smartTrackedListenMs - smartTrackedPersistedMs).coerceAtLeast(0L)
+        if (unpersisted > 0L || shouldCountPlay || incrementSkip) {
+            smartPlaylists.recordListening(
+                songId = trackedId,
+                listenDeltaMs = unpersisted,
+                incrementPlayCount = shouldCountPlay,
+                incrementSkipCount = incrementSkip
+            )
+            smartTrackedPersistedMs = smartTrackedListenMs
+            if (shouldCountPlay) smartTrackedPlayCounted = true
+        }
+        smartTrackedLastTickElapsedMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun finishSmartPlaybackTracking(markSkipped: Boolean) {
+        persistSmartPlaybackProgress(incrementSkip = markSkipped)
+        smartTrackedSongId = null
+        smartTrackedListenMs = 0L
+        smartTrackedPersistedMs = 0L
+        smartTrackedPlayCounted = false
+        smartTrackedLastTickElapsedMs = 0L
+    }
+
+    private fun smartPlaybackThresholdMs(): Long {
+        val trackedId = smartTrackedSongId
+        val knownDuration = when {
+            trackedId != null && currentSong?.id == trackedId && durationMs > 1_000L -> durationMs
+            trackedId != null -> allLibrarySongs().firstOrNull { it.id == trackedId }?.durationMs ?: 0L
+            else -> 0L
+        }
+        return if (knownDuration > 0L) {
+            minOf(30_000L, maxOf(5_000L, knownDuration / 2L))
+        } else {
+            30_000L
+        }
+    }
+
     private fun addRecent(song: SongItem) {
+        // Chrome laptop streams use an ephemeral localhost URL; do not keep stale shortcuts after disconnect.
+        if (song.id.startsWith("meloware_pc_")) return
         recentSongs.removeAll { it.id == song.id }
         recentSongs.add(0, song)
         while (recentSongs.size > 30) recentSongs.removeAt(recentSongs.lastIndex)
@@ -3075,8 +4689,10 @@ internal class MusicController(private val context: Context) {
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.MIME_TYPE
+            MediaStore.Audio.Media.MIME_TYPE,
+            MediaStore.MediaColumns.DATE_ADDED
         ).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) add(MediaStore.MediaColumns.GENRE)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(MediaStore.Audio.Media.RELATIVE_PATH)
             else {
                 @Suppress("DEPRECATION")
@@ -3098,6 +4714,10 @@ internal class MusicController(private val context: Context) {
             val durationIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
             val displayIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
             val mimeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+            val dateAddedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
+            val genreIndex = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                cursor.getColumnIndex(MediaStore.MediaColumns.GENRE)
+            } else -1
             val pathIndex = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
             } else {
@@ -3122,7 +4742,7 @@ internal class MusicController(private val context: Context) {
                     File(relativeOrPath).parentFile?.name ?: "Nhạc trên máy"
                 }
                 val downloaded = (folder.contains("Tunertools", ignoreCase = true) || folder.contains("MeloWare", ignoreCase = true))
-                output += SongItem(
+                output += withSavedLocalLabel(SongItem(
                     id = uri.toString(),
                     title = parsed.first,
                     artist = parsed.second,
@@ -3131,8 +4751,15 @@ internal class MusicController(private val context: Context) {
                     uri = uri,
                     durationMs = cursor.longOrZero(durationIndex),
                     source = if (downloaded) SongSource.DOWNLOADED else SongSource.LOCAL_MEDIASTORE,
-                    mimeType = mime
-                )
+                    mimeType = mime,
+                    genre = cursor.stringOrEmpty(genreIndex)
+                        .takeUnless { it.equals("<unknown>", ignoreCase = true) }
+                        .orEmpty(),
+                    dateAddedMs = cursor.longOrZero(dateAddedIndex)
+                        .takeIf { it > 0L }
+                        ?.times(1_000L)
+                        ?: 0L
+                ))
             }
         }
         return output.distinctBy { it.id }
@@ -3162,12 +4789,44 @@ internal class MusicController(private val context: Context) {
         }
         val target = resolver.insert(collection, values)
             ?: throw IOException("Không thể tạo file trong thư mục Music")
+        var networkConnection: HttpURLConnection? = null
         try {
-            resolver.openInputStream(sourceUri)?.use { input ->
+            val input = when (sourceUri.scheme?.lowercase(Locale.ROOT)) {
+                "http", "https" -> {
+                    val connection = URL(sourceUri.toString()).openConnection() as HttpURLConnection
+                    networkConnection = connection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 20_000
+                    connection.readTimeout = 60_000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("Accept", "audio/*,*/*;q=0.8")
+                    connection.setRequestProperty("User-Agent", "MeloWave-Android/1.0")
+                    val responseCode = connection.responseCode
+                    if (responseCode !in 200..299) {
+                        throw IOException("Không tải được bài hát trực tuyến (HTTP $responseCode)")
+                    }
+                    val responseType = connection.contentType
+                        ?.substringBefore(';')
+                        ?.trim()
+                        ?.lowercase(Locale.ROOT)
+                        .orEmpty()
+                    if (responseType.contains("text/html") ||
+                        responseType.contains("application/json")) {
+                        throw IOException("Máy chủ không trả về dữ liệu âm thanh")
+                    }
+                    connection.inputStream
+                }
+                else -> resolver.openInputStream(sourceUri)
+                    ?: throw IOException("Không đọc được dữ liệu bài hát")
+            }
+            val copiedBytes = input.use { source ->
                 resolver.openOutputStream(target)?.use { output ->
-                    input.copyTo(output, 128 * 1024)
+                    source.copyTo(output, 128 * 1024)
                 } ?: throw IOException("Không mở được file đích")
-            } ?: throw IOException("Không đọc được dữ liệu bài hát")
+            }
+            if (copiedBytes <= 0L) {
+                throw IOException("Dữ liệu bài hát tải về bị rỗng")
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 values.clear()
                 values.put(MediaStore.Audio.Media.IS_PENDING, 0)
@@ -3176,11 +4835,26 @@ internal class MusicController(private val context: Context) {
         } catch (error: Throwable) {
             resolver.delete(target, null, null)
             throw error
+        } finally {
+            networkConnection?.disconnect()
         }
         return "Music/MeloWare/$fileName"
     }
 
     private fun restoreState() {
+        // Load persisted cover overrides once, BEFORE the restored queue is displayed.
+        val customFolder = File(context.filesDir, "melowave_custom_covers").canonicalFile
+        prefs.all.forEach { (key, value) ->
+            if (!key.startsWith("melowave_custom_cover_")) return@forEach
+            val savedUri = value as? String
+            val file = runCatching { savedUri?.let { Uri.parse(it).path }?.let(::File)?.canonicalFile }
+                .getOrNull()
+            if (savedUri != null && file != null && file.isFile && file.parentFile == customFolder) {
+                customArtworkByKey[key.removePrefix("melowave_custom_cover_")] = savedUri
+            } else {
+                prefs.edit().remove(key).apply()
+            }
+        }
         favoriteIds.putAll(
             prefs.getStringSet(KEY_FAVORITES, emptySet()).orEmpty().associateWith { true }
         )
@@ -3210,7 +4884,8 @@ internal class MusicController(private val context: Context) {
 
     private fun saveSongList(key: String, songs: List<SongItem>) {
         val array = JSONArray()
-        songs.forEach { song ->
+        songs.filterNot { it.id.startsWith("meloware_pc_") ||
+                it.source == SongSource.INTERNET_P2P }.forEach { song ->
             array.put(JSONObject().apply {
                 put("id", song.id)
                 put("title", song.title)
@@ -3221,7 +4896,11 @@ internal class MusicController(private val context: Context) {
                 put("durationMs", song.durationMs)
                 put("source", song.source.name)
                 put("mimeType", song.mimeType.orEmpty())
-                put("artworkUrl", artworkFor(song).orEmpty())
+                // Do not persist app-private custom cover as the original online cover.
+                // Otherwise "restore automatic" could fall back to a deleted private file.
+                put("artworkUrl", (artworkById[song.id] ?: song.artworkUrl).orEmpty())
+                put("genre", song.genre)
+                put("dateAddedMs", song.dateAddedMs)
             })
         }
         prefs.edit().putString(key, array.toString()).apply()
@@ -3262,7 +4941,9 @@ internal class MusicController(private val context: Context) {
                         durationMs = duration,
                         source = source,
                         mimeType = item.optString("mimeType").takeIf { it.isNotBlank() },
-                        artworkUrl = item.optString("artworkUrl").takeIf { it.isNotBlank() }
+                        artworkUrl = item.optString("artworkUrl").takeIf { it.isNotBlank() },
+                        genre = item.optString("genre"),
+                        dateAddedMs = item.optLong("dateAddedMs", 0L)
                     )
                     if (song.id.isNotBlank()) add(song)
                 }
@@ -3310,7 +4991,15 @@ internal class MusicController(private val context: Context) {
         private const val KEY_EQ_PRESET = "equalizer_preset"
         private const val KEY_EQ_ADVANCED = "equalizer_advanced"
         private const val KEY_EQ_LOUDNESS = "equalizer_loudness"
+        private const val KEY_EQ_LOUDNESS_GAIN_DB = "equalizer_loudness_gain_db"
+        private const val KEY_EQ_BASS_BOOST = "equalizer_bass_boost_strength"
+        private const val KEY_EQ_AUTO_HEADROOM = "equalizer_auto_headroom"
+        private const val KEY_EQ_TUNING_VERSION = "equalizer_tuning_version"
         private const val KEY_EQ_ENABLED = "equalizer_enabled"
+        private const val KEY_SOUND_MASTER_VOLUME = "soundstudio_master_volume_percent"
+        private const val KEY_SOUND_AUTO_EQ = "soundstudio_auto_device_eq"
+        private const val KEY_SOUND_CROSSFADE = "soundstudio_crossfade_seconds"
+        private const val KEY_SOUND_BASE_PROFILE = "soundstudio_default_device_eq"
         private const val DRIVE_CACHE_DIR = "tunertools_drive_cache"
     }
 }
@@ -3319,6 +5008,9 @@ internal class MusicController(private val context: Context) {
 private data class AudioFxAttachResult(
     val ready: Boolean,
     val hasControl: Boolean,
+    val bassBoostAvailable: Boolean = false,
+    val bassBoostStrengthSupported: Boolean = false,
+    val mappedFiveBandCentersHz: IntArray = intArrayOf(),
     val error: String? = null
 )
 
@@ -3327,30 +5019,52 @@ private class PersistentAudioFxEngine {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var bassBoost: BassBoost? = null
     private var sessionId: Int = 0
+    private var centerFrequenciesHz: IntArray = intArrayOf()
+    private var bassStrengthSupported: Boolean = false
+
+    private fun mappedFiveBandCenters(): IntArray {
+        val targets = intArrayOf(60, 230, 910, 3600, 14000)
+        if (centerFrequenciesHz.isEmpty()) return targets
+        return targets.map { target ->
+            centerFrequenciesHz.minByOrNull { actual ->
+                kotlin.math.abs(
+                    kotlin.math.ln(
+                        kotlin.math.max(actual, 1).toDouble() / target.toDouble()
+                    )
+                )
+            } ?: target
+        }.toIntArray()
+    }
+
+    private fun currentAttachResult(error: String? = null): AudioFxAttachResult {
+        val control = equalizer?.let { runCatching { it.hasControl() }.getOrDefault(false) } == true
+        return AudioFxAttachResult(
+            ready = control && error == null,
+            hasControl = control,
+            bassBoostAvailable = bassBoost != null,
+            bassBoostStrengthSupported = bassStrengthSupported,
+            mappedFiveBandCentersHz = mappedFiveBandCenters(),
+            error = error
+        )
+    }
 
     fun attach(newSessionId: Int, force: Boolean = false): AudioFxAttachResult {
         if (newSessionId <= 0 || newSessionId == C.AUDIO_SESSION_ID_UNSET) {
             release()
-            return AudioFxAttachResult(false, false, "Phiên âm thanh chưa sẵn sàng.")
+            return AudioFxAttachResult(false, false, error = "Phiên âm thanh chưa sẵn sàng.")
         }
 
         val currentEqualizer = equalizer
         if (!force && newSessionId == sessionId && currentEqualizer != null) {
-            val control = runCatching { currentEqualizer.hasControl() }.getOrDefault(false)
-            return if (control) {
-                AudioFxAttachResult(true, true)
+            return if (runCatching { currentEqualizer.hasControl() }.getOrDefault(false)) {
+                currentAttachResult()
             } else {
-                AudioFxAttachResult(
-                    false,
-                    false,
-                    "Equalizer đang bị hệ thống hoặc ứng dụng âm thanh khác kiểm soát."
-                )
+                currentAttachResult("Equalizer đang bị hệ thống hoặc ứng dụng âm thanh khác kiểm soát.")
             }
         }
 
         release()
         sessionId = newSessionId
-
         val createdEqualizer = try {
             AndroidEqualizer(1000, newSessionId).apply { enabled = true }
         } catch (error: Throwable) {
@@ -3358,23 +5072,24 @@ private class PersistentAudioFxEngine {
             return AudioFxAttachResult(
                 false,
                 false,
-                "Thiết bị không khởi tạo được Equalizer: ${error.localizedMessage ?: error.javaClass.simpleName}"
+                error = "Thiết bị không khởi tạo được Equalizer: ${error.localizedMessage ?: error.javaClass.simpleName}"
             )
         }
 
         equalizer = createdEqualizer
         val hasControl = runCatching { createdEqualizer.hasControl() }.getOrDefault(false)
         if (!hasControl) {
-            return AudioFxAttachResult(
-                false,
-                false,
-                "Equalizer đang bị hệ thống hoặc ứng dụng âm thanh khác kiểm soát."
-            )
+            return currentAttachResult("Equalizer đang bị hệ thống hoặc ứng dụng âm thanh khác kiểm soát.")
         }
+
+        centerFrequenciesHz = runCatching {
+            val count = createdEqualizer.numberOfBands.toInt()
+            IntArray(count) { index -> createdEqualizer.getCenterFreq(index.toShort()) / 1000 }
+        }.getOrDefault(intArrayOf())
 
         loudnessEnhancer = runCatching {
             LoudnessEnhancer(newSessionId).apply {
-                setTargetGain(600)
+                setTargetGain(300)
                 enabled = false
             }
         }.getOrNull()
@@ -3382,17 +5097,18 @@ private class PersistentAudioFxEngine {
         bassBoost = runCatching {
             BassBoost(1000, newSessionId).apply { enabled = false }
         }.getOrNull()
+        bassStrengthSupported = bassBoost?.let {
+            runCatching { it.strengthSupported }.getOrDefault(false)
+        } == true
 
-        return AudioFxAttachResult(true, true)
+        return currentAttachResult()
     }
 
     fun applyThreeBand(bass: Int, mid: Int, treble: Int): String? {
-        applyHardwareBass(bass)
         val effect = equalizer ?: return "Equalizer chưa được gắn vào phiên âm thanh."
         if (!runCatching { effect.hasControl() }.getOrDefault(false)) {
-            return "MeloWare không có quyền điều khiển Equalizer trên thiết bị này."
+            return "MeloWave không có quyền điều khiển Equalizer trên thiết bị này."
         }
-
         val range = runCatching { effect.bandLevelRange }.getOrNull()
             ?: return "Không đọc được dải điều chỉnh Equalizer."
         if (range.size < 2) return "Thiết bị trả dải Equalizer không hợp lệ."
@@ -3412,15 +5128,10 @@ private class PersistentAudioFxEngine {
                 else -> treble
             }
             val desiredMillibels = (desiredDb.coerceIn(-6, 6) * 100).coerceIn(minLevel, maxLevel)
-            runCatching {
-                effect.setBandLevel(band, desiredMillibels.toShort())
-            }.onSuccess {
-                applied++
-            }.onFailure {
-                lastError = it
-            }
+            runCatching { effect.setBandLevel(band, desiredMillibels.toShort()) }
+                .onSuccess { applied++ }
+                .onFailure { lastError = it }
         }
-
         return if (applied > 0) null else {
             "Không áp dụng được Equalizer: ${lastError?.localizedMessage ?: "thiết bị từ chối AudioEffect"}"
         }
@@ -3428,18 +5139,16 @@ private class PersistentAudioFxEngine {
 
     fun applyFiveBand(values: IntArray): String? {
         if (values.size < 5) return "Cấu hình Equalizer 5 băng tần không hợp lệ."
-        applyHardwareBass(values[0])
         val effect = equalizer ?: return "Equalizer chưa được gắn vào phiên âm thanh."
         if (!runCatching { effect.hasControl() }.getOrDefault(false)) {
-            return "MeloWare không có quyền điều khiển Equalizer trên thiết bị này."
+            return "MeloWave không có quyền điều khiển Equalizer trên thiết bị này."
         }
-
         val range = runCatching { effect.bandLevelRange }.getOrNull()
             ?: return "Không đọc được dải điều chỉnh Equalizer."
         if (range.size < 2) return "Thiết bị trả dải Equalizer không hợp lệ."
         val minLevel = range[0].toInt()
         val maxLevel = range[1].toInt()
-        val targetFrequencies = floatArrayOf(60f, 230f, 910f, 3600f, 14000f)
+        val targets = floatArrayOf(60f, 230f, 910f, 3600f, 14000f)
         val bandCount = runCatching { effect.numberOfBands.toInt() }.getOrDefault(0)
         if (bandCount <= 0) return "Thiết bị không cung cấp băng tần Equalizer."
 
@@ -3448,53 +5157,47 @@ private class PersistentAudioFxEngine {
         for (bandIndex in 0 until bandCount) {
             val band = bandIndex.toShort()
             val centerHz = runCatching { effect.getCenterFreq(band) / 1000f }.getOrDefault(1f)
-            val closestTarget = targetFrequencies.indices.minByOrNull { targetIndex ->
+            val closestTarget = targets.indices.minByOrNull { targetIndex ->
                 kotlin.math.abs(
-                    kotlin.math.ln(
-                        kotlin.math.max(centerHz, 1f).toDouble() /
-                                targetFrequencies[targetIndex].toDouble()
-                    )
+                    kotlin.math.ln(kotlin.math.max(centerHz, 1f).toDouble() / targets[targetIndex].toDouble())
                 )
             } ?: 0
             val desiredMillibels = (values[closestTarget].coerceIn(-6, 6) * 100)
                 .coerceIn(minLevel, maxLevel)
-            runCatching {
-                effect.setBandLevel(band, desiredMillibels.toShort())
-            }.onSuccess {
-                applied++
-            }.onFailure {
-                lastError = it
-            }
+            runCatching { effect.setBandLevel(band, desiredMillibels.toShort()) }
+                .onSuccess { applied++ }
+                .onFailure { lastError = it }
         }
-
         return if (applied > 0) null else {
             "Không áp dụng được Equalizer: ${lastError?.localizedMessage ?: "thiết bị từ chối AudioEffect"}"
         }
     }
 
-    fun setLoudness(enabled: Boolean): String? {
-        val effect = loudnessEnhancer ?: return null
+    fun setBassBoost(strengthPercent: Int): String? {
+        val safePercent = strengthPercent.coerceIn(0, 100)
+        val effect = bassBoost
+            ?: return if (safePercent == 0) null else "Thiết bị không cung cấp Bass Boost phần cứng."
         return runCatching {
-            effect.setTargetGain(600)
-            effect.enabled = enabled
+            if (safePercent == 0) {
+                effect.enabled = false
+            } else {
+                val requested = if (bassStrengthSupported) safePercent * 10 else 1000
+                effect.setStrength(requested.coerceIn(0, 1000).toShort())
+                effect.enabled = true
+            }
         }.exceptionOrNull()?.let {
-            "Không bật được Loudness: ${it.localizedMessage ?: it.javaClass.simpleName}"
+            "Không áp dụng được Bass Boost: ${it.localizedMessage ?: it.javaClass.simpleName}"
         }
     }
 
-    private fun applyHardwareBass(bassValue: Int) {
-        val effect = bassBoost ?: return
-        runCatching {
-            if (bassValue > 0) {
-                val strength = ((bassValue.coerceIn(0, 6) / 6f) * 1000f)
-                    .toInt()
-                    .coerceIn(0, 1000)
-                    .toShort()
-                effect.setStrength(strength)
-                effect.enabled = true
-            } else {
-                effect.enabled = false
-            }
+    fun setLoudness(enabled: Boolean, gainDb: Int): String? {
+        val effect = loudnessEnhancer
+            ?: return if (!enabled) null else "Thiết bị không cung cấp LoudnessEnhancer."
+        return runCatching {
+            effect.setTargetGain(gainDb.coerceIn(1, 6) * 100)
+            effect.enabled = enabled
+        }.exceptionOrNull()?.let {
+            "Không bật được Loudness: ${it.localizedMessage ?: it.javaClass.simpleName}"
         }
     }
 
@@ -3508,6 +5211,8 @@ private class PersistentAudioFxEngine {
         equalizer = null
         loudnessEnhancer = null
         bassBoost = null
+        centerFrequenciesHz = intArrayOf()
+        bassStrengthSupported = false
         sessionId = 0
     }
 }
@@ -3832,7 +5537,7 @@ private object PersonalDriveApi {
                 "Phiên Google Drive đã hết hạn hoặc bị thu hồi. Hãy cấp lại quyền."
             )
             403 -> IOException(
-                "Google Drive từ chối quyền truy cập. Kiểm tra Drive API, OAuth scope drive.file và quyền file đã chọn bằng Google Picker. $message"
+                "Google Drive từ chối truy cập (403). Kiểm tra quyền OAuth, quyền file và hạn mức Google Drive API. $message"
             )
             404 -> FileNotFoundException("Không tìm thấy file hoặc thư mục Google Drive. $message")
             429 -> IOException("Google Drive API đang vượt giới hạn. Hãy thử lại sau.")
@@ -4769,8 +6474,9 @@ private object LrclibLyricsRepository {
     private fun request(url: String): Pair<Int, String> {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
-        connection.connectTimeout = 12_000
-        connection.readTimeout = 18_000
+        // Give a slow first connection more time before the UI shows an error.
+        connection.connectTimeout = 16_000
+        connection.readTimeout = 26_000
         connection.instanceFollowRedirects = true
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("User-Agent", CLIENT_ID)
@@ -4844,29 +6550,87 @@ private object LrclibLyricsRepository {
         )
     }
 
+    /** Supports standard line-timed LRC and optional enhanced LRC inline word tags. */
     private fun parseSyncedLyrics(raw: String): List<LyricLine> {
-        val timestampRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?]")
+        val lineTimestampRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?]")
         val output = mutableListOf<LyricLine>()
         raw.lineSequence().forEach { sourceLine ->
-            val matches = timestampRegex.findAll(sourceLine).toList()
+            val matches = lineTimestampRegex.findAll(sourceLine).toList()
             if (matches.isEmpty()) return@forEach
-            val text = sourceLine.substringAfterLast(']').trim()
+            val rawText = sourceLine.substring(matches.last().range.last + 1)
+            val initialTime = parseLrcTimestamp(matches.first()) ?: return@forEach
+            val (text, inlineWordTimes) = parseInlineLyricWords(rawText, initialTime)
             if (text.isBlank()) return@forEach
-            matches.forEach { match ->
-                val minutes = match.groupValues[1].toLongOrNull()
-                val seconds = match.groupValues[2].toLongOrNull()
-                if (minutes != null && seconds != null) {
-                    val fraction = match.groupValues.getOrNull(3).orEmpty()
-                    val fractionMs = when (fraction.length) {
-                        1 -> fraction.toLongOrNull()?.times(100L) ?: 0L
-                        2 -> fraction.toLongOrNull()?.times(10L) ?: 0L
-                        else -> fraction.take(3).padEnd(3, '0').toLongOrNull() ?: 0L
+            matches.forEach timestampLoop@ { match ->
+                val timeMs = parseLrcTimestamp(match) ?: return@timestampLoop
+                // Repeated [time] tags should shift the inline relative timing as well.
+                val adjustedWords = if (timeMs == initialTime) inlineWordTimes else {
+                    inlineWordTimes.map { word ->
+                        word.copy(timestampMs = (word.timestampMs + timeMs - initialTime).coerceAtLeast(0L))
                     }
-                    output += LyricLine((minutes * 60L + seconds) * 1000L + fractionMs, text)
                 }
+                output += LyricLine(timeMs, text, adjustedWords)
             }
         }
         return output.sortedBy { it.timestampMs ?: Long.MAX_VALUE }
+    }
+
+    private fun parseLrcTimestamp(match: MatchResult): Long? {
+        val minute = match.groupValues[1].toLongOrNull() ?: return null
+        val second = match.groupValues[2].toLongOrNull() ?: return null
+        if (second >= 60L) return null
+        val fraction = match.groupValues.getOrNull(3).orEmpty()
+        val milliseconds = when (fraction.length) {
+            0 -> 0L
+            1 -> (fraction.toLongOrNull() ?: 0L) * 100L
+            2 -> (fraction.toLongOrNull() ?: 0L) * 10L
+            else -> fraction.take(3).padEnd(3, '0').toLongOrNull() ?: 0L
+        }
+        return (minute * 60L + second) * 1000L + milliseconds
+    }
+
+    /** Removes <time> markers and maps each word to its best available timestamp. */
+    private fun parseInlineLyricWords(rawText: String, lineStartMs: Long): Pair<String, List<LyricWordTiming>> {
+        val markerRegex = Regex("<(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?>")
+        val markers = mutableListOf<Pair<Int, Long>>()
+        val stripped = StringBuilder()
+        var lastOffset = 0
+        markerRegex.findAll(rawText).forEach { marker ->
+            stripped.append(rawText, lastOffset, marker.range.first)
+            parseLrcTimestamp(marker)?.let { millis -> markers += stripped.length to millis }
+            lastOffset = marker.range.last + 1
+        }
+        stripped.append(rawText, lastOffset, rawText.length)
+        val untrimmed = stripped.toString()
+        val trimStart = untrimmed.indexOfFirst { !it.isWhitespace() }
+        if (trimStart < 0) return "" to emptyList()
+        val text = untrimmed.trim()
+        if (markers.isEmpty()) return text to emptyList()
+
+        val adjustedMarkers = markers.map { (offset, millis) ->
+            (offset - trimStart).coerceAtLeast(0) to millis
+        }
+        val words = Regex("\\S+").findAll(text).toList()
+        if (words.isEmpty()) return text to emptyList()
+
+        val markerForWord = words.map { word ->
+            adjustedMarkers.indexOfLast { it.first <= word.range.first }
+        }
+        val indicesByMarker = words.indices.groupBy { markerForWord[it] }
+        val wordTimes = words.mapIndexed { wordIndex, word ->
+            val markerIndex = markerForWord[wordIndex]
+            val markerTime = if (markerIndex >= 0) adjustedMarkers[markerIndex].second else lineStartMs
+            val nextMarkerTime = adjustedMarkers.getOrNull(markerIndex + 1)?.second
+            val group = indicesByMarker[markerIndex].orEmpty()
+            val withinGroup = group.indexOf(wordIndex).coerceAtLeast(0)
+            val time = if (nextMarkerTime != null && nextMarkerTime > markerTime) {
+                markerTime + (nextMarkerTime - markerTime) * withinGroup / group.size.coerceAtLeast(1)
+            } else {
+                markerTime + withinGroup * 320L
+            }
+            LyricWordTiming(word.range.first, time.coerceAtLeast(0L))
+        }
+        return text to wordTimes
     }
 
     private fun cleanTrackName(value: String): String = value
