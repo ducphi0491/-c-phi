@@ -1,2 +1,20 @@
-nslookup -type=TXT tunertools.top garrett.ns.cloudflare.com
-nslookup -type=TXT tunertools.top 8.8.8.8
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> nslookup -type=TXT tunertools.top garrett.ns.cloudflare.com
+Server:  garrett.ns.cloudflare.com
+Address:  2606:4700:58::a29f:2cc3
+
+tunertools.top  text =
+
+        "google-site-verification=gm8bYzHPV0zwwsK6HJuh1hSktu_n8_sS_G6vn56aLSQ"
+PS C:\Users\Administrator> nslookup -type=TXT tunertools.top 8.8.8.8
+Server:  dns.google
+Address:  8.8.8.8
+
+Non-authoritative answer:
+tunertools.top  text =
+
+        "google-site-verification=gm8bYzHPV0zwwsK6HJuh1hSktu_n8_sS_G6vn56aLSQ"
+PS C:\Users\Administrator>
+
