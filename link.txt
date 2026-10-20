@@ -1,23 +1,40 @@
-Test-Path "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\WINDOWS\system32> Test-Path "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+True
+PS C:\WINDOWS\system32> $adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+>>
+>> $apk = "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
+>>
+>> $log = "$env:USERPROFILE\Desktop\docflow_install_log.txt"
+>>
+>> # Kiem tra ket noi
+>> & $adb devices
+>>
+>> # Xoa log cu
+>> & $adb logcat -c
+>>
+>> # Thu cai dat APK va ghi lai ket qua
+>> & $adb install -r $apk 2>&1 |
+>>     Tee-Object -FilePath $log
+>>
+>> # Lay log lien quan den cai dat
+>> & $adb logcat -d -v time |
+>>     Select-String -Pattern "PackageManager|PackageInstaller|USER_RESTRICTED|INSTALL_FAILED|docflowoffline|SecurityCenter" |
+>>     Out-File -FilePath $log -Append -Encoding utf8
+List of devices attached
+m7usfahyzhlvucyl        device
+
+Performing Streamed Install
+adb.exe : adb.exe: failed to install D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk: Failure
+[INSTALL_FAILED_USER_RESTRICTED: Install canceled by user]
+At line:14 char:1
++ & $adb install -r $apk 2>&1 |
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (adb.exe: failed...nceled by user]:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+PS C:\WINDOWS\system32>
 
 
-$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
-
-$apk = "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
-
-$log = "$env:USERPROFILE\Desktop\docflow_install_log.txt"
-
-# Kiem tra ket noi
-& $adb devices
-
-# Xoa log cu
-& $adb logcat -c
-
-# Thu cai dat APK va ghi lai ket qua
-& $adb install -r $apk 2>&1 |
-    Tee-Object -FilePath $log
-
-# Lay log lien quan den cai dat
-& $adb logcat -d -v time |
-    Select-String -Pattern "PackageManager|PackageInstaller|USER_RESTRICTED|INSTALL_FAILED|docflowoffline|SecurityCenter" |
-    Out-File -FilePath $log -Append -Encoding utf8
