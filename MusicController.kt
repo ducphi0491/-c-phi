@@ -18,6 +18,7 @@ import android.media.RingtoneManager
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer as AndroidEqualizer
 import android.media.audiofx.LoudnessEnhancer
+import android.media.audiofx.Virtualizer
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -111,6 +112,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.max
+import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlin.math.pow
 
@@ -159,6 +161,80 @@ internal enum class SongSource {
     MOVIE,
     APP_RESOURCE
 }
+
+/**
+ * Sound Studio 2.0 uses a 10-point reference curve and maps it logarithmically to
+ * the real Equalizer bands reported by each Android device. A phone with 5 bands
+ * still uses all 10 preset control points as an interpolation source; a device with
+ * more bands receives a smoother, more detailed curve.
+ */
+private val MELOWAVE_EQ_REFERENCE_HZ = intArrayOf(
+    31, 62, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000
+)
+private val MELOWAVE_EQ_FIVE_HZ = intArrayOf(60, 230, 910, 3_600, 14_000)
+private const val MELOWAVE_EQ_CURVE_POINTS = 10
+private const val MELOWAVE_EQ_TRANSITION_MS = 180L
+
+private fun sanitizeEqCurve(values: IntArray): IntArray = IntArray(MELOWAVE_EQ_CURVE_POINTS) { index ->
+    values.getOrElse(index) { 0 }.coerceIn(-6, 6)
+}
+
+private fun interpolateEqCurveDb(
+    curve: IntArray,
+    frequencyHz: Float,
+    referenceHz: IntArray = MELOWAVE_EQ_REFERENCE_HZ
+): Float {
+    val safeCurve = sanitizeEqCurve(curve)
+    val frequency = frequencyHz.coerceAtLeast(1f)
+    if (frequency <= referenceHz.first()) return safeCurve.first().toFloat()
+    if (frequency >= referenceHz.last()) return safeCurve.last().toFloat()
+    val upper = referenceHz.indexOfFirst { frequency <= it }.coerceAtLeast(1)
+    val lower = upper - 1
+    val x0 = ln(referenceHz[lower].toDouble())
+    val x1 = ln(referenceHz[upper].toDouble())
+    val x = ln(frequency.toDouble())
+    val ratio = ((x - x0) / (x1 - x0)).toFloat().coerceIn(0f, 1f)
+    return safeCurve[lower] + (safeCurve[upper] - safeCurve[lower]) * ratio
+}
+
+private fun curveFromAnchors(anchorHz: IntArray, anchorDb: IntArray): IntArray {
+    if (anchorHz.isEmpty() || anchorHz.size != anchorDb.size) return IntArray(MELOWAVE_EQ_CURVE_POINTS)
+    return IntArray(MELOWAVE_EQ_CURVE_POINTS) { index ->
+        val frequency = MELOWAVE_EQ_REFERENCE_HZ[index].toFloat()
+        when {
+            frequency <= anchorHz.first() -> anchorDb.first()
+            frequency >= anchorHz.last() -> anchorDb.last()
+            else -> {
+                val upper = anchorHz.indexOfFirst { frequency <= it }.coerceAtLeast(1)
+                val lower = upper - 1
+                val x0 = ln(anchorHz[lower].toDouble())
+                val x1 = ln(anchorHz[upper].toDouble())
+                val x = ln(frequency.toDouble())
+                val ratio = ((x - x0) / (x1 - x0)).toFloat().coerceIn(0f, 1f)
+                (anchorDb[lower] + (anchorDb[upper] - anchorDb[lower]) * ratio).roundToInt()
+            }
+        }.coerceIn(-6, 6)
+    }
+}
+
+private fun curveFromThreeBand(bass: Int, mid: Int, treble: Int): IntArray = curveFromAnchors(
+    anchorHz = intArrayOf(100, 1_000, 10_000),
+    anchorDb = intArrayOf(bass.coerceIn(-6, 6), mid.coerceIn(-6, 6), treble.coerceIn(-6, 6))
+)
+
+private fun curveFromFiveBand(values: IntArray): IntArray = curveFromAnchors(
+    anchorHz = MELOWAVE_EQ_FIVE_HZ,
+    anchorDb = IntArray(5) { values.getOrElse(it) { 0 }.coerceIn(-6, 6) }
+)
+
+private fun parseEqCurvePreference(raw: String?): IntArray? {
+    if (raw.isNullOrBlank()) return null
+    val values = raw.split(',').mapNotNull { it.trim().toIntOrNull() }
+    if (values.size != MELOWAVE_EQ_CURVE_POINTS) return null
+    return sanitizeEqCurve(values.toIntArray())
+}
+
+private fun eqCurvePreference(curve: IntArray): String = sanitizeEqCurve(curve).joinToString(",")
 
 /** Outcome of a MediaStore operation. Android may require a system permission prompt. */
 internal sealed class LocalSongMutationResult {
@@ -697,6 +773,24 @@ internal class MusicController(private val context: Context) {
         private set
     var equalizerBand14000 by mutableIntStateOf(prefs.getInt(KEY_EQ_BAND_14000, 0))
         private set
+    private var equalizerCurve10 by mutableStateOf(
+        parseEqCurvePreference(prefs.getString(KEY_EQ_CURVE_10, null))
+            ?: curveFromFiveBand(
+                intArrayOf(
+                    equalizerBand60,
+                    equalizerBand230,
+                    equalizerBand910,
+                    equalizerBand3600,
+                    equalizerBand14000
+                )
+            )
+    )
+    val equalizerResponseCurveDb: List<Int>
+        get() = if (MeloWarePremiumAccess.equalizerRequiresPremium) {
+            curveFromThreeBand(equalizerBass, equalizerMid, equalizerTreble).toList()
+        } else {
+            equalizerCurve10.toList()
+        }
     var equalizerSelectedPresetIndex by mutableIntStateOf(prefs.getInt(KEY_EQ_PRESET, 1))
         private set
     var equalizerAdvancedMode by mutableStateOf(prefs.getBoolean(KEY_EQ_ADVANCED, false))
@@ -711,6 +805,17 @@ internal class MusicController(private val context: Context) {
         prefs.getInt(KEY_EQ_BASS_BOOST, 0).coerceIn(0, 100)
     )
         private set
+    var equalizerVirtualizerStrength by mutableIntStateOf(
+        prefs.getInt(KEY_EQ_VIRTUALIZER, 0).coerceIn(0, 100)
+    )
+        private set
+    var equalizerVirtualizerAvailable by mutableStateOf(false)
+        private set
+    var equalizerVirtualizerStrengthSupported by mutableStateOf(false)
+        private set
+    private var _equalizerCompareOriginal by mutableStateOf(false)
+    val equalizerCompareOriginal: Boolean
+        get() = _equalizerCompareOriginal
     var equalizerAutoHeadroomEnabled by mutableStateOf(
         prefs.getBoolean(KEY_EQ_AUTO_HEADROOM, true)
     )
@@ -886,27 +991,44 @@ internal class MusicController(private val context: Context) {
     }
 
     private fun migrateLegacyEqualizerDefaults() {
-        if (prefs.getInt(KEY_EQ_TUNING_VERSION, 0) >= 2) return
-        val legacyUntunedDefaults = equalizerBass == 4 && equalizerMid == 2 && equalizerTreble == 3 &&
-            equalizerBand60 == 4 && equalizerBand230 == 3 && equalizerBand910 == 2 &&
-            equalizerBand3600 == 2 && equalizerBand14000 == 3 &&
-            equalizerSelectedPresetIndex == 0 && !equalizerAdvancedMode
-        if (legacyUntunedDefaults) {
-            equalizerBass = 0
-            equalizerMid = 0
-            equalizerTreble = 0
-            equalizerBand60 = 0
-            equalizerBand230 = 0
-            equalizerBand910 = 0
-            equalizerBand3600 = 0
-            equalizerBand14000 = 0
-            equalizerSelectedPresetIndex = 1
-            equalizerBassBoostStrength = 0
-            equalizerLoudnessEnabled = false
-            equalizerLoudnessGainDb = 3
-            equalizerAutoHeadroomEnabled = true
+        val version = prefs.getInt(KEY_EQ_TUNING_VERSION, 0)
+        if (version < 2) {
+            val legacyUntunedDefaults = equalizerBass == 4 && equalizerMid == 2 && equalizerTreble == 3 &&
+                equalizerBand60 == 4 && equalizerBand230 == 3 && equalizerBand910 == 2 &&
+                equalizerBand3600 == 2 && equalizerBand14000 == 3 &&
+                equalizerSelectedPresetIndex == 0 && !equalizerAdvancedMode
+            if (legacyUntunedDefaults) {
+                equalizerBass = 0
+                equalizerMid = 0
+                equalizerTreble = 0
+                equalizerBand60 = 0
+                equalizerBand230 = 0
+                equalizerBand910 = 0
+                equalizerBand3600 = 0
+                equalizerBand14000 = 0
+                equalizerSelectedPresetIndex = 1
+                equalizerBassBoostStrength = 0
+                equalizerLoudnessEnabled = false
+                equalizerLoudnessGainDb = 3
+                equalizerAutoHeadroomEnabled = true
+            }
         }
-        prefs.edit().putInt(KEY_EQ_TUNING_VERSION, 2).apply()
+        if (version < 3 || !prefs.contains(KEY_EQ_CURVE_10)) {
+            equalizerCurve10 = if (equalizerAdvancedMode) {
+                curveFromFiveBand(
+                    intArrayOf(
+                        equalizerBand60,
+                        equalizerBand230,
+                        equalizerBand910,
+                        equalizerBand3600,
+                        equalizerBand14000
+                    )
+                )
+            } else {
+                curveFromThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+            }
+        }
+        prefs.edit().putInt(KEY_EQ_TUNING_VERSION, 3).apply()
         persistEqualizerState()
     }
 
@@ -1033,9 +1155,41 @@ internal class MusicController(private val context: Context) {
         }
     }
 
+    private fun syncEqualizerCurveFromBasicControls() {
+        equalizerCurve10 = curveFromThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+    }
+
+    private fun syncEqualizerCurveFromAdvancedControls() {
+        equalizerCurve10 = curveFromFiveBand(
+            intArrayOf(
+                equalizerBand60,
+                equalizerBand230,
+                equalizerBand910,
+                equalizerBand3600,
+                equalizerBand14000
+            )
+        )
+    }
+
+    private fun syncVisibleEqualizerControlsFromCurve(curve: IntArray) {
+        val safe = sanitizeEqCurve(curve)
+        equalizerBass = interpolateEqCurveDb(safe, 100f).roundToInt().coerceIn(-6, 6)
+        equalizerMid = interpolateEqCurveDb(safe, 1_000f).roundToInt().coerceIn(-6, 6)
+        equalizerTreble = interpolateEqCurveDb(safe, 10_000f).roundToInt().coerceIn(-6, 6)
+        val five = MELOWAVE_EQ_FIVE_HZ.map { frequency ->
+            interpolateEqCurveDb(safe, frequency.toFloat()).roundToInt().coerceIn(-6, 6)
+        }
+        equalizerBand60 = five[0]
+        equalizerBand230 = five[1]
+        equalizerBand910 = five[2]
+        equalizerBand3600 = five[3]
+        equalizerBand14000 = five[4]
+    }
+
     fun setEqualizerActive(enabled: Boolean) {
         if (crossfadeJob != null) cancelSoundCrossfade()
         equalizerEnabled = enabled
+        if (!enabled) _equalizerCompareOriginal = false
         persistEqualizerState()
         if (enabled) {
             applyEqualizerSettings(force = true)
@@ -1050,10 +1204,36 @@ internal class MusicController(private val context: Context) {
             equalizerError = null
             equalizerWarning = null
             equalizerHeadroomDb = 0f
+            equalizerVirtualizerAvailable = false
+            equalizerVirtualizerStrengthSupported = false
             reapplyOutputVolumes()
         }
     }
 
+    /**
+     * Applies a 10-point preset curve. The curve is mapped logarithmically to the
+     * actual bands offered by the device and animated over 180 ms by the audio engine.
+     */
+    fun selectEqualizerCurvePreset(
+        index: Int,
+        curveDb: List<Int>,
+        bassBoostStrength: Int = 0
+    ) {
+        if (curveDb.size < MELOWAVE_EQ_CURVE_POINTS) return
+        equalizerEnabled = true
+        _equalizerCompareOriginal = false
+        equalizerSelectedPresetIndex = index.coerceAtLeast(0)
+        equalizerCurve10 = sanitizeEqCurve(curveDb.take(MELOWAVE_EQ_CURVE_POINTS).toIntArray())
+        syncVisibleEqualizerControlsFromCurve(equalizerCurve10)
+        // Preset curves retain all ten reference points instead of collapsing to Bass/Mid/Treble.
+        equalizerAdvancedMode = true
+        equalizerBassBoostStrength = if (MeloWarePremiumAccess.equalizerRequiresPremium) 0
+            else bassBoostStrength.coerceIn(0, 100)
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    /** Backward-compatible entry point for older UI code. */
     fun selectEqualizerPreset(
         index: Int,
         bass: Int,
@@ -1061,60 +1241,60 @@ internal class MusicController(private val context: Context) {
         treble: Int,
         bassBoostStrength: Int = 0
     ) {
-        equalizerEnabled = true
-        equalizerSelectedPresetIndex = index.coerceAtLeast(0)
-        equalizerAdvancedMode = false
-        if (index != 0) {
-            equalizerBass = bass.coerceIn(-6, 6)
-            equalizerMid = mid.coerceIn(-6, 6)
-            equalizerTreble = treble.coerceIn(-6, 6)
-            equalizerBassBoostStrength = if (MeloWarePremiumAccess.equalizerRequiresPremium) 0
-                else bassBoostStrength.coerceIn(0, 100)
+        selectEqualizerCurvePreset(
+            index = index,
+            curveDb = curveFromThreeBand(bass, mid, treble).toList(),
+            bassBoostStrength = bassBoostStrength
+        )
+        if (index == 0) {
+            equalizerSelectedPresetIndex = 0
+            persistEqualizerState()
         }
-        persistEqualizerState()
-        applyEqualizerSettings()
     }
 
     fun updateEqualizerBass(value: Int) {
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerBass = value.coerceIn(-6, 6)
         equalizerSelectedPresetIndex = 0
         equalizerAdvancedMode = false
+        syncEqualizerCurveFromBasicControls()
         persistEqualizerState()
         applyEqualizerSettings()
     }
 
     fun updateEqualizerMid(value: Int) {
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerMid = value.coerceIn(-6, 6)
         equalizerSelectedPresetIndex = 0
         equalizerAdvancedMode = false
+        syncEqualizerCurveFromBasicControls()
         persistEqualizerState()
         applyEqualizerSettings()
     }
 
     fun updateEqualizerTreble(value: Int) {
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerTreble = value.coerceIn(-6, 6)
         equalizerSelectedPresetIndex = 0
         equalizerAdvancedMode = false
+        syncEqualizerCurveFromBasicControls()
         persistEqualizerState()
         applyEqualizerSettings()
     }
 
     fun prepareAdvancedEqualizerBands() {
         if (MeloWarePremiumAccess.equalizerRequiresPremium || equalizerAdvancedMode) return
-        equalizerBand60 = equalizerBass
-        equalizerBand230 = ((equalizerBass + equalizerMid) / 2f).toInt().coerceIn(-6, 6)
-        equalizerBand910 = equalizerMid
-        equalizerBand3600 = ((equalizerMid + equalizerTreble) / 2f).toInt().coerceIn(-6, 6)
-        equalizerBand14000 = equalizerTreble
+        syncVisibleEqualizerControlsFromCurve(equalizerCurve10)
         persistEqualizerState()
     }
 
     fun updateAdvancedEqualizerBand(index: Int, value: Int) {
         if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         val safe = value.coerceIn(-6, 6)
         when (index) {
             0 -> equalizerBand60 = safe
@@ -1126,6 +1306,11 @@ internal class MusicController(private val context: Context) {
         }
         equalizerAdvancedMode = true
         equalizerSelectedPresetIndex = 0
+        syncEqualizerCurveFromAdvancedControls()
+        // Keep the compact three controls representative of the detailed curve.
+        equalizerBass = interpolateEqCurveDb(equalizerCurve10, 100f).roundToInt().coerceIn(-6, 6)
+        equalizerMid = interpolateEqCurveDb(equalizerCurve10, 1_000f).roundToInt().coerceIn(-6, 6)
+        equalizerTreble = interpolateEqCurveDb(equalizerCurve10, 10_000f).roundToInt().coerceIn(-6, 6)
         persistEqualizerState()
         applyEqualizerSettings()
     }
@@ -1133,11 +1318,16 @@ internal class MusicController(private val context: Context) {
     fun setAdvancedEqualizerFlat() {
         if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerBand60 = 0
         equalizerBand230 = 0
         equalizerBand910 = 0
         equalizerBand3600 = 0
         equalizerBand14000 = 0
+        equalizerBass = 0
+        equalizerMid = 0
+        equalizerTreble = 0
+        equalizerCurve10 = IntArray(MELOWAVE_EQ_CURVE_POINTS)
         equalizerAdvancedMode = true
         equalizerSelectedPresetIndex = 0
         persistEqualizerState()
@@ -1147,6 +1337,7 @@ internal class MusicController(private val context: Context) {
     fun setEqualizerLoudness(enabled: Boolean) {
         if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerLoudnessEnabled = enabled
         persistEqualizerState()
         applyEqualizerSettings()
@@ -1155,6 +1346,7 @@ internal class MusicController(private val context: Context) {
     fun updateEqualizerLoudnessGainDb(value: Int) {
         if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerLoudnessGainDb = value.coerceIn(1, 6)
         persistEqualizerState()
         applyEqualizerSettings()
@@ -1163,6 +1355,7 @@ internal class MusicController(private val context: Context) {
     fun updateEqualizerBassBoostStrength(value: Int) {
         if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         val requested = value.coerceIn(0, 100)
         equalizerBassBoostStrength = if (
             audioSessionId > 0 && equalizerBassBoostAvailable &&
@@ -1173,6 +1366,26 @@ internal class MusicController(private val context: Context) {
         applyEqualizerSettings()
     }
 
+    fun updateEqualizerVirtualizerStrength(value: Int) {
+        if (MeloWarePremiumAccess.equalizerRequiresPremium) return
+        equalizerEnabled = true
+        _equalizerCompareOriginal = false
+        val requested = value.coerceIn(0, 100)
+        equalizerVirtualizerStrength = if (
+            audioSessionId > 0 && equalizerVirtualizerAvailable &&
+            !equalizerVirtualizerStrengthSupported && requested > 0
+        ) 100 else requested
+        persistEqualizerState()
+        applyEqualizerSettings()
+    }
+
+    fun setEqualizerCompareOriginal(enabled: Boolean) {
+        if (!equalizerEnabled) return
+        _equalizerCompareOriginal = enabled
+        applyEqualizerSettings()
+        reapplyOutputVolumes()
+    }
+
     fun setEqualizerAutoHeadroom(enabled: Boolean) {
         if (MeloWarePremiumAccess.equalizerRequiresPremium) return
         equalizerAutoHeadroomEnabled = enabled
@@ -1180,8 +1393,40 @@ internal class MusicController(private val context: Context) {
         applyEqualizerSettings()
     }
 
+    /** Applies the nearest built-in curve for the current song metadata, on demand. */
+    fun applyEqualizerForCurrentGenre(): Boolean {
+        val genre = currentSong?.genre.orEmpty().lowercase(Locale.ROOT).trim()
+        if (genre.isBlank()) {
+            statusMessage = "Bài hát chưa có thông tin thể loại để gợi ý EQ."
+            return false
+        }
+        val selection = when {
+            listOf("rock", "metal", "punk", "alternative").any { genre.contains(it) } ->
+                Triple(4, listOf(5, 3, 1, 0, -1, 1, 3, 4, 5, 5), 0)
+            listOf("pop", "k-pop", "j-pop").any { genre.contains(it) } ->
+                Triple(3, listOf(-1, 1, 3, 4, 4, 3, 1, 0, 1, 2), 0)
+            listOf("jazz", "blues", "swing").any { genre.contains(it) } ->
+                Triple(5, listOf(4, 3, 1, 2, -1, -1, 0, 1, 3, 4), 0)
+            listOf("classical", "classic", "orchestra", "symphony").any { genre.contains(it) } ->
+                Triple(6, listOf(4, 3, 2, 2, -1, -1, 0, 2, 3, 4), 0)
+            listOf("electronic", "edm", "dance", "house", "techno", "trance").any { genre.contains(it) } ->
+                Triple(8, listOf(5, 4, 1, 0, -2, 2, 1, 4, 5, 4), 0)
+            listOf("vocal", "acoustic", "ballad", "country", "folk", "r&b", "rnb", "soul").any { genre.contains(it) } ->
+                Triple(7, listOf(-2, -1, 1, 3, 5, 4, 3, 1, 0, -1), 0)
+            else -> null
+        }
+        if (selection == null) {
+            statusMessage = "Chưa có preset EQ phù hợp cho thể loại: ${currentSong?.genre.orEmpty()}"
+            return false
+        }
+        selectEqualizerCurvePreset(selection.first, selection.second, selection.third)
+        statusMessage = "Đã áp dụng EQ theo thể loại ${currentSong?.genre.orEmpty()}."
+        return true
+    }
+
     fun resetEqualizer() {
         equalizerEnabled = true
+        _equalizerCompareOriginal = false
         equalizerBass = 0
         equalizerMid = 0
         equalizerTreble = 0
@@ -1190,12 +1435,14 @@ internal class MusicController(private val context: Context) {
         equalizerBand910 = 0
         equalizerBand3600 = 0
         equalizerBand14000 = 0
+        equalizerCurve10 = IntArray(MELOWAVE_EQ_CURVE_POINTS)
         equalizerBassBoostStrength = 0
+        equalizerVirtualizerStrength = 0
         equalizerLoudnessEnabled = false
         equalizerLoudnessGainDb = 3
         equalizerAutoHeadroomEnabled = true
         equalizerSelectedPresetIndex = 1
-        equalizerAdvancedMode = false
+        equalizerAdvancedMode = true
         persistEqualizerState()
         applyEqualizerSettings(force = true)
     }
@@ -1324,10 +1571,12 @@ internal class MusicController(private val context: Context) {
         put("band910", equalizerBand910)
         put("band3600", equalizerBand3600)
         put("band14000", equalizerBand14000)
+        put("curve10", JSONArray(equalizerCurve10.toList()))
         put("advanced", equalizerAdvancedMode)
         put("loudness", equalizerLoudnessEnabled)
         put("loudnessGainDb", equalizerLoudnessGainDb)
         put("bassBoost", equalizerBassBoostStrength)
+        put("virtualizer", equalizerVirtualizerStrength)
         put("autoHeadroom", equalizerAutoHeadroomEnabled)
         put("preset", equalizerSelectedPresetIndex)
     }
@@ -1367,10 +1616,29 @@ internal class MusicController(private val context: Context) {
         equalizerBand910 = data.optInt("band910", 0).coerceIn(-6, 6)
         equalizerBand3600 = data.optInt("band3600", 0).coerceIn(-6, 6)
         equalizerBand14000 = data.optInt("band14000", 0).coerceIn(-6, 6)
+        equalizerCurve10 = data.optJSONArray("curve10")?.let { array ->
+            if (array.length() == MELOWAVE_EQ_CURVE_POINTS) {
+                sanitizeEqCurve(IntArray(MELOWAVE_EQ_CURVE_POINTS) { array.optInt(it, 0) })
+            } else null
+        } ?: if (data.optBoolean("advanced", false)) {
+            curveFromFiveBand(
+                intArrayOf(
+                    equalizerBand60,
+                    equalizerBand230,
+                    equalizerBand910,
+                    equalizerBand3600,
+                    equalizerBand14000
+                )
+            )
+        } else {
+            curveFromThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+        }
+        syncVisibleEqualizerControlsFromCurve(equalizerCurve10)
         equalizerAdvancedMode = data.optBoolean("advanced", false)
         equalizerLoudnessEnabled = data.optBoolean("loudness", false)
         equalizerLoudnessGainDb = data.optInt("loudnessGainDb", 3).coerceIn(1, 6)
         equalizerBassBoostStrength = data.optInt("bassBoost", 0).coerceIn(0, 100)
+        equalizerVirtualizerStrength = data.optInt("virtualizer", 0).coerceIn(0, 100)
         equalizerAutoHeadroomEnabled = data.optBoolean("autoHeadroom", true)
         equalizerSelectedPresetIndex = data.optInt("preset", 1)
         // Legacy EQ-only profiles did not store this flag and historically enabled EQ when applied.
@@ -1580,11 +1848,13 @@ internal class MusicController(private val context: Context) {
             .putInt(KEY_EQ_BAND_910, equalizerBand910)
             .putInt(KEY_EQ_BAND_3600, equalizerBand3600)
             .putInt(KEY_EQ_BAND_14000, equalizerBand14000)
+            .putString(KEY_EQ_CURVE_10, eqCurvePreference(equalizerCurve10))
             .putInt(KEY_EQ_PRESET, equalizerSelectedPresetIndex)
             .putBoolean(KEY_EQ_ADVANCED, equalizerAdvancedMode)
             .putBoolean(KEY_EQ_LOUDNESS, equalizerLoudnessEnabled)
             .putInt(KEY_EQ_LOUDNESS_GAIN_DB, equalizerLoudnessGainDb)
             .putInt(KEY_EQ_BASS_BOOST, equalizerBassBoostStrength)
+            .putInt(KEY_EQ_VIRTUALIZER, equalizerVirtualizerStrength)
             .putBoolean(KEY_EQ_AUTO_HEADROOM, equalizerAutoHeadroomEnabled)
             .putBoolean(KEY_EQ_ENABLED, equalizerEnabled)
             .apply()
@@ -1594,30 +1864,29 @@ internal class MusicController(private val context: Context) {
     }
 
     private fun activeEqualizerValues(): IntArray =
-        if (equalizerAdvancedMode && !MeloWarePremiumAccess.equalizerRequiresPremium) {
-            intArrayOf(
-                equalizerBand60,
-                equalizerBand230,
-                equalizerBand910,
-                equalizerBand3600,
-                equalizerBand14000
-            )
-        } else {
-            intArrayOf(equalizerBass, equalizerMid, equalizerTreble)
-        }
+        if (equalizerCompareOriginal) IntArray(MELOWAVE_EQ_CURVE_POINTS)
+        else sanitizeEqCurve(equalizerCurve10)
 
     private fun calculateAutoHeadroomDb(): Float {
-        if (!equalizerEnabled) return 0f
+        if (!equalizerEnabled || equalizerCompareOriginal) return 0f
         val premiumLocked = MeloWarePremiumAccess.equalizerRequiresPremium
         // Basic EQ keeps automatic protection active even when Pro controls are locked.
         val headroomEnabled = if (premiumLocked) true else equalizerAutoHeadroomEnabled
         if (!headroomEnabled) return 0f
-        val eqBoost = activeEqualizerValues().maxOrNull()?.coerceAtLeast(0)?.toFloat() ?: 0f
+        val headroomCurve = if (premiumLocked) {
+            curveFromThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+        } else {
+            activeEqualizerValues()
+        }
+        val eqBoost = headroomCurve.maxOrNull()?.coerceAtLeast(0)?.toFloat() ?: 0f
         val bassBoostReserve = if (premiumLocked) 0f
             else equalizerBassBoostStrength.coerceIn(0, 100) / 100f * 4f
+        // Spatial widening can add a small perceived peak on some OEM implementations.
+        val spatialReserve = if (premiumLocked) 0f
+            else equalizerVirtualizerStrength.coerceIn(0, 100) / 100f * 0.5f
         // LoudnessEnhancer already limits/compresses peaks. Reserving its full target gain here
-        // cancelled the audible boost, so Auto Headroom now protects only positive EQ and Bass Boost.
-        return (eqBoost + bassBoostReserve).coerceIn(0f, 10f)
+        // cancelled the audible boost, so Auto Headroom protects positive EQ, Bass Boost and Spatial.
+        return (eqBoost + bassBoostReserve + spatialReserve).coerceIn(0f, 10f)
     }
 
     private fun currentEqualizerOutputGain(): Float {
@@ -1680,6 +1949,8 @@ internal class MusicController(private val context: Context) {
             equalizerHasControl = attach.hasControl
             equalizerBassBoostAvailable = attach.bassBoostAvailable
             equalizerBassBoostStrengthSupported = attach.bassBoostStrengthSupported
+            equalizerVirtualizerAvailable = attach.virtualizerAvailable
+            equalizerVirtualizerStrengthSupported = attach.virtualizerStrengthSupported
             if (attach.mappedFiveBandCentersHz.size == 5) {
                 equalizerActualFiveBandLabels = attach.mappedFiveBandCentersHz.map(::formatEqFrequency)
             }
@@ -1690,19 +1961,30 @@ internal class MusicController(private val context: Context) {
         if (!attach.ready) return attach.error
 
         val premiumLocked = MeloWarePremiumAccess.equalizerRequiresPremium
-        val coreError = if (equalizerAdvancedMode && !premiumLocked) {
-            engine.applyFiveBand(activeEqualizerValues())
-        } else {
-            engine.applyThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+        val bypass = equalizerCompareOriginal
+        val curveForDevice = when {
+            bypass -> IntArray(MELOWAVE_EQ_CURVE_POINTS)
+            premiumLocked -> curveFromThreeBand(equalizerBass, equalizerMid, equalizerTreble)
+            else -> activeEqualizerValues()
         }
-        val bassError = engine.setBassBoost(if (premiumLocked) 0 else equalizerBassBoostStrength)
+        val coreError = engine.applyCurve(
+            curveDb = curveForDevice,
+            smooth = !force
+        )
+        val bassError = engine.setBassBoost(
+            if (premiumLocked || bypass) 0 else equalizerBassBoostStrength
+        )
+        val virtualizerError = engine.setVirtualizer(
+            if (premiumLocked || bypass) 0 else equalizerVirtualizerStrength
+        )
         val loudnessError = engine.setLoudness(
-            enabled = !premiumLocked && equalizerLoudnessEnabled,
+            enabled = !premiumLocked && !bypass && equalizerLoudnessEnabled,
             gainDb = equalizerLoudnessGainDb
         )
         if (updatePublicState) {
             equalizerError = coreError
-            equalizerWarning = listOfNotNull(bassError, loudnessError).joinToString(" · ").takeIf { it.isNotBlank() }
+            equalizerWarning = listOfNotNull(bassError, virtualizerError, loudnessError)
+                .joinToString(" · ").takeIf { it.isNotBlank() }
             equalizerReady = coreError == null
         }
         return coreError
@@ -1728,6 +2010,8 @@ internal class MusicController(private val context: Context) {
             equalizerError = null
             equalizerWarning = null
             equalizerHeadroomDb = 0f
+            equalizerVirtualizerAvailable = false
+            equalizerVirtualizerStrengthSupported = false
             reapplyOutputVolumes()
             return
         }
@@ -2833,52 +3117,16 @@ internal class MusicController(private val context: Context) {
         val stamped = newSongs.mapIndexed { index, song ->
             val existing = existingById[song.id]
             song.copy(
-                // Always keep the newly read Drive URI/resource keys, but retain local metadata
-                // that may have been learned after playback.
-                durationMs = song.durationMs.takeIf { it > 0L }
-                    ?: existing?.durationMs?.takeIf { it > 0L }
-                    ?: 0L,
-                artworkUrl = song.artworkUrl ?: existing?.artworkUrl,
                 genre = song.genre.ifBlank { existing?.genre.orEmpty() },
                 dateAddedMs = existing?.dateAddedMs?.takeIf { it > 0L }
                     ?: song.dateAddedMs.takeIf { it > 0L }
                     ?: (now + index)
             )
         }
-
-        // Replace matching saved entries in place. The previous old-first distinctBy merge kept
-        // stale publicdrive:// URIs and discarded the freshly fetched resource keys.
-        val freshById = stamped.associateBy { it.id }
-        val merged = publicDriveSongs.map { saved ->
-            freshById[saved.id] ?: saved
-        }.toMutableList()
-        val mergedIds = merged.asSequence().map { it.id }.toHashSet()
-        stamped.forEach { fresh ->
-            if (mergedIds.add(fresh.id)) merged.add(fresh)
-        }
+        val merged = (publicDriveSongs + stamped).distinctBy { it.id }
         publicDriveSongs.clear()
         publicDriveSongs.addAll(merged)
-
-        // Queue and recent history also persist complete SongItem objects. Refresh those copies so
-        // Next/Previous and reopening the app do not continue using an old Drive resource key.
-        fun refreshStoredSongs(list: MutableList<SongItem>) {
-            for (index in list.indices) {
-                val fresh = freshById[list[index].id] ?: continue
-                val saved = list[index]
-                list[index] = fresh.copy(
-                    durationMs = saved.durationMs.takeIf { it > 0L } ?: fresh.durationMs,
-                    artworkUrl = saved.artworkUrl ?: fresh.artworkUrl,
-                    genre = saved.genre.ifBlank { fresh.genre },
-                    dateAddedMs = saved.dateAddedMs.takeIf { it > 0L } ?: fresh.dateAddedMs
-                )
-            }
-        }
-        refreshStoredSongs(queue)
-        refreshStoredSongs(recentSongs)
-
         saveSongList(KEY_PUBLIC_SONGS, publicDriveSongs)
-        saveQueue()
-        saveSongList(KEY_RECENTS, recentSongs)
         return stamped
     }
 
@@ -5012,11 +5260,13 @@ internal class MusicController(private val context: Context) {
         private const val KEY_EQ_BAND_910 = "equalizer_band_910"
         private const val KEY_EQ_BAND_3600 = "equalizer_band_3600"
         private const val KEY_EQ_BAND_14000 = "equalizer_band_14000"
+        private const val KEY_EQ_CURVE_10 = "equalizer_curve_10"
         private const val KEY_EQ_PRESET = "equalizer_preset"
         private const val KEY_EQ_ADVANCED = "equalizer_advanced"
         private const val KEY_EQ_LOUDNESS = "equalizer_loudness"
         private const val KEY_EQ_LOUDNESS_GAIN_DB = "equalizer_loudness_gain_db"
         private const val KEY_EQ_BASS_BOOST = "equalizer_bass_boost_strength"
+        private const val KEY_EQ_VIRTUALIZER = "equalizer_virtualizer_strength"
         private const val KEY_EQ_AUTO_HEADROOM = "equalizer_auto_headroom"
         private const val KEY_EQ_TUNING_VERSION = "equalizer_tuning_version"
         private const val KEY_EQ_ENABLED = "equalizer_enabled"
@@ -5034,17 +5284,25 @@ private data class AudioFxAttachResult(
     val hasControl: Boolean,
     val bassBoostAvailable: Boolean = false,
     val bassBoostStrengthSupported: Boolean = false,
+    val virtualizerAvailable: Boolean = false,
+    val virtualizerStrengthSupported: Boolean = false,
     val mappedFiveBandCentersHz: IntArray = intArrayOf(),
     val error: String? = null
 )
 
+@Suppress("DEPRECATION")
 private class PersistentAudioFxEngine {
     private var equalizer: AndroidEqualizer? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var bassBoost: BassBoost? = null
+    private var virtualizer: Virtualizer? = null
     private var sessionId: Int = 0
     private var centerFrequenciesHz: IntArray = intArrayOf()
     private var bassStrengthSupported: Boolean = false
+    private var virtualizerStrengthSupported: Boolean = false
+    private val animationHandler = Handler(Looper.getMainLooper())
+    private var animationGeneration = 0
+    private var currentBandLevelsMb: IntArray = intArrayOf()
 
     private fun mappedFiveBandCenters(): IntArray {
         val targets = intArrayOf(60, 230, 910, 3600, 14000)
@@ -5067,6 +5325,8 @@ private class PersistentAudioFxEngine {
             hasControl = control,
             bassBoostAvailable = bassBoost != null,
             bassBoostStrengthSupported = bassStrengthSupported,
+            virtualizerAvailable = virtualizer != null,
+            virtualizerStrengthSupported = virtualizerStrengthSupported,
             mappedFiveBandCentersHz = mappedFiveBandCenters(),
             error = error
         )
@@ -5110,6 +5370,11 @@ private class PersistentAudioFxEngine {
             val count = createdEqualizer.numberOfBands.toInt()
             IntArray(count) { index -> createdEqualizer.getCenterFreq(index.toShort()) / 1000 }
         }.getOrDefault(intArrayOf())
+        currentBandLevelsMb = runCatching {
+            IntArray(centerFrequenciesHz.size) { index ->
+                createdEqualizer.getBandLevel(index.toShort()).toInt()
+            }
+        }.getOrDefault(IntArray(centerFrequenciesHz.size))
 
         loudnessEnhancer = runCatching {
             LoudnessEnhancer(newSessionId).apply {
@@ -5125,7 +5390,77 @@ private class PersistentAudioFxEngine {
             runCatching { it.strengthSupported }.getOrDefault(false)
         } == true
 
+        virtualizer = runCatching {
+            Virtualizer(1000, newSessionId).apply { enabled = false }
+        }.getOrNull()
+        virtualizerStrengthSupported = virtualizer?.let {
+            runCatching { it.strengthSupported }.getOrDefault(false)
+        } == true
+
         return currentAttachResult()
+    }
+
+    fun applyCurve(curveDb: IntArray, smooth: Boolean = true): String? {
+        val effect = equalizer ?: return "Equalizer chưa được gắn vào phiên âm thanh."
+        if (!runCatching { effect.hasControl() }.getOrDefault(false)) {
+            return "MeloWave không có quyền điều khiển Equalizer trên thiết bị này."
+        }
+        val range = runCatching { effect.bandLevelRange }.getOrNull()
+            ?: return "Không đọc được dải điều chỉnh Equalizer."
+        if (range.size < 2) return "Thiết bị trả dải Equalizer không hợp lệ."
+        val bandCount = runCatching { effect.numberOfBands.toInt() }.getOrDefault(0)
+        if (bandCount <= 0) return "Thiết bị không cung cấp băng tần Equalizer."
+        val minLevel = range[0].toInt()
+        val maxLevel = range[1].toInt()
+        val safeCurve = sanitizeEqCurve(curveDb)
+        val targets = IntArray(bandCount) { bandIndex ->
+            val centerHz = centerFrequenciesHz.getOrElse(bandIndex) {
+                runCatching { effect.getCenterFreq(bandIndex.toShort()) / 1000 }.getOrDefault(1)
+            }
+            (interpolateEqCurveDb(safeCurve, centerHz.toFloat()) * 100f)
+                .roundToInt().coerceIn(minLevel, maxLevel)
+        }
+
+        val generation = ++animationGeneration
+        val start = if (currentBandLevelsMb.size == bandCount) {
+            currentBandLevelsMb.copyOf()
+        } else {
+            runCatching {
+                IntArray(bandCount) { effect.getBandLevel(it.toShort()).toInt() }
+            }.getOrDefault(IntArray(bandCount))
+        }
+
+        fun applyLevels(levels: IntArray): Throwable? {
+            var error: Throwable? = null
+            levels.forEachIndexed { index, value ->
+                runCatching { effect.setBandLevel(index.toShort(), value.toShort()) }
+                    .onFailure { error = it }
+            }
+            currentBandLevelsMb = levels.copyOf()
+            return error
+        }
+
+        if (!smooth || start.contentEquals(targets)) {
+            val error = applyLevels(targets)
+            return error?.let {
+                "Không áp dụng được Equalizer: ${it.localizedMessage ?: it.javaClass.simpleName}"
+            }
+        }
+
+        val steps = 10
+        for (step in 1..steps) {
+            animationHandler.postDelayed({
+                if (generation == animationGeneration && equalizer === effect) {
+                    val ratio = step / steps.toFloat()
+                    val eased = ratio * ratio * (3f - 2f * ratio)
+                    val levels = IntArray(bandCount) { index ->
+                        (start[index] + (targets[index] - start[index]) * eased).roundToInt()
+                    }
+                    applyLevels(levels)
+                }
+            }, MELOWAVE_EQ_TRANSITION_MS * step / steps)
+        }
+        return null
     }
 
     fun applyThreeBand(bass: Int, mid: Int, treble: Int): String? {
@@ -5214,6 +5549,23 @@ private class PersistentAudioFxEngine {
         }
     }
 
+    fun setVirtualizer(strengthPercent: Int): String? {
+        val safePercent = strengthPercent.coerceIn(0, 100)
+        val effect = virtualizer
+            ?: return if (safePercent == 0) null else "Thiết bị không cung cấp hiệu ứng không gian âm thanh."
+        return runCatching {
+            if (safePercent == 0) {
+                effect.enabled = false
+            } else {
+                val requested = if (virtualizerStrengthSupported) safePercent * 10 else 1000
+                effect.setStrength(requested.coerceIn(0, 1000).toShort())
+                effect.enabled = true
+            }
+        }.exceptionOrNull()?.let {
+            "Không áp dụng được Spatial Audio: ${it.localizedMessage ?: it.javaClass.simpleName}"
+        }
+    }
+
     fun setLoudness(enabled: Boolean, gainDb: Int): String? {
         val effect = loudnessEnhancer
             ?: return if (!enabled) null else "Thiết bị không cung cấp LoudnessEnhancer."
@@ -5226,17 +5578,23 @@ private class PersistentAudioFxEngine {
     }
 
     fun release() {
+        animationGeneration++
         runCatching { equalizer?.enabled = false }
         runCatching { loudnessEnhancer?.enabled = false }
         runCatching { bassBoost?.enabled = false }
+        runCatching { virtualizer?.enabled = false }
         runCatching { equalizer?.release() }
         runCatching { loudnessEnhancer?.release() }
         runCatching { bassBoost?.release() }
+        runCatching { virtualizer?.release() }
         equalizer = null
         loudnessEnhancer = null
         bassBoost = null
+        virtualizer = null
         centerFrequenciesHz = intArrayOf()
+        currentBandLevelsMb = intArrayOf()
         bassStrengthSupported = false
+        virtualizerStrengthSupported = false
         sessionId = 0
     }
 }
