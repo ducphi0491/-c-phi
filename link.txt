@@ -1,4 +1,3 @@
-$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
-$apk = "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
-
-& $adb install -r $apk
+nslookup -type=AAAA tunertools.top garrett.ns.cloudflare.com
+nslookup -type=AAAA tunertools.top 8.8.8.8
+nslookup -type=A tunertools.top 8.8.8.8
