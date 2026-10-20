@@ -1,4 +1,40 @@
-adb logcat -c
-adb install -r "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
-adb logcat -d -v time > "%USERPROFILE%\Desktop\docflow_install_log.txt"
-adb logcat -d -v time > "$env:USERPROFILE\Desktop\docflow_install_log.txt"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\WINDOWS\system32> adb logcat -c
+>> adb install -r "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
+>> adb logcat -d -v time > "%USERPROFILE%\Desktop\docflow_install_log.txt"
+adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ adb logcat -c
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:2 char:1
++ adb install -r "D:\DocFlowOffline\app\build\outputs\apk\debug\app-deb ...
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:3 char:1
++ adb logcat -d -v time > "%USERPROFILE%\Desktop\docflow_install_log.tx ...
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS C:\WINDOWS\system32> adb logcat -d -v time > "$env:USERPROFILE\Desktop\docflow_install_log.txt"
+adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ adb logcat -d -v time > "$env:USERPROFILE\Desktop\docflow_install_log ...
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS C:\WINDOWS\system32>
