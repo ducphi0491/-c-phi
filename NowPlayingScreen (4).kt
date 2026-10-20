@@ -1,10 +1,12 @@
 package duc_phi.music
 
+import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -17,6 +19,13 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.os.SystemClock
 import java.nio.ByteOrder
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.FileInputStream
+import java.security.MessageDigest
+import android.provider.OpenableColumns
 import android.speech.RecognizerIntent
 import android.graphics.Color as AndroidColor
 import android.view.View
@@ -58,6 +67,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -94,6 +104,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
@@ -139,9 +150,13 @@ import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -149,6 +164,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -163,7 +179,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -213,6 +228,7 @@ import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.framework.CastButtonFactory
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
@@ -240,8 +256,39 @@ import java.util.UUID
 @Composable
 internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> Unit) {
     val colors = LocalMusicColors.current
+    val context = LocalContext.current
+    val visualStore = remember(context.applicationContext) {
+        VisualExperienceStore(context.applicationContext)
+    }
+    val visualPermissionDeniedMessage = mwString(
+        "visual.permission_denied",
+        "Audio permission was denied. Other visual effects still work normally."
+    )
+    var hasVisualizerPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val visualPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasVisualizerPermission = granted
+        if (!granted) controller.statusMessage = visualPermissionDeniedMessage
+    }
+    val visualPremiumLocked = MeloWarePremiumAccess.albumStudioRequiresPremium
+    val albumArtworkPremiumLocked = MeloWarePremiumAccess.albumStudioRequiresPremium
+    val configuredVisualSettings = visualStore.settings
+    val effectiveVisualSettings = if (visualPremiumLocked) {
+        VisualExperienceSettings.DEFAULT
+    } else {
+        configuredVisualSettings
+    }
+
     val song = controller.currentSong
     var showEqualizer by remember { mutableStateOf(false) }
+    var showMasterVolume by remember { mutableStateOf(false) }
+    var showVisualExperience by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     var actionSong by remember { mutableStateOf<SongItem?>(null) }
@@ -258,8 +305,17 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
     ) { selectedUri ->
         val target = artworkPickerSong
         artworkPickerSong = null
-        if (selectedUri != null && target != null) {
+        if (selectedUri != null && target != null && !albumArtworkPremiumLocked) {
             pendingArtworkCrop = target to selectedUri
+        }
+    }
+    LaunchedEffect(albumArtworkPremiumLocked) {
+        if (albumArtworkPremiumLocked) {
+            showArtworkOptions = false
+            googleArtworkFor = null
+            artworkPickerSong = null
+            pendingArtworkCrop?.let { controller.discardSearchedArtworkTemp(it.second) }
+            pendingArtworkCrop = null
         }
     }
     val screenListState = rememberLazyListState()
@@ -285,7 +341,7 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
 
     // Keep one Cast route button attached to the activity; the Cast chooser is
     // opened only after the user explicitly presses Search in our dialog.
-    val castContext = LocalContext.current
+    val castContext = context
     val castRouteButton = remember(castContext) {
         MediaRouteButton(castContext).apply {
             CastButtonFactory.setUpMediaRouteButton(castContext, this)
@@ -298,140 +354,204 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
         if (!controller.isLoading) controller.ensureAudioTechnicalInfo(song)
     }
 
-    // Khi mo danh sach, doi den khung tiep theo de item duoc do kich thuoc,
-    // sau do cuon mem den khu vuc danh sach phat o cuoi man hinh.
-    LaunchedEffect(showQueue) {
-        if (showQueue) {
-            withFrameNanos { }
-            screenListState.animateScrollToItem(4)
-        }
-    }
-
     androidx.compose.runtime.LaunchedEffect(song.id) {
         controller.ensureArtwork(song)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    if (colors.isDark) {
-                        listOf(colors.background, Color(0xFF0A0B22), colors.background)
-                    } else {
-                        listOf(colors.background, colors.backgroundSoft, colors.background)
-                    }
-                )
-            )
-            .statusBarsPadding()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
-    ) {
-        LazyColumn(
-            state = screenListState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            item {
-                NowPlayingHeader(
-                    controller = controller,
-                    karaokeActive = karaokeMode,
-                    onBack = controller::goBackFromPlayer,
-                    onLyrics = { karaokeMode = !karaokeMode },
-                    castRouteButton = castRouteButton,
-                    onCastRequested = { showCastScanPanel = true },
-                    onWifiPlayback = { wifiSharePage = WifiSharePage.CHOOSER },
-                    onTools = if (controller.canUseLocalAudioTools(song)) {
-                        { actionSong = song }
-                    } else null
-                )
-            }
-
-            item {
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (song.source == SongSource.MOVIE) {
-                        MoviePlayerSurface(
-                            controller = controller,
-                            song = song,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .widthIn(max = 520.dp)
-                                .aspectRatio(16f / 9f)
-                                .heightIn(min = 200.dp)
-                        )
-                    } else if (karaokeMode) {
-                        KaraokeBackdrop(
-                            controller = controller,
-                            song = song,
-                            modifier = Modifier
-                                .fillMaxWidth(0.94f)
-                                .widthIn(max = 380.dp)
-                                .aspectRatio(1f)
-                        )
-                    } else {
-                        ArtworkImage(
-                            song = song,
-                            artworkUrl = controller.artworkFor(song),
-                            modifier = Modifier
-                                .fillMaxWidth(0.90f)
-                                .widthIn(max = 360.dp)
-                                .aspectRatio(1f),
-                            cornerRadius = 24
-                        )
-                    }
-                }
-            }
-
-            item {
-                TrackTitleBlock(
-                    controller = controller,
-                    song = song,
-                    onEditArtwork = { showArtworkOptions = true },
-                    karaokeActive = karaokeMode
-                )
-            }
-
-            item {
-                // Gom tiến trình, cụm Play và các nút công cụ vào một khối để đẩy chúng lên cao hơn.
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    PlaybackProgress(
-                        song = song,
-                        positionMs = controller.positionMs,
-                        durationMs = if (controller.durationMs > 0L) controller.durationMs else song.durationMs,
-                        isPlaying = controller.isPlaying,
-                        onSeek = controller::seekTo
-                    )
-                    MainPlaybackControls(controller)
-                    PlayerActions(
-                        controller = controller,
-                        song = song,
-                        onEqualizer = { showEqualizer = true },
-                        onTimer = { showTimer = true },
-                        onQueue = { showQueue = !showQueue },
-                        queueVisible = showQueue
-                    )
-                }
-            }
-
-            if (showQueue) {
-                item(key = "now_playing_queue") {
-                    QueuePanel(
-                        controller = controller,
-                        onClose = { showQueue = false },
-                        onTools = { selected -> actionSong = selected }
-                    )
-                }
-            }
+    val visualArtworkUrl = controller.artworkFor(song)
+    val albumVisualPalette = rememberVisualAlbumPalette(
+        artworkUrl = visualArtworkUrl,
+        colors = colors,
+        enabled = effectiveVisualSettings.colorMode == VisualColorMode.ALBUM || showVisualExperience
+    )
+    val themeVisualPalette = remember(colors) { visualThemePalette(colors) }
+    val visualPalette = if (effectiveVisualSettings.colorMode == VisualColorMode.ALBUM) {
+        albumVisualPalette
+    } else {
+        themeVisualPalette
+    }
+    val visualizerSupported = song.source != SongSource.MOVIE &&
+            !controller.castConnected &&
+            (effectiveVisualSettings.spectrumStyle != VisualSpectrumStyle.OFF ||
+                    effectiveVisualSettings.albumEffect == VisualAlbumEffect.RAINBOW_EDGE ||
+                    showVisualExperience) &&
+            hasVisualizerPermission &&
+            controller.isPlaying
+    val visualSpectrumFrame = rememberVisualSpectrum(
+        audioSessionId = controller.audioSessionId,
+        enabled = visualizerSupported,
+        performanceMode = effectiveVisualSettings.performanceMode
+    )
+    val visualizerUnavailableMessage = mwString(
+        "visual.unavailable",
+        "Real-time spectrum is unavailable on this device"
+    )
+    LaunchedEffect(visualSpectrumFrame.error) {
+        visualSpectrumFrame.error?.takeIf { it.isNotBlank() }?.let { detail ->
+            controller.statusMessage = "$visualizerUnavailableMessage: ${detail.take(140)}"
         }
+    }
+    val karaokeVisible = karaokeMode ||
+            effectiveVisualSettings.playerLayout == VisualPlayerLayout.KARAOKE
 
+    Box(modifier = Modifier.fillMaxSize()) {
+        VisualPlayerBackground(
+            song = song,
+            artworkUrl = visualArtworkUrl,
+            settings = effectiveVisualSettings,
+            palette = visualPalette,
+            colors = colors,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+        ) {
+            LazyColumn(
+                state = screenListState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                item {
+                    NowPlayingHeader(
+                        controller = controller,
+                        karaokeActive = karaokeVisible,
+                        visualActive = effectiveVisualSettings != VisualExperienceSettings.DEFAULT,
+                        onBack = controller::goBackFromPlayer,
+                        onLyrics = { karaokeMode = !karaokeMode },
+                        onVisualExperience = { showVisualExperience = true },
+                        castRouteButton = castRouteButton,
+                        onCastRequested = { showCastScanPanel = true },
+                        onWifiPlayback = { wifiSharePage = WifiSharePage.CHOOSER },
+                        onTools = if (controller.canUseLocalAudioTools(song)) {
+                            { actionSong = song }
+                        } else null
+                    )
+                }
+
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (song.source == SongSource.MOVIE) {
+                            MoviePlayerSurface(
+                                controller = controller,
+                                song = song,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .widthIn(max = 520.dp)
+                                    .aspectRatio(16f / 9f)
+                                    .heightIn(min = 200.dp)
+                            )
+                        } else if (karaokeVisible) {
+                            KaraokeBackdrop(
+                                controller = controller,
+                                song = song,
+                                modifier = Modifier
+                                    .fillMaxWidth(
+                                        if (effectiveVisualSettings.playerLayout == VisualPlayerLayout.KARAOKE) 0.98f else 0.94f
+                                    )
+                                    .widthIn(
+                                        max = if (effectiveVisualSettings.playerLayout == VisualPlayerLayout.KARAOKE) 430.dp else 380.dp
+                                    )
+                                    .aspectRatio(1f)
+                            )
+                        } else {
+                            val defaultArtwork = effectiveVisualSettings == VisualExperienceSettings.DEFAULT
+                            val artworkModifier = when {
+                                effectiveVisualSettings.playerLayout == VisualPlayerLayout.IMMERSIVE -> Modifier
+                                    .fillMaxWidth(0.98f)
+                                    .widthIn(max = 430.dp)
+                                    .aspectRatio(1f)
+                                defaultArtwork || effectiveVisualSettings.albumEffect == VisualAlbumEffect.RAINBOW_EDGE -> Modifier
+                                    // Keep the original square album size for Rainbow Edge.
+                                    .fillMaxWidth(0.90f)
+                                    .widthIn(max = 360.dp)
+                                    .aspectRatio(1f)
+                                else -> Modifier
+                                    .fillMaxWidth(0.92f)
+                                    .widthIn(max = 380.dp)
+                                    .aspectRatio(1f)
+                            }
+                            VisualArtworkStage(
+                                song = song,
+                                artworkUrl = visualArtworkUrl,
+                                settings = effectiveVisualSettings,
+                                palette = visualPalette,
+                                spectrum = visualSpectrumFrame.values,
+                                isPlaying = controller.isPlaying,
+                                modifier = artworkModifier
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    TrackTitleBlock(
+                        controller = controller,
+                        song = song,
+                        artworkPremiumLocked = albumArtworkPremiumLocked,
+                        onEditArtwork = {
+                            if (albumArtworkPremiumLocked) onOpenPremium()
+                            else showArtworkOptions = true
+                        },
+                        karaokeActive = karaokeVisible,
+                        immersive = effectiveVisualSettings.playerLayout == VisualPlayerLayout.IMMERSIVE
+                    )
+                }
+
+                item {
+                    // Gom tiến trình, cụm Play và các nút công cụ vào một khối để đẩy chúng lên cao hơn.
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        PlaybackProgress(
+                            controller = controller,
+                            song = song,
+                            positionMs = controller.positionMs,
+                            durationMs = if (controller.durationMs > 0L) controller.durationMs else song.durationMs,
+                            isPlaying = controller.isPlaying,
+                            onSeek = controller::seekTo,
+                            onOpenMasterVolume = { showMasterVolume = true },
+                            visualSettings = effectiveVisualSettings,
+                            visualPalette = visualPalette
+                        )
+                        MainPlaybackControls(controller)
+                        PlayerActions(
+                            controller = controller,
+                            song = song,
+                            onEqualizer = { showEqualizer = true },
+                            onTimer = { showTimer = true },
+                            onQueue = { showQueue = !showQueue },
+                            queueVisible = showQueue
+                        )
+                    }
+                }
+
+            }
+
+        }
     }
 
-    if (showArtworkOptions) {
+    // Show the playlist above the *entire* Now Playing page. Opening it does not
+    // scroll the player or change playback; only explicit actions do so.
+    if (showQueue) {
+        QueuePanel(
+            controller = controller,
+            onClose = { showQueue = false },
+            onTools = { selected ->
+                showQueue = false
+                actionSong = selected
+            }
+        )
+    }
+
+    if (showArtworkOptions && !albumArtworkPremiumLocked) {
         ArtworkOptionsDialog(
             customArtworkSelected = controller.hasCustomArtwork(song),
             onChoosePhoto = {
@@ -453,7 +573,7 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
         )
     }
 
-    googleArtworkFor?.let { target ->
+    googleArtworkFor?.takeIf { !albumArtworkPremiumLocked }?.let { target ->
         GoogleCoverSearchDialog(
             initialQuery = listOf(target.title, target.artist)
                 .filter { it.isNotBlank() && !it.equals("Unknown Artist", ignoreCase = true) }
@@ -473,12 +593,17 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
         )
     }
 
-    pendingArtworkCrop?.let { selection ->
+    pendingArtworkCrop?.takeIf { !albumArtworkPremiumLocked }?.let { selection ->
         ArtworkCropDialog(
             controller = controller,
             selectedUri = selection.second,
             onSave = { cropBounds ->
-                controller.setCustomArtwork(selection.first, selection.second, cropBounds)
+                if (albumArtworkPremiumLocked) {
+                    controller.discardSearchedArtworkTemp(selection.second)
+                    onOpenPremium()
+                } else {
+                    controller.setCustomArtwork(selection.first, selection.second, cropBounds)
+                }
                 pendingArtworkCrop = null
             },
             onDismiss = {
@@ -486,6 +611,36 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
                 pendingArtworkCrop = null
             }
         )
+    }
+
+    if (showVisualExperience) {
+        VisualExperienceDialog(
+            song = song,
+            artworkUrl = visualArtworkUrl,
+            currentSettings = configuredVisualSettings,
+            albumPalette = albumVisualPalette,
+            themePalette = themeVisualPalette,
+            spectrum = visualSpectrumFrame.values,
+            isPlaying = controller.isPlaying,
+            premiumLocked = visualPremiumLocked,
+            hasVisualizerPermission = hasVisualizerPermission,
+            onApply = { newSettings, requestPermission ->
+                visualStore.update(newSettings)
+                showVisualExperience = false
+                if (requestPermission) {
+                    visualPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
+            onOpenPremium = {
+                showVisualExperience = false
+                onOpenPremium()
+            },
+            onDismiss = { showVisualExperience = false }
+        )
+    }
+
+    if (showMasterVolume && song.source != SongSource.MOVIE && !controller.castConnected) {
+        MasterVolumeDialog(controller = controller, onDismiss = { showMasterVolume = false })
     }
 
     if (showEqualizer) {
@@ -544,8 +699,10 @@ internal fun NowPlayingScreen(controller: MusicController, onOpenPremium: () -> 
 private fun NowPlayingHeader(
     controller: MusicController,
     karaokeActive: Boolean,
+    visualActive: Boolean,
     onBack: () -> Unit,
     onLyrics: () -> Unit,
+    onVisualExperience: () -> Unit,
     castRouteButton: MediaRouteButton,
     onCastRequested: () -> Unit,
     onWifiPlayback: () -> Unit,
@@ -566,6 +723,15 @@ private fun NowPlayingHeader(
         }
 
         Spacer(Modifier.weight(1f))
+
+        IconButton(onClick = onVisualExperience) {
+            Icon(
+                imageVector = Icons.Rounded.AutoAwesome,
+                contentDescription = mwString("visual.open", "Open Visual Experience"),
+                tint = if (visualActive) colors.purpleBright else colors.textSecondary,
+                modifier = Modifier.size(24.dp)
+            )
+        }
 
         // Giữ nguyên nút karaoke lớn trên thanh trên cùng: nút này chỉ bật/tắt khung lời.
         IconButton(onClick = onLyrics) {
@@ -1137,9 +1303,9 @@ private fun KaraokeBackdrop(
 
     val lyricPrimary = if (colors.isDark) Color.White else colors.textPrimary
     val lyricSecondary = if (colors.isDark) Color.White.copy(alpha = 0.70f)
-        else colors.textSecondary.copy(alpha = 0.92f)
+    else colors.textSecondary.copy(alpha = 0.92f)
     val lyricTertiary = if (colors.isDark) Color.White.copy(alpha = 0.55f)
-        else colors.textSecondary.copy(alpha = 0.76f)
+    else colors.textSecondary.copy(alpha = 0.76f)
 
     LaunchedEffect(song.id) { controller.loadLyrics(song) }
 
@@ -2364,9 +2530,9 @@ private fun GoogleCoverSearchDialog(
                     // The hidden page never needs to navigate to unrelated sites.
                     val host = url.host.orEmpty().lowercase(Locale.ROOT)
                     return url.scheme != "https" ||
-                        !(host == "google.com" || host.endsWith(".google.com") ||
-                            host == "google.com.vn" || host.endsWith(".google.com.vn") ||
-                            host == "google.co.jp" || host.endsWith(".google.co.jp"))
+                            !(host == "google.com" || host.endsWith(".google.com") ||
+                                    host == "google.com.vn" || host.endsWith(".google.com.vn") ||
+                                    host == "google.co.jp" || host.endsWith(".google.co.jp"))
                 }
 
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -3050,7 +3216,7 @@ private fun LyricsInformationInlineCard(
     val enhancedCount = lyrics.lines.count { it.wordTimings.isNotEmpty() }
     val actualDuration = if (controller.durationMs > 1_000L) controller.durationMs else song.durationMs
     val mismatched = lyrics.synced && actualDuration > 20_000L && lyrics.durationMs > 20_000L &&
-        kotlin.math.abs(actualDuration - lyrics.durationMs) > 15_000L
+            kotlin.math.abs(actualDuration - lyrics.durationMs) > 15_000L
     val detailsText = if (lyrics.synced) {
         "LRC đồng bộ · $timedCount câu · eLRC $enhancedCount câu"
     } else {
@@ -3145,8 +3311,10 @@ private fun LyricsInformationInlineCard(
 private fun TrackTitleBlock(
     controller: MusicController,
     song: SongItem,
+    artworkPremiumLocked: Boolean,
     onEditArtwork: () -> Unit,
-    karaokeActive: Boolean
+    karaokeActive: Boolean,
+    immersive: Boolean = false
 ) {
     val colors = LocalMusicColors.current
     val technicalInfo = controller.audioTechnicalInfoFor(song)
@@ -3158,14 +3326,19 @@ private fun TrackTitleBlock(
     }
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = if (immersive) Alignment.CenterHorizontally else Alignment.Start
+            ) {
                 Text(
                     text = song.title,
                     color = colors.textPrimary,
                     fontSize = 23.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = if (immersive) TextAlign.Center else TextAlign.Start,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
@@ -3173,7 +3346,9 @@ private fun TrackTitleBlock(
                     color = colors.textSecondary,
                     fontSize = 15.sp,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = if (immersive) TextAlign.Center else TextAlign.Start,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
             // Các thao tác cạnh tên bài hát: thông tin lời, thêm ảnh và yêu thích.
@@ -3194,13 +3369,34 @@ private fun TrackTitleBlock(
                         )
                     }
                 }
-                IconButton(onClick = onEditArtwork, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        imageVector = Icons.Outlined.AddPhotoAlternate,
-                        contentDescription = mwString("cover.change", "Thay ảnh bìa bài hát"),
-                        tint = if (controller.isFavorite(song)) colors.magenta else colors.textSecondary,
-                        modifier = Modifier.size(31.dp)
-                    )
+                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    IconButton(onClick = onEditArtwork, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = Icons.Outlined.AddPhotoAlternate,
+                            contentDescription = mwString("cover.change", "Thay ảnh bìa bài hát"),
+                            tint = if (artworkPremiumLocked) colors.textMuted
+                            else if (controller.isFavorite(song)) colors.magenta
+                            else colors.textSecondary,
+                            modifier = Modifier.size(31.dp)
+                        )
+                    }
+                    if (artworkPremiumLocked) {
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopEnd).size(17.dp),
+                            shape = CircleShape,
+                            color = Color(0xFF25152F),
+                            border = BorderStroke(1.dp, Color(0xFFFFD54F))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.WorkspacePremium,
+                                    contentDescription = mwString("premium.required", "Premium"),
+                                    tint = Color(0xFFFFD54F),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
             IconButton(onClick = { controller.toggleFavorite(song) }, modifier = Modifier.size(44.dp)) {
@@ -3287,45 +3483,86 @@ private fun MetadataChip(
 }
 
 /**
- * Song-accurate waveform seekbar for playable local content.
- * Vertical bar height = PCM RMS (amplitude / loudness), while the accent's
- * tint = a coarse dominant frequency estimate.  In a polyphonic recording
- * this estimate is not an exact musical note or vocal pitch.
- *
- * If the track is an inaccessible remote stream, keep a normal seek line:
- * do not draw a made-up waveform that pretends to be the actual recording.
+ * Progressive waveform for local, Google Drive cache, HTTP/LAN and verified P2P.
+ * Never blocks playback: pending frames are neutral ticks until actual PCM is decoded.
+ * Final frames are cached on disk so reopening the same song is instantaneous.
  */
 @Composable
 private fun PlaybackProgress(
+    controller: MusicController,
     song: SongItem,
     positionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
-    onSeek: (Long) -> Unit
+    onSeek: (Long) -> Unit,
+    onOpenMasterVolume: () -> Unit,
+    visualSettings: VisualExperienceSettings = VisualExperienceSettings.DEFAULT,
+    visualPalette: VisualAlbumPalette? = null
 ) {
     val colors = LocalMusicColors.current
+    val progressPalette = visualPalette ?: visualThemePalette(colors)
     val context = LocalContext.current.applicationContext
     val safeDuration = max(1L, durationMs)
-    var waveform by remember(song.id, song.uri.toString()) { mutableStateOf<MeloWaveAudioWaveform?>(null) }
+    val uriString = song.uri.toString()
+    val supportedWaveformSource = song.source != SongSource.MOVIE && (
+            song.source == SongSource.PERSONAL_DRIVE ||
+                    song.source == SongSource.PUBLIC_DRIVE ||
+                    song.source == SongSource.INTERNET_P2P ||
+                    song.uri.scheme?.lowercase(Locale.ROOT) in listOf("content", "file", "android.resource", "http", "https")
+            )
+    // Duration is often discovered after an online player starts buffering.
+    // Re-run the effect as soon as a valid duration becomes available.
+    val analysisDuration = if (song.durationMs > 1000L) song.durationMs else safeDuration
+    var waveform by remember(song.id, uriString) { mutableStateOf<MeloWaveAudioWaveform?>(null) }
+    var analyzing by remember(song.id, uriString) { mutableStateOf(supportedWaveformSource) }
     var dragging by remember(song.id) { mutableStateOf(false) }
     var localValue by remember(song.id) { mutableFloatStateOf(0f) }
     val effectivePosition = if (dragging) localValue else positionMs.toFloat().coerceIn(0f, safeDuration.toFloat())
     val fraction = (effectivePosition / safeDuration.toFloat()).coerceIn(0f, 1f)
 
-    // Decode on Dispatchers.IO; cancel when the song changes. No RECORD_AUDIO
-    // permission, no network fetch, and never block the main thread.
-    LaunchedEffect(song.id, song.uri.toString(), safeDuration) {
+    LaunchedEffect(song.id, uriString, analysisDuration) {
         waveform = null
-        if (safeDuration <= 1L || song.source == SongSource.MOVIE) return@LaunchedEffect
-        val computed = withContext(Dispatchers.IO) {
-            meloWaveformForLocalSong(context, song, safeDuration) {
-                currentCoroutineContext().isActive
+        analyzing = supportedWaveformSource && analysisDuration > 1000L
+        if (!analyzing) return@LaunchedEffect
+
+        // Google Drive playback already saves an authorized, fully downloaded
+        // copy in DriveAudioCache. Reuse it; NEVER request the Drive file again.
+        // WebRTC P2P exposes its temporary file only after SHA-256 verification.
+        // Neither availability map is Compose state, so poll on the background
+        // timeline and stop as soon as the song changes or the screen closes.
+        val waitForCache = song.source == SongSource.PERSONAL_DRIVE ||
+                song.source == SongSource.PUBLIC_DRIVE ||
+                song.source == SongSource.INTERNET_P2P
+        var playableUri: Uri? = controller.waveformSourceFor(song)
+        if (waitForCache) {
+            var attempts = 0
+            while (playableUri == null && attempts < 360 &&
+                currentCoroutineContext().isActive && controller.currentSong?.id == song.id) {
+                delay(400L)
+                playableUri = controller.waveformSourceFor(song)
+                attempts++
             }
         }
-        waveform = computed
+        val readyUri = playableUri
+        if (readyUri == null || controller.currentSong?.id != song.id) {
+            analyzing = false
+            return@LaunchedEffect
+        }
+
+        // The player remains independent of this decoding work. Cached
+        // waveforms appear immediately; new waveforms publish ~140 ms batches.
+        val result = meloWaveformForPlayableSong(
+            context = context,
+            song = song,
+            playableUri = readyUri,
+            durationMs = analysisDuration,
+            isActive = { currentCoroutineContext().isActive },
+            onPartial = { partial -> waveform = partial }
+        )
+        waveform = result
+        analyzing = false
     }
 
-    // Read animation state only from the Canvas to avoid recomposing all player controls.
     val transition = rememberInfiniteTransition(label = "melowave_waveform_pulse")
     val pulse by transition.animateFloat(
         initialValue = 0f,
@@ -3375,72 +3612,182 @@ private fun PlaybackProgress(
                 val centerY = size.height / 2f
                 val progressX = fraction * size.width
                 val data = waveform
-                if (data == null) {
-                    // Plain honest fallback while analyzing or for remote audio.
+                // Streaming sources show neutral placeholder ticks while decoding
+                // (NOT made-up amplitude peaks). Unsupported audio keeps a flat bar.
+                if (data == null && !analyzing) {
                     drawLine(
                         colors.border.copy(alpha = 0.78f),
                         start = Offset(0f, centerY), end = Offset(size.width, centerY),
                         strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round
                     )
                     if (progressX > 0f) drawLine(
-                        colors.purpleBright,
+                        progressPalette.primary,
                         start = Offset(0f, centerY), end = Offset(progressX, centerY),
                         strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round
                     )
                 } else {
-                    val gap = 4.5.dp.toPx()
-                    val barWidth = 2.6.dp.toPx()
+                    val gap = when (visualSettings.waveformStyle) {
+                        VisualWaveformStyle.CLASSIC -> 4.5.dp.toPx()
+                        VisualWaveformStyle.BARS -> 4.9.dp.toPx()
+                        VisualWaveformStyle.MIRROR -> 5.0.dp.toPx()
+                        VisualWaveformStyle.NEON -> 4.8.dp.toPx()
+                    }
                     val count = (size.width / gap).toInt().coerceAtLeast(2)
+                    val analyzed = data?.analyzedBuckets ?: 0
+                    val available = data?.levels?.size ?: MELO_WAVE_BUCKETS
                     for (i in 0 until count) {
                         val x = (i + 0.5f) * size.width / count
-                        val idx = (i.toFloat() / (count - 1) * (data.levels.size - 1))
-                            .toInt().coerceIn(0, data.levels.lastIndex)
-                        val sample = data.levels[idx]
+                        val idx = (i.toFloat() / (count - 1) * (available - 1))
+                            .toInt().coerceIn(0, available - 1)
+                        val isReady = data != null && idx < analyzed
+                        val sample = if (isReady) data!!.levels[idx] else 0f
                         val nearness = (1f - abs(x - progressX) / (gap * 5f)).coerceIn(0f, 1f)
-                        val motion = if (isPlaying && !dragging) 1f + nearness * (0.10f + pulse * 0.18f) * (0.3f + sample * 0.7f) else 1f
-                        val height = (5.dp.toPx() + sample * 22.dp.toPx()) * motion
+                        val motion = if (
+                            isReady && isPlaying && !dragging &&
+                            visualSettings.performanceMode != VisualPerformanceMode.BATTERY
+                        ) {
+                            val basePulse = if (visualSettings.waveformStyle == VisualWaveformStyle.CLASSIC) 0.07f else 0.06f
+                            val animatedPulse = if (visualSettings.waveformStyle == VisualWaveformStyle.CLASSIC) 0.14f else 0.12f
+                            1f + nearness * (basePulse + pulse * animatedPulse) * (0.4f + sample * 0.6f)
+                        } else 1f
+                        val baseHeight = if (isReady) (3.dp.toPx() + sample * 27.dp.toPx()) * motion
+                        else 3.dp.toPx()
                         val played = x <= progressX
-                        // Frequency accent responds to actual estimated dominant band.
-                        // Theme colors are retained for all color presets and light/dark modes.
-                        val tone = data.frequencyBands[idx]
-                        val playedColor = lerp(colors.purpleBright, colors.magenta, tone * 0.65f)
-                        val barColor = if (played) playedColor else
-                            colors.textSecondary.copy(alpha = if (colors.isDark) 0.48f else 0.36f)
-                        drawLine(
-                            color = barColor,
-                            start = Offset(x, centerY - height / 2f),
-                            end = Offset(x, centerY + height / 2f),
-                            strokeWidth = barWidth,
-                            cap = StrokeCap.Round
+                        val tone = if (isReady) data!!.frequencyBands[idx] else 0.5f
+                        val playingColor = lerp(
+                            progressPalette.primary,
+                            progressPalette.secondary,
+                            tone * (if (visualSettings.waveformStyle == VisualWaveformStyle.CLASSIC) 0.65f else 0.72f)
+                        )
+                        val barColor = when {
+                            !isReady -> colors.textSecondary.copy(alpha = if (colors.isDark) 0.23f else 0.28f)
+                            played -> playingColor
+                            else -> colors.textSecondary.copy(alpha = if (colors.isDark) 0.52f else 0.43f)
+                        }
+
+                        when (visualSettings.waveformStyle) {
+                            VisualWaveformStyle.CLASSIC -> {
+                                // Preserve MeloWave's existing waveform as the free/default style.
+                                drawLine(
+                                    color = barColor,
+                                    start = Offset(x, centerY - baseHeight / 2f),
+                                    end = Offset(x, centerY + baseHeight / 2f),
+                                    strokeWidth = 2.6.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            }
+                            VisualWaveformStyle.BARS -> {
+                                val baseline = size.height - 3.dp.toPx()
+                                val height = baseHeight.coerceAtMost(size.height - 5.dp.toPx())
+                                drawLine(
+                                    color = barColor,
+                                    start = Offset(x, baseline),
+                                    end = Offset(x, baseline - height),
+                                    strokeWidth = 2.8.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            }
+                            VisualWaveformStyle.MIRROR -> {
+                                val halfHeight = baseHeight / 2f
+                                val centerGap = 1.7.dp.toPx()
+                                drawLine(
+                                    color = barColor,
+                                    start = Offset(x, centerY - centerGap),
+                                    end = Offset(x, centerY - halfHeight),
+                                    strokeWidth = 2.4.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                                drawLine(
+                                    color = barColor,
+                                    start = Offset(x, centerY + centerGap),
+                                    end = Offset(x, centerY + halfHeight),
+                                    strokeWidth = 2.4.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            }
+                            VisualWaveformStyle.NEON -> {
+                                drawLine(
+                                    color = barColor.copy(alpha = 0.20f),
+                                    start = Offset(x, centerY - baseHeight * 0.68f),
+                                    end = Offset(x, centerY + baseHeight * 0.68f),
+                                    strokeWidth = 7.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                                drawLine(
+                                    color = barColor,
+                                    start = Offset(x, centerY - baseHeight / 2f),
+                                    end = Offset(x, centerY + baseHeight / 2f),
+                                    strokeWidth = 2.3.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            }
+                        }
+                    }
+                }
+                val thumbX = progressX.coerceIn(0f, size.width.coerceAtLeast(0f))
+                drawCircle(progressPalette.primary.copy(alpha = 0.20f), radius = 8.5.dp.toPx(), center = Offset(thumbX, centerY))
+                drawCircle(progressPalette.primary, radius = 5.7.dp.toPx(), center = Offset(thumbX, centerY))
+            }
+        }
+        // Persistent, in-app Master Volume lives under the waveform. It does not
+        // consume another slot in the five-button toolbar on small devices.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(formatDuration(effectivePosition.toLong()), color = colors.textSecondary, fontSize = 12.sp)
+            if (song.source != SongSource.MOVIE && !controller.castConnected) {
+                Surface(
+                    modifier = Modifier
+                        .height(30.dp)
+                        .clip(RoundedCornerShape(11.dp))
+                        .clickable(onClick = onOpenMasterVolume),
+                    shape = RoundedCornerShape(11.dp),
+                    color = colors.purple.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, colors.purpleBright.copy(alpha = 0.38f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (controller.soundMasterVolumePercent == 0)
+                                Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                            contentDescription = mwString("soundstudio.master_volume", "Âm lượng MeloWave"),
+                            tint = colors.purpleBright,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            "${controller.soundMasterVolumePercent}%",
+                            color = colors.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp
                         )
                     }
                 }
-                // Thumb remains easy to locate even over high-frequency peaks.
-                drawCircle(
-                    color = colors.purpleBright.copy(alpha = 0.20f),
-                    radius = 8.5.dp.toPx(),
-                    center = Offset(progressX.coerceIn(0f, size.width.coerceAtLeast(0f)), centerY)
-                )
-                drawCircle(
-                    color = colors.purpleBright,
-                    radius = 5.7.dp.toPx(),
-                    center = Offset(progressX.coerceIn(0f, size.width.coerceAtLeast(0f)), centerY)
-                )
             }
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatDuration(effectivePosition.toLong()), color = colors.textSecondary, fontSize = 12.sp)
             Text(formatDuration(safeDuration), color = colors.textSecondary, fontSize = 12.sp)
         }
     }
 }
 
-/** A few hundred bytes per cached song; never keep PCM data after analysis. */
-private data class MeloWaveAudioWaveform(val levels: FloatArray, val frequencyBands: FloatArray)
+private const val MELO_WAVE_BUCKETS = 256
+private const val MELO_WAVE_MAGIC = 0x4D573256 // "MW2V"; cache v2 has RMS+peak contrast and 256 buckets.
+private const val MELO_WAVE_DISK_LIMIT = 220
+
+/** analyzedBuckets marks the actual decoded portion (no fabricated peaks). */
+private data class MeloWaveAudioWaveform(
+    val levels: FloatArray,
+    val frequencyBands: FloatArray,
+    val analyzedBuckets: Int = MELO_WAVE_BUCKETS,
+    val complete: Boolean = true
+)
 
 private object MeloWaveWaveformCache {
-    private const val MAX_CACHED = 12
-    private val entries = object : LinkedHashMap<String, MeloWaveAudioWaveform>(16, 0.75f, true) {
+    private const val MAX_CACHED = 24
+    private val entries = object : LinkedHashMap<String, MeloWaveAudioWaveform>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MeloWaveAudioWaveform>?): Boolean =
             size > MAX_CACHED
     }
@@ -3448,53 +3795,199 @@ private object MeloWaveWaveformCache {
     fun put(key: String, value: MeloWaveAudioWaveform) = synchronized(entries) { entries[key] = value; Unit }
 }
 
-private suspend fun meloWaveformForLocalSong(
+/** Keep a tiny versioned cache on-device. Android may clear cacheDir when storage is low. */
+private fun meloWaveDiskFile(context: Context, key: String): File {
+    val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+    val hex = "0123456789abcdef"
+    val name = buildString(32) {
+        for (i in 0 until 16) {
+            val byte = digest[i].toInt() and 255
+            append(hex[byte shr 4])
+            append(hex[byte and 15])
+        }
+    }
+    return File(File(context.cacheDir, "melowave_waveforms_v2"), "$name.mwf")
+}
+
+private fun meloReadDiskWaveform(context: Context, key: String): MeloWaveAudioWaveform? {
+    val file = meloWaveDiskFile(context, key)
+    if (!file.isFile || file.length() > 16_384L) return null
+    return try {
+        DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
+            if (input.readInt() != MELO_WAVE_MAGIC || input.readInt() != MELO_WAVE_BUCKETS) return null
+            val levels = FloatArray(MELO_WAVE_BUCKETS) { input.readFloat().coerceIn(0f, 1f) }
+            val bands = FloatArray(MELO_WAVE_BUCKETS) { input.readFloat().coerceIn(0f, 1f) }
+            if (levels.any { !it.isFinite() } || bands.any { !it.isFinite() }) return null
+            file.setLastModified(System.currentTimeMillis()) // LRU eviction
+            MeloWaveAudioWaveform(levels, bands)
+        }
+    } catch (_: Exception) {
+        runCatching { file.delete() }
+        null
+    }
+}
+
+private fun meloWriteDiskWaveform(context: Context, key: String, wave: MeloWaveAudioWaveform) {
+    if (!wave.complete || wave.analyzedBuckets != MELO_WAVE_BUCKETS) return
+    val file = meloWaveDiskFile(context, key)
+    val dir = file.parentFile ?: return
+    if (!dir.isDirectory && !dir.mkdirs()) return
+    val temp = File(dir, "${file.name}.${SystemClock.uptimeMillis()}.tmp")
+    try {
+        DataOutputStream(BufferedOutputStream(FileOutputStream(temp))).use { output ->
+            output.writeInt(MELO_WAVE_MAGIC)
+            output.writeInt(MELO_WAVE_BUCKETS)
+            wave.levels.forEach(output::writeFloat)
+            wave.frequencyBands.forEach(output::writeFloat)
+        }
+        if (!temp.renameTo(file)) {
+            runCatching { file.delete() }
+            if (!temp.renameTo(file)) return
+        }
+        dir.listFiles { candidate -> candidate.extension == "mwf" }
+            ?.sortedBy { it.lastModified() }
+            ?.let { ordered ->
+                ordered.take((ordered.size - MELO_WAVE_DISK_LIMIT).coerceAtLeast(0))
+                    .forEach { runCatching { it.delete() } }
+            }
+    } catch (_: Exception) {
+        // A cache write error must never interrupt playback.
+    } finally {
+        runCatching { temp.delete() }
+    }
+}
+
+/** Invalidate on local size/mtime changes; no whole-file hashing or extra permissions. */
+private fun meloLocalVersion(context: Context, uri: Uri): String = when (uri.scheme?.lowercase(Locale.ROOT)) {
+    "file" -> runCatching {
+        val file = File(uri.path ?: "")
+        "${file.length()}:${file.lastModified()}"
+    }.getOrDefault("")
+    "content" -> runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) cursor.getLong(sizeColumn).toString() else ""
+            } else ""
+        }.orEmpty()
+    }.getOrDefault("")
+    else -> ""
+}
+
+private suspend fun meloWaveformForPlayableSong(
     context: Context,
     song: SongItem,
+    playableUri: Uri,
     durationMs: Long,
-    isActive: suspend () -> Boolean
+    isActive: suspend () -> Boolean,
+    onPartial: suspend (MeloWaveAudioWaveform) -> Unit
 ): MeloWaveAudioWaveform? {
-    val uri = song.uri
-    // Do not download entire Drive/HTTP/WebRTC tracks just to decorate the seekbar.
-    // Content/file and android.resource URIs are decoded locally without extra permission.
-    val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
-    if (scheme !in listOf("content", "file", "android.resource")) return null
-    val cacheKey = "${song.id}|${uri}|$durationMs"
-    MeloWaveWaveformCache.get(cacheKey)?.let { return it }
-    val extracted = meloDecodeLocalWaveform(context, uri, durationMs, isActive) ?: return null
-    MeloWaveWaveformCache.put(cacheKey, extracted)
-    return extracted
+    val scheme = playableUri.scheme?.lowercase(Locale.ROOT).orEmpty()
+    if (scheme !in listOf("content", "file", "android.resource", "http", "https")) return null
+    val key = withContext(Dispatchers.IO) {
+        // The WebRTC file name changes on every transfer. Use the stable remote
+        // song ID and VERIFIED byte length to reuse its waveform across replays.
+        // Other sources keep the V2 key to reuse previously analyzed local tracks.
+        if (song.source == SongSource.INTERNET_P2P) {
+            val size = File(playableUri.path.orEmpty()).length()
+            "${song.id}|${song.uri}|$durationMs|p2p:$size|v2"
+        } else {
+            "${song.id}|$playableUri|$durationMs|${meloLocalVersion(context, playableUri)}|v2"
+        }
+    }
+    MeloWaveWaveformCache.get(key)?.let { return it }
+    withContext(Dispatchers.IO) { meloReadDiskWaveform(context, key) }?.let { cached ->
+        MeloWaveWaveformCache.put(key, cached)
+        return cached
+    }
+    val decoded = withContext(Dispatchers.IO) {
+        meloDecodeWaveform(context, playableUri, durationMs, isActive) { partial ->
+            withContext(Dispatchers.Main.immediate) { onPartial(partial) }
+        }
+    } ?: return null
+    if (decoded.complete) {
+        MeloWaveWaveformCache.put(key, decoded)
+        withContext(Dispatchers.IO) { meloWriteDiskWaveform(context, key, decoded) }
+    }
+    return decoded
 }
 
 /**
- * Decode a bounded amount of PCM on an IO worker, aggregating RMS into 128
- * timeline buckets. A codec timeout or unsupported format keeps the old
- * linear seekbar instead of inventing waveform data.
+ * Compressing each bucket to plain RMS used to flatten dynamics. Instead,
+ * blend actual RMS/Peak and scale around robust 10th/90th percentiles, with
+ * a minimum 18% contrast span to avoid amplifying nearly identical samples.
+ * No random data, artificial wave peaks or broad neighbor smoothing.
  */
-private suspend fun meloDecodeLocalWaveform(
+private fun meloBuildWaveform(
+    sums: DoubleArray,
+    peaks: FloatArray,
+    counts: IntArray,
+    frequency: FloatArray,
+    analyzedBuckets: Int,
+    complete: Boolean
+): MeloWaveAudioWaveform {
+    val end = analyzedBuckets.coerceIn(0, MELO_WAVE_BUCKETS)
+    val energy = FloatArray(MELO_WAVE_BUCKETS) { i ->
+        if (i >= end || counts[i] <= 0) 0f
+        else {
+            val rms = sqrt(sums[i] / counts[i]).toFloat()
+            rms * 0.74f + peaks[i] * 0.26f
+        }
+    }
+    val nonZero = energy.take(end).filter { it > 0.0001f }.sorted()
+    val levels = FloatArray(MELO_WAVE_BUCKETS)
+    if (nonZero.isNotEmpty()) {
+        fun percentile(p: Float): Float = nonZero[((nonZero.size - 1) * p).toInt().coerceIn(0, nonZero.lastIndex)]
+        val low = percentile(0.10f)
+        val high = percentile(0.90f).coerceAtLeast(0.0001f)
+        val span = max(high - low, high * 0.18f)
+        for (i in 0 until end) {
+            if (counts[i] <= 0) continue
+            val relative = (energy[i] / high).coerceIn(0f, 1.3f)
+            val contrast = ((energy[i] - low) / span).coerceIn(0f, 1f)
+            // 60% real peak-relative level, 40% controlled local dynamic range.
+            levels[i] = (0.60f * (relative / 1.3f) + 0.40f * contrast)
+                .coerceIn(0f, 1f).pow(1.25f)
+        }
+    }
+    return MeloWaveAudioWaveform(levels, frequency.copyOf(), end, complete)
+}
+
+/** Decode PCM on IO; every completed region is published progressively. */
+private suspend fun meloDecodeWaveform(
     context: Context,
     uri: Uri,
     durationMs: Long,
-    isActive: suspend () -> Boolean
+    isActive: suspend () -> Boolean,
+    onPartial: suspend (MeloWaveAudioWaveform) -> Unit
 ): MeloWaveAudioWaveform? {
-    val buckets = 128
+    val buckets = MELO_WAVE_BUCKETS
     val sums = DoubleArray(buckets)
+    val peaks = FloatArray(buckets)
     val counts = IntArray(buckets)
     val snippetLength = 1024
     val windows = Array(buckets) { FloatArray(snippetLength) }
     val windowSizes = IntArray(buckets)
+    val frequency = FloatArray(buckets) { 0.5f }
     val extractor = MediaExtractor()
     var decoder: MediaCodec? = null
     var decoderStarted = false
     return try {
-        extractor.setDataSource(context, uri, null)
+        // Android's MediaExtractor accepts a remote URL through the String+headers
+        // overload, but not reliably through the ContentResolver Uri overload.
+        // This secondary, background HTTP read NEVER holds up Media3 playback.
+        // Google Drive uses an authorized local cache file, not HTTP re-download.
+        if (uri.scheme.equals("https", true) || uri.scheme.equals("http", true)) {
+            extractor.setDataSource(uri.toString(), emptyMap<String, String>())
+        } else {
+            extractor.setDataSource(context, uri, null)
+        }
         val track = (0 until extractor.trackCount).firstOrNull {
             extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
         } ?: return null
         extractor.selectTrack(track)
         val sourceFormat = extractor.getTrackFormat(track)
         val mime = sourceFormat.getString(MediaFormat.KEY_MIME) ?: return null
-        // A conservative limit to protect battery/CPU on older telephones.
         val lengthUs = durationMs.coerceAtLeast(1) * 1000L
         decoder = MediaCodec.createDecoderByType(mime)
         val codec = decoder!!
@@ -3502,7 +3995,7 @@ private suspend fun meloDecodeLocalWaveform(
         codec.start()
         decoderStarted = true
         var outputFormat = sourceFormat
-        var sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        var sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE).coerceAtLeast(1)
         var channels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
         var pcmEncoding = if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING))
             outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
@@ -3510,12 +4003,35 @@ private suspend fun meloDecodeLocalWaveform(
         var outputEnded = false
         var hasSamples = false
         val info = MediaCodec.BufferInfo()
-        val startMs = SystemClock.elapsedRealtime()
+        val started = SystemClock.elapsedRealtime()
+        var lastPublishedMs = 0L
+        var lastPublishedBucket = 0
+        var lastReady = 0
+        var frequenciesDone = 0
         var iterations = 0
+        var reachedDeadline = false
+
+        suspend fun publish(finishedBuckets: Int, isComplete: Boolean) {
+            val until = finishedBuckets.coerceIn(0, buckets)
+            if (until <= 0) return
+            for (i in frequenciesDone until until) {
+                if (windowSizes[i] >= 256) {
+                    frequency[i] = meloWaveDominantBand(windows[i], windowSizes[i], sampleRate / 8.0)
+                }
+            }
+            frequenciesDone = max(frequenciesDone, until)
+            onPartial(meloBuildWaveform(sums, peaks, counts, frequency, until, isComplete))
+        }
 
         while (!outputEnded) {
             iterations++
-            if (iterations % 64 == 0 && (!isActive() || SystemClock.elapsedRealtime() - startMs > 11_000L)) return null
+            if (iterations % 32 == 0) {
+                if (!isActive()) return null
+                if (SystemClock.elapsedRealtime() - started > 12_000L) {
+                    reachedDeadline = true
+                    break
+                }
+            }
             if (!inputEnded) {
                 val index = codec.dequeueInputBuffer(5_000L)
                 if (index >= 0) {
@@ -3550,29 +4066,34 @@ private suspend fun meloDecodeLocalWaveform(
                                 else -> 0
                             }
                             if (sampleBytes == 0) return null
-                            val frameBytes = channels * sampleBytes
-                            val frames = info.size / frameBytes
+                            val frames = info.size / (channels * sampleBytes)
                             val samples = output.duplicate().order(ByteOrder.LITTLE_ENDIAN)
                             val base = info.offset
-                            // Step every eight frames: accurate ~5.5 kHz envelope sampling
-                            // without creating large PCM arrays or expensive full-res passes.
                             for (frame in 0 until frames step 8) {
                                 val bucket = (((info.presentationTimeUs + frame * 1_000_000L / sampleRate) * buckets) / lengthUs)
                                     .toInt().coerceIn(0, buckets - 1)
+                                var channelEnergy = 0.0
+                                var channelPeak = 0f
                                 var mono = 0.0
-                                for (channel in 0 until channels.coerceAtMost(2)) {
+                                val usedChannels = channels.coerceAtMost(2)
+                                for (channel in 0 until usedChannels) {
                                     val offset = base + (frame * channels + channel) * sampleBytes
                                     val value = if (sampleBytes == 2) samples.getShort(offset).toDouble() / 32768.0
-                                        else samples.getFloat(offset).toDouble().coerceIn(-1.0, 1.0)
+                                    else samples.getFloat(offset).toDouble().coerceIn(-1.0, 1.0)
+                                    channelEnergy += value * value
+                                    channelPeak = max(channelPeak, abs(value).toFloat())
                                     mono += value
                                 }
-                                mono /= channels.coerceAtMost(2)
-                                val power = mono * mono
-                                sums[bucket] += power
+                                mono /= usedChannels
+                                // Energy of both channels (not averaged signed PCM), so
+                                // opposite-phase stereo does not falsely look like silence.
+                                sums[bucket] += channelEnergy / usedChannels
+                                peaks[bucket] = max(peaks[bucket], channelPeak)
                                 counts[bucket]++
                                 if (windowSizes[bucket] < snippetLength) {
                                     windows[bucket][windowSizes[bucket]++] = mono.toFloat()
                                 }
+                                lastReady = max(lastReady, bucket)
                                 hasSamples = true
                             }
                         }
@@ -3582,23 +4103,26 @@ private suspend fun meloDecodeLocalWaveform(
                     if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputEnded = true
                 }
             }
+            // The bucket currently playing into is not finished. Publish ONLY
+            // earlier time buckets, never fill unprocessed audio with made-up peaks.
+            val now = SystemClock.elapsedRealtime()
+            val finished = lastReady.coerceIn(0, buckets - 1)
+            if (hasSamples && finished >= 5 &&
+                (lastPublishedBucket == 0 || finished - lastPublishedBucket >= 10) &&
+                (lastPublishedBucket == 0 || now - lastPublishedMs >= 140L)) {
+                publish(finished, false)
+                lastPublishedBucket = finished
+                lastPublishedMs = now
+            }
         }
-        if (!hasSamples || counts.count { it > 0 } < buckets / 3) return null
-        val rms = FloatArray(buckets) { i ->
-            if (counts[i] == 0) 0f else sqrt(sums[i] / counts[i]).toFloat()
+        if (!hasSamples) return null
+        val complete = outputEnded && !reachedDeadline
+        val computedBuckets = if (complete) buckets else (lastReady + 1).coerceIn(0, buckets)
+        if (computedBuckets < 4) return null
+        for (i in frequenciesDone until computedBuckets) {
+            if (windowSizes[i] >= 256) frequency[i] = meloWaveDominantBand(windows[i], windowSizes[i], sampleRate / 8.0)
         }
-        val peak = rms.maxOrNull()?.coerceAtLeast(0.0001f) ?: return null
-        val smooth = FloatArray(buckets) { i ->
-            val neighborLeft = rms[(i - 1).coerceAtLeast(0)]
-            val neighborRight = rms[(i + 1).coerceAtMost(buckets - 1)]
-            ((rms[i] * 0.74f + (neighborLeft + neighborRight) * 0.13f) / peak)
-                .coerceIn(0f, 1f).pow(0.65f).let { 0.10f + 0.90f * it }
-        }
-        val frequency = FloatArray(buckets) { i ->
-            if (windowSizes[i] < 256) 0.5f
-            else meloWaveDominantBand(windows[i], windowSizes[i], sampleRate / 8.0)
-        }
-        MeloWaveAudioWaveform(smooth, frequency)
+        meloBuildWaveform(sums, peaks, counts, frequency, computedBuckets, complete)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -3756,10 +4280,15 @@ private fun PlayerActions(
         ) {
             if (!isMovie) {
                 PlayerAction(
-                    icon = Icons.Rounded.Equalizer,
                     label = "Equalizer",
                     onClick = onEqualizer,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    iconContent = { tint ->
+                        EqualizerMixerGlyph(
+                            tint = tint,
+                            modifier = Modifier.size(23.dp)
+                        )
+                    }
                 )
             }
             PlayerAction(
@@ -3802,13 +4331,15 @@ private fun PlayerActions(
 
 @Composable
 private fun PlayerAction(
-    icon: ImageVector,
+    icon: ImageVector? = null,
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    active: Boolean = false
+    active: Boolean = false,
+    iconContent: (@Composable (Color) -> Unit)? = null
 ) {
     val colors = LocalMusicColors.current
+    val iconTint = if (active) colors.purpleBright else colors.textSecondary
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
@@ -3823,7 +4354,16 @@ private fun PlayerAction(
             border = BorderStroke(1.dp, if (active) colors.purpleBright else colors.border)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = label, tint = if (active) colors.purpleBright else colors.textSecondary, modifier = Modifier.size(20.dp))
+                if (iconContent != null) {
+                    iconContent(iconTint)
+                } else if (icon != null) {
+                    Icon(
+                        icon,
+                        contentDescription = label,
+                        tint = iconTint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
         Spacer(Modifier.height(3.dp))
@@ -3840,51 +4380,209 @@ private fun PlayerAction(
 }
 
 @Composable
+private fun EqualizerMixerGlyph(
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier.semantics { contentDescription = "Equalizer" }) {
+        val stroke = 2.3.dp.toPx()
+        val knobWidth = 7.dp.toPx()
+        val knobHeight = 4.dp.toPx()
+        val xs = floatArrayOf(size.width * 0.22f, size.width * 0.50f, size.width * 0.78f)
+        val knobYs = floatArrayOf(size.height * 0.66f, size.height * 0.30f, size.height * 0.52f)
+
+        xs.forEachIndexed { index, x ->
+            drawLine(
+                color = tint.copy(alpha = 0.72f),
+                start = Offset(x, size.height * 0.12f),
+                end = Offset(x, size.height * 0.88f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(x - knobWidth / 2f, knobYs[index] - knobHeight / 2f),
+                size = Size(knobWidth, knobHeight),
+                cornerRadius = CornerRadius(knobHeight / 2f, knobHeight / 2f)
+            )
+        }
+    }
+}
+@Composable
 private fun QueuePanel(
     controller: MusicController,
     onClose: () -> Unit,
     onTools: (SongItem) -> Unit
 ) {
     val colors = LocalMusicColors.current
-    val queue = controller.queueFromCurrent()
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = colors.card.copy(alpha = 0.97f),
-        border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.46f))
+    val queue = controller.queue.toList()
+    val selectedIds = remember { mutableStateListOf<String>() }
+    val queueListState = rememberLazyListState()
+    // A new playback queue invalidates any previous checkbox selections.
+    LaunchedEffect(queue.map { it.id }) {
+        selectedIds.clear()
+        if (queue.isNotEmpty()) {
+            queueListState.scrollToItem(controller.currentIndex.coerceIn(0, queue.lastIndex))
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Danh sách phát",
-                    color = colors.textPrimary,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                Text("${queue.size} bài", color = colors.textSecondary, fontSize = 12.sp)
-                IconButton(onClick = onClose, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Ẩn danh sách phát", tint = colors.textSecondary)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            if (queue.isEmpty()) {
-                Text("Danh sách đang trống", color = colors.textSecondary)
-            } else {
-                queue.take(6).forEachIndexed { offset, item ->
-                    val absoluteIndex = controller.currentIndex + offset
-                    androidx.compose.runtime.LaunchedEffect(item.id) { controller.ensureArtwork(item) }
-                    SongRow(
-                        song = item,
-                        artworkUrl = controller.artworkFor(item),
-                        isCurrent = offset == 0,
-                        isFavorite = controller.isFavorite(item),
-                        onClick = { controller.playQueueIndex(absoluteIndex) },
-                        onFavorite = { controller.toggleFavorite(item) },
-                        onMore = if (controller.canUseLocalAudioTools(item)) {
-                            { onTools(item) }
-                        } else null
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.90f),
+            shape = RoundedCornerShape(24.dp),
+            color = colors.backgroundSoft,
+            border = BorderStroke(1.dp, colors.purple.copy(alpha = 0.52f))
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Danh sách phát",
+                        color = colors.textPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
                     )
+                    Text("${queue.size} bài", color = colors.textSecondary, fontSize = 12.sp)
+                    IconButton(onClick = onClose, modifier = Modifier.size(38.dp)) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Đóng danh sách phát", tint = colors.textSecondary)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            if (queue.isNotEmpty()) {
+                                controller.playCollection(queue, 0)
+                                onClose()
+                            }
+                        },
+                        enabled = queue.isNotEmpty(),
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.purple),
+                        shape = RoundedCornerShape(13.dp)
+                    ) {
+                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(mwString("smart.play_all", "Phát tất cả"), maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (queue.isNotEmpty()) {
+                                controller.playCollection(queue.shuffled(), 0)
+                                onClose()
+                            }
+                        },
+                        enabled = queue.isNotEmpty(),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(13.dp),
+                        border = BorderStroke(1.dp, colors.border)
+                    ) {
+                        Icon(Icons.Rounded.Shuffle, contentDescription = null, tint = colors.purpleBright, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(mwString("smart.shuffle", "Ngẫu nhiên"), color = colors.purpleBright, maxLines = 1)
+                    }
+                }
+
+                if (queue.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${selectedIds.size}/${queue.size} bài đã chọn",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            if (selectedIds.size == queue.size) {
+                                selectedIds.clear()
+                            } else {
+                                selectedIds.clear()
+                                selectedIds.addAll(queue.map { it.id })
+                            }
+                        }) {
+                            Text(
+                                if (selectedIds.size == queue.size)
+                                    mwString("library.unselect_all", "Bỏ chọn")
+                                else mwString("library.select_all", "Chọn tất cả"),
+                                color = colors.purpleBright
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            val chosen = queue.filter { it.id in selectedIds }
+                            if (chosen.isNotEmpty()) {
+                                controller.playCollection(chosen, 0)
+                                onClose()
+                            }
+                        },
+                        enabled = selectedIds.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(13.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.purple)
+                    ) {
+                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Phát đã chọn (${selectedIds.size})")
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                if (queue.isEmpty()) {
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("Danh sách đang trống", color = colors.textSecondary)
+                    }
+                } else {
+                    // Dialog owns its list viewport. All tracks are scrollable without
+                    // moving the Now Playing page underneath the overlay.
+                    LazyColumn(
+                        state = queueListState,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        itemsIndexed(queue, key = { index, item -> "$index:${item.id}" }) { absoluteIndex, item ->
+                            LaunchedEffect(item.id) { controller.ensureArtwork(item) }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = item.id in selectedIds,
+                                    onCheckedChange = { checked ->
+                                        if (checked) {
+                                            if (item.id !in selectedIds) selectedIds.add(item.id)
+                                        } else selectedIds.remove(item.id)
+                                    },
+                                    modifier = Modifier.size(40.dp),
+                                    colors = CheckboxDefaults.colors(checkedColor = colors.purple)
+                                )
+                                SongRow(
+                                    song = item,
+                                    artworkUrl = controller.artworkFor(item),
+                                    isCurrent = absoluteIndex == controller.currentIndex,
+                                    isFavorite = controller.isFavorite(item),
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        controller.playQueueIndex(absoluteIndex)
+                                        onClose()
+                                    },
+                                    onFavorite = { controller.toggleFavorite(item) },
+                                    onMore = if (controller.canUseLocalAudioTools(item)) {
+                                        { onTools(item) }
+                                    } else null
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3996,10 +4694,10 @@ private fun SleepTimerDialog(
 // Lớp hỗ trợ đa ngôn ngữ cục bộ cho EqualizerPanel
 private class EqLocalStrings(val lang: String) {
     fun custom() = when(lang) { "en" -> "Custom"; "zh" -> "自定义"; "ja" -> "カスタム"; "ko" -> "맞춤"; "es" -> "Personalizado"; "fr" -> "Personnalisé"; "ru" -> "Польз."; else -> "Tùy chỉnh" }
-    fun advanced() = when(lang) { "en" -> "Advanced (5 bands)"; "zh" -> "高级 (5频段)"; "ja" -> "高度 (5バンド)"; "ko" -> "고급 (5밴드)"; "es" -> "Avanzado (5 bandas)"; else -> "Nâng cao (5 băng tần)" }
+    fun advanced() = when(lang) { "en" -> "Advanced (10 points)"; "zh" -> "高级 (10点)"; "ja" -> "高度 (10ポイント)"; "ko" -> "고급 (10포인트)"; "es" -> "Avanzado (10 puntos)"; "fr" -> "Avancé (10 points)"; "ru" -> "Расширенный (10 точек)"; else -> "Nâng cao (10 điểm)" }
     fun reset() = when(lang) { "en" -> "Reset"; "zh" -> "重置"; "ja" -> "リセット"; "ko" -> "초기화"; "es" -> "Restablecer"; "fr" -> "Réinitialiser"; else -> "Đặt lại" }
     fun advancedEq() = when(lang) { "en" -> "Advanced EQ"; "zh" -> "高级均衡器"; "ja" -> "高度なEQ"; "ko" -> "고급 EQ"; "es" -> "Ecualizador avanzado"; else -> "EQ nâng cao" }
-    fun bandDesc() = when(lang) { "en" -> "5 bands · -6 dB to +6 dB"; "zh" -> "5频段 · -6 dB 至 +6 dB"; "ja" -> "5バンド · -6 dB 〜 +6 dB"; else -> "5 băng tần · -6 dB đến +6 dB" }
+    fun bandDesc() = when(lang) { "en" -> "10 control points · -6 dB to +6 dB"; "zh" -> "10个控制点 · -6 dB 至 +6 dB"; "ja" -> "10コントロールポイント · -6 dB 〜 +6 dB"; "ko" -> "10개 조절점 · -6 dB ~ +6 dB"; "es" -> "10 puntos de control · -6 dB a +6 dB"; "fr" -> "10 points de contrôle · -6 dB à +6 dB"; "ru" -> "10 точек управления · от -6 до +6 дБ"; else -> "10 điểm điều khiển · -6 dB đến +6 dB" }
     fun flat() = when(lang) { "en" -> "Flat"; "zh" -> "平坦"; "ja" -> "フラット"; "ko" -> "평면"; "es" -> "Plano"; else -> "Đặt phẳng" }
     fun done() = when(lang) { "en" -> "Done"; "zh" -> "完成"; "ja" -> "完了"; "ko" -> "완료"; "es" -> "Hecho"; "fr" -> "Terminé"; else -> "Xong" }
     fun openFile() = when(lang) { "en" -> "Open file"; "zh" -> "打开文件"; "ja" -> "ファイルを開く"; "ko" -> "파일 열기"; else -> "Mở tệp" }
@@ -4008,11 +4706,1165 @@ private class EqLocalStrings(val lang: String) {
     fun errNoFx() = when(lang) { "en" -> "Device does not provide AudioEffect."; "zh" -> "设备不提供AudioEffect。"; else -> "Thiết bị này chưa cung cấp AudioEffect cho phiên phát hiện tại." }
 }
 
+/** Separate quick Master Volume control on the Now Playing screen.
+ * The value is saved and applied by MusicController; it never changes Android system volume.
+ */
+@Composable
+private fun MasterVolumeDialog(
+    controller: MusicController,
+    onDismiss: () -> Unit
+) {
+    val palette = LocalMusicColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 390.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = palette.card,
+            border = BorderStroke(1.dp, palette.border)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (controller.soundMasterVolumePercent == 0)
+                            Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                        contentDescription = null,
+                        tint = palette.purpleBright,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        mwString("soundstudio.master_volume", "Âm lượng MeloWave"),
+                        modifier = Modifier.weight(1f),
+                        color = palette.textPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close,
+                            contentDescription = mwString("common.close", "Đóng"),
+                            tint = palette.textSecondary)
+                    }
+                }
+                Text(
+                    mwString(
+                        "soundstudio.master_volume_hint",
+                        "Chỉ điều chỉnh nhạc trong ứng dụng, không đổi âm lượng hệ thống"
+                    ),
+                    color = palette.textSecondary,
+                    fontSize = 12.sp
+                )
+                Text(
+                    "${controller.soundMasterVolumePercent}%",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    color = palette.purpleBright,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 26.sp
+                )
+                Slider(
+                    value = controller.soundMasterVolumePercent.toFloat(),
+                    onValueChange = { controller.setSoundMasterVolume(it.roundToInt()) },
+                    valueRange = 0f..100f
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("0%", color = palette.textMuted, fontSize = 11.sp)
+                    TextButton(onClick = { controller.setSoundMasterVolume(100) }) {
+                        Text("100%", color = palette.purpleBright, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Sound Studio settings deliberately open in their own compact dialog.
+ * Neither the EQ sliders nor the underlying NowPlaying layout need extra scrolling.
+ */
+@Composable
+private fun SoundStudioProDialog(
+    controller: MusicController,
+    onDismiss: () -> Unit,
+    onOpenPremium: () -> Unit
+) {
+    val palette = LocalMusicColors.current
+    val locked = MeloWarePremiumAccess.equalizerRequiresPremium
+    var customPresetName by rememberSaveable { mutableStateOf("") }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val dspScroll = rememberScrollState()
+    // Avoid the truncated device tab caption on Vietnamese narrow screens.
+    val deviceTabCaption = mwString("soundstudio.device", "Device").let { full ->
+        if (LocalAppLanguage.current.startsWith("vi")) full.split(" ").take(2).joinToString(" ")
+        else full
+    }
+
+    LaunchedEffect(Unit) { controller.refreshSoundOutput() }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.82f)
+                .widthIn(max = 620.dp),
+            shape = RoundedCornerShape(26.dp),
+            color = palette.card,
+            border = BorderStroke(1.dp, palette.purple.copy(alpha = 0.48f)),
+            shadowElevation = 22.dp,
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        modifier = Modifier.size(42.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        color = palette.purple.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, palette.purpleBright.copy(alpha = 0.38f))
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            EqualizerMixerGlyph(
+                                tint = palette.purpleBright,
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            mwString("soundstudio.title", "Sound Studio Pro"),
+                            color = palette.textPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 19.sp
+                        )
+                        Text(
+                            mwString("soundstudio.subtitle", "Âm lượng · EQ 10 điểm · R128 · Limiter"),
+                            color = palette.textSecondary,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = mwString("common.close", "Đóng"),
+                            tint = palette.textSecondary
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    SoundStudioTabButton(
+                        label = deviceTabCaption,
+                        icon = Icons.Rounded.Speaker,
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SoundStudioTabButton(
+                        label = "FX",
+                        icon = Icons.Rounded.Tune,
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SoundStudioTabButton(
+                        label = "DSP",
+                        icon = Icons.Rounded.GraphicEq,
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp)
+                ) {
+                    when (selectedTab) {
+                        0 -> SoundStudioDevicePage(
+                            controller = controller,
+                            locked = locked,
+                            customPresetName = customPresetName,
+                            onPresetNameChange = { customPresetName = it.take(40) },
+                            onPresetSaved = { customPresetName = "" }
+                        )
+                        1 -> SoundStudioFxPage(
+                            controller = controller,
+                            locked = locked,
+                        )
+                        else -> SoundStudioDspPage(
+                            controller = controller,
+                            locked = locked,
+                            scrollState = dspScroll
+                        )
+                    }
+                }
+
+                if (locked) {
+                    Button(
+                        onClick = onOpenPremium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.purpleBright),
+                        shape = RoundedCornerShape(13.dp)
+                    ) {
+                        Icon(Icons.Rounded.WorkspacePremium, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text(mwString("soundstudio.unlock", "Mở khóa với Premium"))
+                    }
+                } else {
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioTabButton(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMusicColors.current
+    Surface(
+        modifier = modifier
+            .height(42.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) palette.purple.copy(alpha = 0.22f) else palette.backgroundSoft,
+        border = BorderStroke(
+            1.dp,
+            if (selected) palette.purpleBright else palette.border
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (selected) palette.purpleBright else palette.textSecondary,
+                modifier = Modifier.size(17.dp)
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                label,
+                color = if (selected) palette.purpleBright else palette.textSecondary,
+                fontSize = 10.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** Both visible settings pages fit inside the Sound Studio dialog.
+ * Horizontal motion is only used for named preset chips; no vertical page scrolling.
+ */
+@Composable
+private fun SoundStudioCompactPanel(
+    compact: Boolean,
+    content: @Composable () -> Unit
+) {
+    val palette = LocalMusicColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = palette.backgroundSoft,
+        border = BorderStroke(1.dp, palette.border)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = if (compact) 5.dp else 8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 5.dp)
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioDevicePage(
+    controller: MusicController,
+    locked: Boolean,
+    customPresetName: String,
+    onPresetNameChange: (String) -> Unit,
+    onPresetSaved: () -> Unit
+) {
+    val palette = LocalMusicColors.current
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxHeight < 410.dp
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 7.dp)
+        ) {
+            // Current output, automatic profile switching and save/delete in one compact panel.
+            SoundStudioCompactPanel(compact = compact) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Speaker,
+                        contentDescription = null,
+                        tint = palette.purpleBright,
+                        modifier = Modifier.size(23.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            controller.soundOutputName,
+                            color = palette.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            if (controller.soundPresetSaved)
+                                mwString("soundstudio.saved", "Saved profile for this device")
+                            else mwString("soundstudio.not_saved", "No profile saved for this device"),
+                            color = if (controller.soundPresetSaved) palette.purpleBright else palette.textMuted,
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    TextButton(
+                        onClick = controller::refreshSoundOutput,
+                        modifier = Modifier.height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                    ) {
+                        Icon(Icons.Rounded.RestartAlt, null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text(mwString("soundstudio.refresh", "Refresh"), fontSize = 10.sp)
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        mwString("soundstudio.auto_eq", "Automatically apply saved device EQ"),
+                        color = palette.textPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = controller.soundAutoApplyDeviceEQ,
+                        enabled = !locked,
+                        onCheckedChange = controller::setSoundAutoApplyDeviceEQ,
+                        modifier = Modifier.graphicsLayer(scaleX = 0.86f, scaleY = 0.86f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = controller::saveSoundProfileForCurrentOutput,
+                        enabled = !locked,
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, palette.purpleBright),
+                        contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)
+                    ) {
+                        Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            mwString("soundstudio.save_eq", "Save device profile"),
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (controller.soundPresetSaved) {
+                        TextButton(
+                            onClick = controller::removeSoundProfileForCurrentOutput,
+                            enabled = !locked,
+                            modifier = Modifier.height(36.dp),
+                            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)
+                        ) {
+                            Text(
+                                mwString("soundstudio.delete_eq", "Remove"),
+                                fontSize = 10.sp,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+
+            SoundStudioCompactPanel(compact = compact) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.AutoAwesome, null,
+                        tint = palette.purpleBright,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        mwString("soundstudio.auto_eq_mode", "Automatic genre EQ"),
+                        color = palette.textPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        AutoEqMode.OFF to mwString("soundstudio.auto_eq_off", "Off"),
+                        AutoEqMode.SUGGEST to mwString("soundstudio.auto_eq_suggest", "Suggest"),
+                        AutoEqMode.AUTO to mwString("soundstudio.auto_eq_auto", "Automatic")
+                    ).forEach { (mode, label) ->
+                        SoundStudioChoiceButton(
+                            label = label,
+                            selected = controller.autoEqMode == mode,
+                            enabled = !locked,
+                            onClick = { controller.setAutoEqMode(mode) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                controller.autoEqSuggestionPreset?.let { suggested ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            mwString("soundstudio.auto_eq_suggestion", "Suggested") +
+                                ": $suggested" +
+                                controller.autoEqSuggestionGenre?.let { " / $it" }.orEmpty(),
+                            modifier = Modifier.weight(1f),
+                            color = palette.textSecondary,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        TextButton(
+                            onClick = controller::applyAutoEqSuggestion,
+                            enabled = !locked,
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        ) {
+                            Text(
+                                mwString("soundstudio.apply_suggestion", "Apply"),
+                                color = palette.purpleBright,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            SoundStudioCompactPanel(compact = compact) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.Tune, null,
+                        tint = palette.purpleBright,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        mwString("soundstudio.custom_presets", "My presets"),
+                        color = palette.textPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                    if (controller.namedEqualizerPresets.isNotEmpty()) {
+                        Text(
+                            "${controller.namedEqualizerPresets.size}",
+                            color = palette.purpleBright,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+                if (controller.namedEqualizerPresets.isNotEmpty()) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        itemsIndexed(
+                            controller.namedEqualizerPresets,
+                            key = { _, preset -> preset.id }
+                        ) { _, preset ->
+                            Surface(
+                                shape = RoundedCornerShape(9.dp),
+                                color = palette.cardRaised,
+                                border = BorderStroke(1.dp, palette.border)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        preset.name,
+                                        modifier = Modifier
+                                            .clickable { controller.applyNamedEqualizerPreset(preset.id) }
+                                            .padding(start = 9.dp, top = 5.dp, bottom = 5.dp),
+                                        color = palette.textPrimary,
+                                        fontSize = 10.sp,
+                                        maxLines = 1
+                                    )
+                                    IconButton(
+                                        onClick = { controller.deleteNamedEqualizerPreset(preset.id) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.Close, null,
+                                            tint = palette.textMuted,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        mwString("soundstudio.no_custom_presets", "No custom presets"),
+                        color = palette.textMuted,
+                        fontSize = 9.sp,
+                        maxLines = 1
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    BasicTextField(
+                        value = customPresetName,
+                        onValueChange = onPresetNameChange,
+                        singleLine = true,
+                        textStyle = TextStyle(color = palette.textPrimary, fontSize = 12.sp),
+                        cursorBrush = SolidColor(palette.purpleBright),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            if (!locked && controller.saveNamedEqualizerPreset(customPresetName)) {
+                                onPresetSaved()
+                            }
+                        }),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { field ->
+                            Surface(
+                                shape = RoundedCornerShape(9.dp),
+                                color = palette.cardRaised,
+                                border = BorderStroke(1.dp, palette.border)
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().height(38.dp)
+                                        .padding(horizontal = 10.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (customPresetName.isEmpty()) {
+                                        Text(
+                                            mwString("soundstudio.preset_name", "Preset name"),
+                                            color = palette.textMuted,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                    field()
+                                }
+                            }
+                        }
+                    )
+                    Button(
+                        onClick = {
+                            if (controller.saveNamedEqualizerPreset(customPresetName)) {
+                                onPresetSaved()
+                            }
+                        },
+                        enabled = !locked && customPresetName.isNotBlank(),
+                        modifier = Modifier.height(38.dp),
+                        shape = RoundedCornerShape(9.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.purpleBright)
+                    ) {
+                        Text(mwString("soundstudio.save_preset", "Save"), fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Compact FX control: title, current value, and one slider on two slim rows. */
+@Composable
+private fun SoundStudioCompactFxControl(
+    icon: ImageVector,
+    title: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+    startLabel: String,
+    endLabel: String,
+    enabled: Boolean,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    switchChecked: Boolean? = null,
+    onSwitchChange: ((Boolean) -> Unit)? = null,
+    switchEnabled: Boolean = true
+) {
+    val palette = LocalMusicColors.current
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(13.dp),
+        color = palette.backgroundSoft,
+        border = BorderStroke(1.dp, palette.border)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = if (compact) 1.dp else 3.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().height(
+                    if (switchChecked != null) (if (compact) 30.dp else 32.dp)
+                    else (if (compact) 21.dp else 24.dp)
+                )
+            ) {
+                Icon(icon, null, tint = palette.purpleBright, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    title,
+                    color = palette.textPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    valueText,
+                    color = if (enabled || switchChecked == true) palette.purpleBright else palette.textMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                if (switchChecked != null && onSwitchChange != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Switch(
+                        checked = switchChecked,
+                        onCheckedChange = onSwitchChange,
+                        enabled = switchEnabled,
+                        modifier = Modifier.size(width = 42.dp, height = 30.dp)
+                            .graphicsLayer(scaleX = 0.80f, scaleY = 0.80f)
+                    )
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().height(if (compact) 29.dp else 34.dp)
+            ) {
+                Text(startLabel, color = palette.textMuted, fontSize = 9.sp, modifier = Modifier.width(28.dp))
+                Slider(
+                    value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+                    onValueChange = onValueChange,
+                    valueRange = valueRange,
+                    steps = steps,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f).height(if (compact) 29.dp else 34.dp)
+                )
+                Text(
+                    endLabel,
+                    color = palette.textMuted,
+                    fontSize = 9.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(28.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioFxPage(
+    controller: MusicController,
+    locked: Boolean
+) {
+    val palette = LocalMusicColors.current
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxHeight < 470.dp
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp)
+        ) {
+            SoundStudioCompactFxControl(
+                icon = Icons.Rounded.VolumeUp,
+                title = mwString("soundstudio.master_volume", "MeloWave volume"),
+                valueText = "${controller.soundMasterVolumePercent}%",
+                value = controller.soundMasterVolumePercent.toFloat(),
+                valueRange = 0f..100f,
+                steps = 19,
+                onValueChange = { controller.setSoundMasterVolume(it.roundToInt()) },
+                startLabel = "0%",
+                endLabel = "100%",
+                enabled = true,
+                compact = compact,
+                modifier = Modifier.weight(1f)
+            )
+            SoundStudioCompactFxControl(
+                icon = Icons.Rounded.Speaker,
+                title = mwString("soundstudio.bass_boost", "Bass Boost"),
+                valueText = "${controller.equalizerBassBoostStrength}%",
+                value = controller.equalizerBassBoostStrength.toFloat(),
+                valueRange = 0f..100f,
+                steps = 9,
+                onValueChange = { controller.updateEqualizerBassBoostStrength(it.roundToInt()) },
+                startLabel = "0%",
+                endLabel = "100%",
+                enabled = !locked,
+                compact = compact,
+                modifier = Modifier.weight(1f)
+            )
+            SoundStudioCompactFxControl(
+                icon = Icons.Rounded.AutoAwesome,
+                title = mwString("soundstudio.spatial", "Spatial"),
+                valueText = "${controller.equalizerVirtualizerStrength}%",
+                value = controller.equalizerVirtualizerStrength.toFloat(),
+                valueRange = 0f..100f,
+                steps = 9,
+                onValueChange = { controller.updateEqualizerVirtualizerStrength(it.roundToInt()) },
+                startLabel = "0%",
+                endLabel = "100%",
+                enabled = !locked && controller.equalizerVirtualizerAvailable,
+                compact = compact,
+                modifier = Modifier.weight(1f)
+            )
+            SoundStudioCompactFxControl(
+                icon = Icons.Rounded.ElectricBolt,
+                title = mwString("soundstudio.loudness", "Loudness"),
+                valueText = "+${controller.equalizerLoudnessGainDb} dB",
+                value = controller.equalizerLoudnessGainDb.toFloat(),
+                valueRange = 1f..6f,
+                steps = 4,
+                onValueChange = { controller.updateEqualizerLoudnessGainDb(it.roundToInt()) },
+                startLabel = "+1",
+                endLabel = "+6",
+                enabled = !locked && controller.equalizerLoudnessEnabled,
+                compact = compact,
+                modifier = Modifier.weight(1f),
+                switchChecked = controller.equalizerLoudnessEnabled,
+                onSwitchChange = controller::setEqualizerLoudness,
+                switchEnabled = !locked
+            )
+
+            Surface(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                shape = RoundedCornerShape(13.dp),
+                color = palette.backgroundSoft,
+                border = BorderStroke(1.dp, palette.border)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Info, null,
+                        tint = palette.purpleBright,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            mwString("soundstudio.auto_headroom", "Auto headroom protection"),
+                            color = palette.textPrimary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            if (controller.equalizerAutoHeadroomEnabled)
+                                String.format(java.util.Locale.US, "Headroom %.1f dB", controller.equalizerHeadroomDb)
+                            else mwString("soundstudio.off", "Off"),
+                            color = if (controller.equalizerAutoHeadroomEnabled)
+                                palette.purpleBright else palette.textMuted,
+                            fontSize = 9.sp,
+                            maxLines = 1
+                        )
+                    }
+                    Switch(
+                        checked = controller.equalizerAutoHeadroomEnabled,
+                        enabled = !locked,
+                        onCheckedChange = controller::setEqualizerAutoHeadroom,
+                        modifier = Modifier.size(width = 42.dp, height = 30.dp)
+                            .graphicsLayer(scaleX = 0.80f, scaleY = 0.80f)
+                    )
+                }
+            }
+
+            SoundStudioCompactFxControl(
+                icon = Icons.Rounded.GraphicEq,
+                title = mwString("soundstudio.crossfade", "Crossfade"),
+                valueText = if (controller.soundCrossfadeSeconds == 0)
+                    mwString("soundstudio.off", "Off") else "${controller.soundCrossfadeSeconds}s",
+                value = controller.soundCrossfadeSeconds.toFloat(),
+                valueRange = 0f..10f,
+                steps = 9,
+                onValueChange = { controller.setSoundCrossfadeSeconds(it.roundToInt()) },
+                startLabel = "0s",
+                endLabel = "10s",
+                enabled = !locked,
+                compact = compact,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioDspPage(
+    controller: MusicController,
+    locked: Boolean,
+    scrollState: androidx.compose.foundation.ScrollState
+) {
+    val palette = LocalMusicColors.current
+    val integratedText = if (controller.measuredIntegratedLufs <= -69f) "--" else
+        String.format(java.util.Locale.US, "%.1f", controller.measuredIntegratedLufs)
+    val momentaryText = if (controller.measuredMomentaryLufs <= -69f) "--" else
+        String.format(java.util.Locale.US, "%.1f", controller.measuredMomentaryLufs)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        SoundStudioSliderCard(
+            icon = Icons.Rounded.GraphicEq,
+            title = mwString("soundstudio.normalization", "Cân bằng âm lượng R128"),
+            subtitle = mwString("soundstudio.normalization_hint", "Tự bù bài nhỏ và giảm bài quá lớn theo độ lớn cảm nhận"),
+            valueText = String.format(java.util.Locale.US, "%.0f LUFS", controller.loudnessTargetLufs),
+            value = controller.loudnessTargetLufs,
+            valueRange = -23f..-9f,
+            steps = 13,
+            enabled = !locked && controller.loudnessNormalizationEnabled,
+            onValueChange = controller::setLoudnessTargetLufs,
+            startLabel = "-23",
+            endLabel = "-9",
+            switchChecked = controller.loudnessNormalizationEnabled,
+            onSwitchChange = controller::setLoudnessNormalization
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            SoundStudioMetricPill("M", "$momentaryText LUFS", Modifier.weight(1f))
+            SoundStudioMetricPill("I", "$integratedText LUFS", Modifier.weight(1f))
+            SoundStudioMetricPill(
+                "Gain",
+                String.format(java.util.Locale.US, "%+.1f dB", controller.measuredNormalizationGainDb),
+                Modifier.weight(1f)
+            )
+        }
+
+        SoundStudioSliderCard(
+            icon = Icons.Rounded.ElectricBolt,
+            title = mwString("soundstudio.dynamic_limiter", "Dynamic Peak Limiter"),
+            subtitle = mwString("soundstudio.limiter_hint", "Look-ahead 8 ms, attack 2 ms, release 80 ms"),
+            valueText = String.format(java.util.Locale.US, "%.1f dBFS", controller.dynamicLimiterCeilingDb),
+            value = controller.dynamicLimiterCeilingDb,
+            valueRange = -6f..-0.1f,
+            steps = 10,
+            enabled = !locked && controller.dynamicLimiterEnabled,
+            onValueChange = controller::setDynamicLimiterCeilingDb,
+            startLabel = "-6",
+            endLabel = "-0.1",
+            switchChecked = controller.dynamicLimiterEnabled,
+            onSwitchChange = controller::setDynamicLimiter
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            SoundStudioMetricPill(
+                "Peak",
+                String.format(java.util.Locale.US, "%.1f dBFS", controller.measuredInputPeakDbfs),
+                Modifier.weight(1f)
+            )
+            SoundStudioMetricPill(
+                "GR",
+                String.format(java.util.Locale.US, "%.1f dB", controller.measuredLimiterReductionDb),
+                Modifier.weight(1f)
+            )
+        }
+
+        Surface(
+            shape = RoundedCornerShape(13.dp),
+            color = palette.purple.copy(alpha = 0.10f),
+            border = BorderStroke(1.dp, palette.purpleBright.copy(alpha = 0.30f))
+        ) {
+            Row(
+                modifier = Modifier.padding(11.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Rounded.Info,
+                    contentDescription = null,
+                    tint = palette.purpleBright,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    mwString("soundstudio.dsp_hint", "R128/LUFS cân bằng âm lượng và Limiter chặn đỉnh PCM"),
+                    color = palette.textSecondary,
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioSectionCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String? = null,
+    content: @Composable () -> Unit
+) {
+    val palette = LocalMusicColors.current
+    Surface(
+        shape = RoundedCornerShape(15.dp),
+        color = palette.backgroundSoft,
+        border = BorderStroke(1.dp, palette.border)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(30.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = palette.purple.copy(alpha = 0.14f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = palette.purpleBright,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        color = palette.textPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    subtitle?.let {
+                        Text(
+                            it,
+                            color = palette.textSecondary,
+                            fontSize = 9.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioSliderCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+    startLabel: String,
+    endLabel: String,
+    enabled: Boolean = true,
+    switchChecked: Boolean? = null,
+    onSwitchChange: ((Boolean) -> Unit)? = null
+) {
+    val palette = LocalMusicColors.current
+    SoundStudioSectionCard(icon = icon, title = title, subtitle = subtitle) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                startLabel,
+                color = palette.textMuted,
+                fontSize = 9.sp,
+                modifier = Modifier.width(34.dp)
+            )
+            Slider(
+                value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+                onValueChange = onValueChange,
+                valueRange = valueRange,
+                steps = steps,
+                enabled = enabled,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                endLabel,
+                color = palette.textMuted,
+                fontSize = 9.sp,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(34.dp)
+            )
+            if (switchChecked != null && onSwitchChange != null) {
+                Spacer(Modifier.width(5.dp))
+                Switch(
+                    checked = switchChecked,
+                    onCheckedChange = onSwitchChange,
+                    enabled = !MeloWarePremiumAccess.equalizerRequiresPremium
+                )
+            }
+        }
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                valueText,
+                color = if (enabled || switchChecked == true) palette.purpleBright else palette.textMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+private fun SoundStudioToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val palette = LocalMusicColors.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = palette.textPrimary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                subtitle,
+                color = palette.textSecondary,
+                fontSize = 9.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Switch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onCheckedChange
+        )
+    }
+}
+
+@Composable
+private fun SoundStudioChoiceButton(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMusicColors.current
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, if (selected) palette.purpleBright else palette.border),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+    ) {
+        Text(
+            label,
+            color = if (selected) palette.purpleBright else palette.textSecondary,
+            fontSize = 10.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun SoundStudioMetricPill(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMusicColors.current
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(11.dp),
+        color = palette.backgroundSoft,
+        border = BorderStroke(1.dp, palette.border)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(label, color = palette.textMuted, fontSize = 8.sp)
+            Text(
+                value,
+                color = palette.purpleBright,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
 private data class EqPreset(
     val name: String,
-    val bass: Int,
-    val mid: Int,
-    val treble: Int,
+    val curveDb: List<Int>?,
+    val bassBoostStrength: Int = 0,
     val icon: ImageVector
 )
 
@@ -4028,21 +5880,24 @@ internal fun EqualizerPanel(
 
     val eqPresets = remember(appLanguage) {
         listOf(
-            EqPreset(eqStrings.custom(), 4, 2, 3, Icons.Rounded.Tune),
-            EqPreset("Normal", 0, 0, 0, Icons.Rounded.Remove),
-            EqPreset("Bass Boost", 6, 1, 5, Icons.Rounded.Speaker),
-            EqPreset("Pop", 2, 1, 3, Icons.Rounded.Stars),
-            EqPreset("Rock", 4, 0, 3, Icons.Rounded.ElectricBolt),
-            EqPreset("Jazz", 1, 3, 4, Icons.Rounded.Piano),
-            EqPreset("Classic", 0, 2, 3, Icons.Rounded.Album),
+            EqPreset(eqStrings.custom(), null, 0, Icons.Rounded.Tune),
+            EqPreset("Normal", List(10) { 0 }, 0, Icons.Rounded.Remove),
+            EqPreset("Bass Boost", listOf(6, 6, 5, 3, 1, 0, 0, 0, 0, 0), 35, Icons.Rounded.Speaker),
+            EqPreset("Pop", listOf(-1, 1, 3, 4, 4, 3, 1, 0, 1, 2), 0, Icons.Rounded.Stars),
+            EqPreset("Rock", listOf(5, 3, 1, 0, -1, 1, 3, 4, 5, 5), 0, Icons.Rounded.ElectricBolt),
+            EqPreset("Jazz", listOf(4, 3, 1, 2, -1, -1, 0, 1, 3, 4), 0, Icons.Rounded.Piano),
+            EqPreset("Classic", listOf(4, 3, 2, 2, -1, -1, 0, 2, 3, 4), 0, Icons.Rounded.Album),
+            EqPreset("Vocal", listOf(-2, -1, 1, 3, 5, 4, 3, 1, 0, -1), 0, Icons.Rounded.Mic),
+            EqPreset("Electronic", listOf(5, 4, 1, 0, -2, 2, 1, 4, 5, 4), 0, Icons.Rounded.ElectricBolt),
         )
     }
 
     var showAdvancedDialog by rememberSaveable { mutableStateOf(false) }
     var showPremiumRequired by rememberSaveable { mutableStateOf(false) }
+    var showSoundStudio by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        controller.refreshEqualizer()
+        if (controller.equalizerEnabled) controller.refreshEqualizer()
     }
 
     Surface(
@@ -4061,16 +5916,18 @@ internal fun EqualizerPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Tune,
                         contentDescription = null,
-                        tint = if (controller.equalizerReady) palette.purpleBright else palette.textSecondary,
+                        tint = if (controller.equalizerEnabled && controller.equalizerReady)
+                            palette.purpleBright else palette.textSecondary,
                         modifier = Modifier.size(26.dp),
                     )
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(
                             text = "Equalizer",
                             color = palette.textPrimary,
@@ -4079,20 +5936,45 @@ internal fun EqualizerPanel(
                         )
                         Text(
                             text = when {
+                                !controller.equalizerEnabled -> mwString("soundstudio.eq_bypass", "Đang tắt · Bypass âm thanh gốc")
                                 controller.equalizerReady -> "Đang áp dụng cho phiên âm thanh ${controller.audioSessionId}"
                                 controller.audioSessionId <= 0 -> eqStrings.errStartPlay()
                                 else -> controller.equalizerError ?: eqStrings.errNoFx()
                             },
-                            color = if (controller.equalizerReady) palette.purpleBright else palette.textMuted,
+                            color = if (controller.equalizerEnabled && controller.equalizerReady)
+                                palette.purpleBright else palette.textMuted,
                             fontSize = 10.sp,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
+                Switch(
+                    checked = controller.equalizerEnabled,
+                    onCheckedChange = controller::setEqualizerActive
+                )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(9.dp))
+            OutlinedButton(
+                onClick = { showSoundStudio = true },
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                border = BorderStroke(1.dp, palette.purpleBright.copy(alpha = 0.52f)),
+                shape = RoundedCornerShape(11.dp),
+            ) {
+                Icon(Icons.Rounded.AutoAwesome, contentDescription = null,
+                    tint = palette.purpleBright, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(mwString("soundstudio.title", "Sound Studio Pro"),
+                    color = palette.textPrimary, fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                Text(mwString("soundstudio.subtitle", "Âm lượng · EQ 10 điểm · Không gian · Crossfade"),
+                    color = palette.textSecondary, fontSize = 10.sp)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4104,18 +5986,35 @@ internal fun EqualizerPanel(
                         icon = preset.icon,
                         selected = controller.equalizerSelectedPresetIndex == index,
                         onClick = {
-                            controller.selectEqualizerPreset(
-                                index = index,
-                                bass = preset.bass,
-                                mid = preset.mid,
-                                treble = preset.treble
-                            )
+                            val curve = preset.curveDb
+                            if (curve == null) {
+                                if (MeloWarePremiumAccess.equalizerRequiresPremium) {
+                                    showPremiumRequired = true
+                                } else {
+                                    controller.prepareAdvancedEqualizerBands()
+                                    showAdvancedDialog = true
+                                }
+                            } else {
+                                controller.selectEqualizerCurvePreset(
+                                    index = index,
+                                    curveDb = curve,
+                                    bassBoostStrength = preset.bassBoostStrength
+                                )
+                            }
                         },
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            EqResponseChart(
+                values = controller.equalizerResponseCurveDb,
+                bypassed = controller.equalizerCompareOriginal,
+                modifier = Modifier.fillMaxWidth().height(100.dp)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth().weight(1f),
@@ -4146,7 +6045,59 @@ internal fun EqualizerPanel(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        controller.setEqualizerCompareOriginal(!controller.equalizerCompareOriginal)
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (controller.equalizerCompareOriginal) palette.purpleBright else palette.border
+                    ),
+                    contentPadding = PaddingValues(horizontal = 7.dp, vertical = 7.dp),
+                ) {
+                    Text(
+                        if (controller.equalizerCompareOriginal)
+                            mwString("soundstudio.compare_original_active", "Đang nghe bản gốc")
+                        else mwString("soundstudio.level_matched_ab", "A/B cân bằng mức"),
+                        color = if (controller.equalizerCompareOriginal)
+                            palette.purpleBright else palette.textPrimary,
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                }
+                OutlinedButton(
+                    onClick = { controller.applyEqualizerForCurrentGenre() },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, palette.border),
+                    contentPadding = PaddingValues(horizontal = 7.dp, vertical = 7.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = palette.purpleBright,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        mwString("soundstudio.genre_eq", "Theo thể loại"),
+                        color = palette.textPrimary,
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(7.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedButton(
@@ -4158,9 +6109,10 @@ internal fun EqualizerPanel(
                             showAdvancedDialog = true
                         }
                     },
+                    modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, palette.border),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 7.dp),
+                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 7.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.GraphicEq,
@@ -4168,15 +6120,15 @@ internal fun EqualizerPanel(
                         tint = palette.purpleBright,
                         modifier = Modifier.size(16.dp),
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(eqStrings.advanced(), color = palette.textPrimary, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(eqStrings.advanced(), color = palette.textPrimary, fontSize = 11.sp, maxLines = 1)
                 }
-                Spacer(modifier = Modifier.width(8.dp))
                 OutlinedButton(
                     onClick = controller::resetEqualizer,
+                    modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, palette.border),
-                    contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
+                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 7.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.RestartAlt,
@@ -4185,7 +6137,7 @@ internal fun EqualizerPanel(
                         modifier = Modifier.size(17.dp),
                     )
                     Spacer(modifier = Modifier.width(5.dp))
-                    Text(eqStrings.reset(), color = palette.textPrimary, fontSize = 12.sp)
+                    Text(eqStrings.reset(), color = palette.textPrimary, fontSize = 11.sp)
                 }
             }
 
@@ -4207,20 +6159,39 @@ internal fun EqualizerPanel(
                     }
                 }
             }
+            controller.equalizerWarning?.let { warning ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Info, contentDescription = null,
+                        tint = palette.textMuted, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(warning, color = palette.textMuted, fontSize = 10.sp,
+                        modifier = Modifier.weight(1f), maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 
+    if (showSoundStudio) {
+        SoundStudioProDialog(
+            controller = controller,
+            onDismiss = { showSoundStudio = false },
+            onOpenPremium = { showSoundStudio = false; onOpenPremium() }
+        )
+    }
     if (showAdvancedDialog && !MeloWarePremiumAccess.equalizerRequiresPremium) {
         AdvancedEqDialog(
-            values = listOf(
-                controller.equalizerBand60,
-                controller.equalizerBand230,
-                controller.equalizerBand910,
-                controller.equalizerBand3600,
-                controller.equalizerBand14000
-            ),
+            values = controller.equalizerReferenceBandValuesDb,
+            labels = controller.equalizerReferenceBandFrequenciesHz.map { frequency ->
+                when {
+                    frequency >= 1_000 && frequency % 1_000 == 0 -> "${frequency / 1_000} kHz"
+                    frequency >= 1_000 -> String.format(java.util.Locale.US, "%.1f kHz", frequency / 1_000f)
+                    else -> "$frequency Hz"
+                }
+            },
             eqStrings = eqStrings,
-            onValueChange = controller::updateAdvancedEqualizerBand,
+            onValueChange = controller::updateEqualizerReferenceBand,
             onFlat = controller::setAdvancedEqualizerFlat,
             onDismiss = { showAdvancedDialog = false },
         )
@@ -4245,6 +6216,94 @@ internal fun EqualizerPanel(
             titleContentColor = palette.textPrimary,
             textContentColor = palette.textSecondary
         )
+    }
+}
+
+@Composable
+private fun EqResponseChart(
+    values: List<Int>,
+    bypassed: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMusicColors.current
+    val safe = remember(values, bypassed) {
+        val source = if (bypassed) List(10) { 0 } else values
+        List(10) { index -> source.getOrElse(index) { 0 }.coerceIn(-6, 6) }
+    }
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = palette.backgroundSoft,
+        border = BorderStroke(
+            1.dp,
+            if (bypassed) palette.purpleBright.copy(alpha = 0.65f) else palette.border
+        )
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    mwString("soundstudio.eq_curve", "Đường cong EQ 10 điểm"),
+                    color = palette.textPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (bypassed) mwString("soundstudio.original_signal", "Tín hiệu gốc")
+                    else mwString("soundstudio.smooth_180", "Chuyển mượt 180 ms"),
+                    color = if (bypassed) palette.purpleBright else palette.textMuted,
+                    fontSize = 9.sp
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Canvas(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                val left = 4.dp.toPx()
+                val right = size.width - 4.dp.toPx()
+                val top = 3.dp.toPx()
+                val bottom = size.height - 3.dp.toPx()
+                val center = (top + bottom) / 2f
+                fun yFor(db: Int): Float = center - (db.coerceIn(-6, 6) / 6f) * ((bottom - top) / 2f)
+
+                listOf(-6, 0, 6).forEach { db ->
+                    val y = yFor(db)
+                    drawLine(
+                        color = if (db == 0) palette.border else palette.borderSoft,
+                        start = Offset(left, y),
+                        end = Offset(right, y),
+                        strokeWidth = if (db == 0) 1.2.dp.toPx() else 0.7.dp.toPx()
+                    )
+                }
+                val points = safe.mapIndexed { index, db ->
+                    val x = left + (right - left) * index / (safe.lastIndex.coerceAtLeast(1).toFloat())
+                    Offset(x, yFor(db))
+                }
+                points.zipWithNext().forEach { (start, end) ->
+                    drawLine(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(palette.purpleBright, palette.blue),
+                            startX = left,
+                            endX = right
+                        ),
+                        start = start,
+                        end = end,
+                        strokeWidth = 2.4.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+                points.forEach { point ->
+                    drawCircle(
+                        color = if (bypassed) palette.textMuted else palette.purpleBright,
+                        radius = 2.7.dp.toPx(),
+                        center = point
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("31 Hz", color = palette.textMuted, fontSize = 8.sp)
+                Text("1 kHz", color = palette.textMuted, fontSize = 8.sp)
+                Text("16 kHz", color = palette.textMuted, fontSize = 8.sp)
+            }
+        }
     }
 }
 
@@ -4579,95 +6638,158 @@ private fun RotaryKnob(
 @Composable
 private fun AdvancedEqDialog(
     values: List<Int>,
+    labels: List<String>,
     eqStrings: EqLocalStrings,
     onValueChange: (index: Int, value: Int) -> Unit,
     onFlat: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val palette = LocalMusicColors.current
-    val labels = listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
+    val safeValues = List(10) { index -> values.getOrElse(index) { 0 }.coerceIn(-6, 6) }
+    val safeLabels = if (labels.size >= 10) labels.take(10) else listOf(
+        "31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz",
+        "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"
+    )
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            shape = RoundedCornerShape(22.dp),
+                .fillMaxWidth(0.96f)
+                .widthIn(max = 650.dp)
+                .heightIn(max = 520.dp),
+            shape = RoundedCornerShape(26.dp),
             color = palette.card,
-            border = BorderStroke(1.dp, palette.border),
-            shadowElevation = 20.dp,
+            border = BorderStroke(1.dp, palette.purple.copy(alpha = 0.48f)),
+            shadowElevation = 22.dp,
         ) {
-            Column(modifier = Modifier.padding(18.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    Surface(
+                        modifier = Modifier.size(40.dp),
+                        shape = RoundedCornerShape(13.dp),
+                        color = palette.purple.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, palette.purpleBright.copy(alpha = 0.35f))
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = null,
-                            tint = palette.purpleBright,
-                        )
-                        Column {
-                            Text(
-                                text = eqStrings.advancedEq(),
-                                color = palette.textPrimary,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                text = eqStrings.bandDesc(),
-                                color = palette.textSecondary,
-                                fontSize = 11.sp,
+                        Box(contentAlignment = Alignment.Center) {
+                            EqualizerMixerGlyph(
+                                tint = palette.purpleBright,
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            eqStrings.advancedEq(),
+                            color = palette.textPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            eqStrings.bandDesc(),
+                            color = palette.textSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(
-                            imageVector = Icons.Rounded.Close,
+                            Icons.Rounded.Close,
                             contentDescription = eqStrings.close(),
-                            tint = palette.textSecondary,
+                            tint = palette.textSecondary
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(Modifier.height(7.dp))
+                CompactEqCurvePreview(
+                    values = safeValues,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                )
+                Spacer(Modifier.height(8.dp))
 
-                labels.forEachIndexed { index, label ->
-                    AdvancedBandRow(
-                        label = label,
-                        value = values.getOrElse(index) { 0 },
-                        onValueChange = { onValueChange(index, it) },
-                    )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = palette.backgroundSoft,
+                    border = BorderStroke(1.dp, palette.border)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .padding(start = 6.dp, end = 6.dp, top = 8.dp, bottom = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .width(24.dp)
+                                .fillMaxHeight()
+                                .padding(top = 22.dp, bottom = 25.dp),
+                            verticalArrangement = Arrangement.SpaceBetween,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("+6", color = palette.textMuted, fontSize = 8.sp)
+                            Text("0", color = palette.textSecondary, fontSize = 8.sp)
+                            Text("-6", color = palette.textMuted, fontSize = 8.sp)
+                        }
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            horizontalArrangement = Arrangement.spacedBy(1.dp)
+                        ) {
+                            safeValues.forEachIndexed { index, value ->
+                                CompactEqFader(
+                                    label = safeLabels[index],
+                                    value = value,
+                                    onValueChange = { onValueChange(index, it) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
+                Spacer(Modifier.height(9.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onFlat) {
-                        Text(
-                            text = eqStrings.flat(),
-                            color = palette.textSecondary,
+                    OutlinedButton(
+                        onClick = onFlat,
+                        shape = RoundedCornerShape(11.dp),
+                        border = BorderStroke(1.dp, palette.border),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.RestartAlt,
+                            contentDescription = null,
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(16.dp)
                         )
+                        Spacer(Modifier.width(5.dp))
+                        Text(eqStrings.flat(), color = palette.textSecondary, fontSize = 11.sp)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(11.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = palette.purple,
-                            contentColor = Color.White,
+                            contentColor = Color.White
                         ),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)
                     ) {
-                        Text(eqStrings.done())
+                        Text(eqStrings.done(), fontSize = 11.sp)
                     }
                 }
             }
@@ -4676,44 +6798,185 @@ private fun AdvancedEqDialog(
 }
 
 @Composable
-private fun AdvancedBandRow(
-    label: String,
-    value: Int,
-    onValueChange: (Int) -> Unit,
+private fun CompactEqCurvePreview(
+    values: List<Int>,
+    modifier: Modifier = Modifier
 ) {
     val palette = LocalMusicColors.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            color = palette.textPrimary,
-            fontSize = 12.sp,
-            modifier = Modifier.width(58.dp),
+    Canvas(modifier = modifier) {
+        val left = 5.dp.toPx()
+        val right = size.width - 5.dp.toPx()
+        val top = 5.dp.toPx()
+        val bottom = size.height - 5.dp.toPx()
+        val centerY = (top + bottom) / 2f
+        val amplitude = (bottom - top) / 2f
+
+        drawRoundRect(
+            color = palette.borderSoft.copy(alpha = 0.45f),
+            topLeft = Offset(0f, 0f),
+            size = Size(size.width, size.height),
+            cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx())
         )
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onValueChange(it.roundToInt().coerceIn(-6, 6)) },
-            valueRange = -6f..6f,
-            steps = 11,
-            colors = SliderDefaults.colors(
-                thumbColor = if(palette.isDark) Color.White else palette.purple,
-                activeTrackColor = palette.purple,
-                inactiveTrackColor = palette.border,
-            ),
-            modifier = Modifier.weight(1f),
+        drawLine(
+            color = palette.border,
+            start = Offset(left, centerY),
+            end = Offset(right, centerY),
+            strokeWidth = 1.dp.toPx()
         )
-        Text(
-            text = "${formatDb(value)} dB",
-            color = palette.purpleBright,
-            fontSize = 11.sp,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(56.dp),
-        )
+        val safe = List(10) { index -> values.getOrElse(index) { 0 }.coerceIn(-6, 6) }
+        val points = safe.mapIndexed { index, db ->
+            val x = left + (right - left) * index / 9f
+            val y = centerY - (db / 6f) * amplitude * 0.82f
+            Offset(x, y)
+        }
+        points.zipWithNext().forEach { (start, end) ->
+            drawLine(
+                brush = Brush.horizontalGradient(
+                    listOf(palette.purpleBright, palette.blue),
+                    startX = left,
+                    endX = right
+                ),
+                start = start,
+                end = end,
+                strokeWidth = 2.5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
+        points.forEach { point ->
+            drawCircle(
+                color = palette.purpleBright,
+                radius = 2.4.dp.toPx(),
+                center = point
+            )
+        }
     }
 }
 
+@Composable
+private fun CompactEqFader(
+    label: String,
+    value: Int,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMusicColors.current
+    val density = LocalDensity.current
+    var heightPx by remember { mutableFloatStateOf(1f) }
+    val trackPaddingPx = with(density) { 8.dp.toPx() }
+
+    fun valueForY(y: Float): Int {
+        val top = trackPaddingPx
+        val bottom = (heightPx - trackPaddingPx).coerceAtLeast(top + 1f)
+        val normalized = ((y - top) / (bottom - top)).coerceIn(0f, 1f)
+        return (6f - normalized * 12f).roundToInt().coerceIn(-6, 6)
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = formatDb(value),
+            color = if (value == 0) palette.textSecondary else palette.purpleBright,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+        Spacer(Modifier.height(2.dp))
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .onSizeChanged { heightPx = it.height.toFloat() }
+                .semantics {
+                    contentDescription = "$label ${formatDb(value)} dB"
+                    progressBarRangeInfo = ProgressBarRangeInfo(value.toFloat(), -6f..6f, 11)
+                    setProgress { target ->
+                        onValueChange(target.roundToInt().coerceIn(-6, 6))
+                        true
+                    }
+                }
+                .pointerInput(heightPx, onValueChange) {
+                    detectTapGestures { offset -> onValueChange(valueForY(offset.y)) }
+                }
+                .pointerInput(heightPx, onValueChange, value) {
+                    detectVerticalDragGestures(
+                        onDragStart = { offset -> onValueChange(valueForY(offset.y)) },
+                        onVerticalDrag = { change, _ ->
+                            onValueChange(valueForY(change.position.y))
+                            change.consume()
+                        }
+                    )
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val x = size.width / 2f
+                val top = 8.dp.toPx()
+                val bottom = size.height - 8.dp.toPx()
+                val zeroY = (top + bottom) / 2f
+                val normalized = (value + 6f) / 12f
+                val thumbY = bottom - normalized * (bottom - top)
+
+                for (tick in 0..12) {
+                    val y = top + (bottom - top) * (tick / 12f)
+                    drawCircle(
+                        color = if (tick == 6) palette.textSecondary else palette.border,
+                        radius = if (tick == 6) 1.5.dp.toPx() else 1.dp.toPx(),
+                        center = Offset(x, y)
+                    )
+                }
+                drawLine(
+                    color = palette.border,
+                    start = Offset(x, top),
+                    end = Offset(x, bottom),
+                    strokeWidth = 3.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                if (abs(thumbY - zeroY) > 0.5f) {
+                    drawLine(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(palette.purpleBright, palette.blue),
+                            startY = min(zeroY, thumbY),
+                            endY = max(zeroY, thumbY)
+                        ),
+                        start = Offset(x, zeroY),
+                        end = Offset(x, thumbY),
+                        strokeWidth = 4.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+                drawLine(
+                    color = palette.textMuted.copy(alpha = 0.65f),
+                    start = Offset(x - 5.dp.toPx(), zeroY),
+                    end = Offset(x + 5.dp.toPx(), zeroY),
+                    strokeWidth = 1.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                drawRoundRect(
+                    color = palette.purple.copy(alpha = 0.20f),
+                    topLeft = Offset(x - 10.dp.toPx(), thumbY - 7.dp.toPx()),
+                    size = Size(20.dp.toPx(), 14.dp.toPx()),
+                    cornerRadius = CornerRadius(7.dp.toPx(), 7.dp.toPx())
+                )
+                drawRoundRect(
+                    color = if (palette.isDark) Color.White else palette.purpleBright,
+                    topLeft = Offset(x - 7.dp.toPx(), thumbY - 4.5.dp.toPx()),
+                    size = Size(14.dp.toPx(), 9.dp.toPx()),
+                    cornerRadius = CornerRadius(4.5.dp.toPx(), 4.5.dp.toPx())
+                )
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = label
+                .replace(" Hz", "")
+                .replace(" kHz", "k"),
+            color = palette.textPrimary,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Clip
+        )
+    }
+}
 private fun formatDb(value: Int): String = if (value > 0) "+$value" else value.toString()
