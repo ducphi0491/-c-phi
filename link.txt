@@ -1,40 +1,23 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+Test-Path "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
 
-PS C:\WINDOWS\system32> adb logcat -c
->> adb install -r "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
->> adb logcat -d -v time > "%USERPROFILE%\Desktop\docflow_install_log.txt"
-adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:1 char:1
-+ adb logcat -c
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
 
-adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:2 char:1
-+ adb install -r "D:\DocFlowOffline\app\build\outputs\apk\debug\app-deb ...
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
+$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
 
-adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:3 char:1
-+ adb logcat -d -v time > "%USERPROFILE%\Desktop\docflow_install_log.tx ...
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
+$apk = "D:\DocFlowOffline\app\build\outputs\apk\debug\app-debug.apk"
 
-PS C:\WINDOWS\system32> adb logcat -d -v time > "$env:USERPROFILE\Desktop\docflow_install_log.txt"
-adb : The term 'adb' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:1 char:1
-+ adb logcat -d -v time > "$env:USERPROFILE\Desktop\docflow_install_log ...
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (adb:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
+$log = "$env:USERPROFILE\Desktop\docflow_install_log.txt"
 
-PS C:\WINDOWS\system32>
+# Kiem tra ket noi
+& $adb devices
+
+# Xoa log cu
+& $adb logcat -c
+
+# Thu cai dat APK va ghi lai ket qua
+& $adb install -r $apk 2>&1 |
+    Tee-Object -FilePath $log
+
+# Lay log lien quan den cai dat
+& $adb logcat -d -v time |
+    Select-String -Pattern "PackageManager|PackageInstaller|USER_RESTRICTED|INSTALL_FAILED|docflowoffline|SecurityCenter" |
+    Out-File -FilePath $log -Append -Encoding utf8
