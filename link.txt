@@ -1,7 +1,5 @@
 Executing tasks: [:app:assembleDebug] in project D:\music
 
-Starting Gradle Daemon...
-Gradle Daemon started in 3 s 961 ms
 AGPBI: {"kind":"warning","text":"We recommend using a newer Android Gradle plugin to use compileSdk = 36\n\nThis Android Gradle plugin (8.4.0) was tested up to compileSdk = 34.\n\nYou are strongly encouraged to update your project to use a newer\nAndroid Gradle plugin that has been tested with compileSdk = 36.\n\nIf you are already using the latest version of the Android Gradle plugin,\nyou may need to wait until a newer version with support for compileSdk = 36 is available.\n\nTo suppress this warning, add/update\n    android.suppressUnsupportedCompileSdk=36\nto this project's gradle.properties.","sources":[{}]}
 > Task :app:preBuild UP-TO-DATE
 > Task :app:preDebugBuild UP-TO-DATE
@@ -25,9 +23,9 @@ AGPBI: {"kind":"warning","text":"We recommend using a newer Android Gradle plugi
 > Task :app:mergeDebugShaders UP-TO-DATE
 > Task :app:compileDebugShaders NO-SOURCE
 > Task :app:generateDebugAssets UP-TO-DATE
-> Task :app:mergeDebugAssets UP-TO-DATE
-> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
 > Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :app:compressDebugAssets
 > Task :app:checkDebugDuplicateClasses UP-TO-DATE
 > Task :app:mergeDebugStartupProfile UP-TO-DATE
 > Task :app:mergeExtDexDebug UP-TO-DATE
@@ -39,40 +37,12 @@ AGPBI: {"kind":"warning","text":"We recommend using a newer Android Gradle plugi
 > Task :app:writeDebugAppMetadata UP-TO-DATE
 > Task :app:writeDebugSigningConfigVersions UP-TO-DATE
 > Task :app:compileDebugKotlin
-w: Class androidx.media3.common.util.UnstableApi is not an opt-in requirement marker
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:260:47 'PlaylistAdd: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.PlaylistAdd
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:435:50 'PlaylistPlay: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.PlaylistPlay
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:591:98 'PlaylistPlay: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.PlaylistPlay
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:631:5 Parameter 'onAuthorizePersonalDrive' is never used
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:2409:47 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.ArrowBack
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:2705:48 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.ArrowBack
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:3016:44 'PlaylistAdd: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.PlaylistAdd
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:3552:48 'PlaylistAdd: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.PlaylistAdd
-w: file:///D:/music/app/src/main/java/duc_phi/music/LibraryScreen.kt:3777:32 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.ArrowBack
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:435:60 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:442:56 'GoogleSignInOptions' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:443:60 'GoogleSignInOptions' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:451:56 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:455:60 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:509:23 'get(String!): Any?' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:538:78 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:570:67 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:632:71 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:864:64 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:905:89 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:907:88 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:909:92 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:1015:82 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:1527:59 'GoogleSignInOptions' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:1528:52 'GoogleSignInOptions' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:1533:67 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MainActivity.kt:1540:55 'GoogleSignIn' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MusicController.kt:1244:53 Unnecessary safe call on a non-null receiver of type String
-w: file:///D:/music/app/src/main/java/duc_phi/music/MusicController.kt:3117:81 'seek(Long): PendingResult<RemoteMediaClient.MediaChannelResult!>' is deprecated. Deprecated in Java
-w: file:///D:/music/app/src/main/java/duc_phi/music/MusicController.kt:4223:52 Unnecessary non-null assertion (!!) on a non-null receiver of type Int
-e: file:///D:/music/app/src/main/java/duc_phi/music/NowPlayingScreen.kt:4619:48 Unresolved reference: soundMasterVolumePercent
-e: file:///D:/music/app/src/main/java/duc_phi/music/NowPlayingScreen.kt:4624:48 Unresolved reference: soundMasterVolumePercent
-e: file:///D:/music/app/src/main/java/duc_phi/music/NowPlayingScreen.kt:4626:44 Unresolved reference: setSoundMasterVolume
+e: file:///D:/music/app/src/main/java/duc_phi/music/MusicController.kt:816:34 Platform declaration clash: The following declarations have the same JVM signature (setEqualizerCompareOriginal(Z)V):
+    fun `<set-equalizerCompareOriginal>`(`<set-?>`: Boolean): Unit defined in duc_phi.music.MusicController
+    fun setEqualizerCompareOriginal(enabled: Boolean): Unit defined in duc_phi.music.MusicController
+e: file:///D:/music/app/src/main/java/duc_phi/music/MusicController.kt:1381:5 Platform declaration clash: The following declarations have the same JVM signature (setEqualizerCompareOriginal(Z)V):
+    fun `<set-equalizerCompareOriginal>`(`<set-?>`: Boolean): Unit defined in duc_phi.music.MusicController
+    fun setEqualizerCompareOriginal(enabled: Boolean): Unit defined in duc_phi.music.MusicController
 
 > Task :app:compileDebugKotlin FAILED
 
@@ -266,5 +236,5 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 For more on this, please refer to https://docs.gradle.org/9.2.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
 
-BUILD FAILED in 1m 44s
-31 actionable tasks: 2 executed, 29 up-to-date
+BUILD FAILED in 1m 11s
+31 actionable tasks: 4 executed, 27 up-to-date
