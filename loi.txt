@@ -4,38 +4,40 @@ Executing tasks: [:app:assembleDebug] in project D:\DocFlowOffline
 > Task :app:preDebugBuild UP-TO-DATE
 > Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
 > Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
-> Task :app:checkDebugAarMetadata UP-TO-DATE
 > Task :app:generateDebugResValues UP-TO-DATE
-> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths
 > Task :app:generateDebugResources UP-TO-DATE
-> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:checkDebugAarMetadata
 > Task :app:packageDebugResources UP-TO-DATE
 > Task :app:parseDebugLocalResources UP-TO-DATE
 > Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
 > Task :app:extractDeepLinksDebug UP-TO-DATE
-> Task :app:processDebugMainManifest UP-TO-DATE
-> Task :app:processDebugManifest UP-TO-DATE
-> Task :app:processDebugManifestForPackage UP-TO-DATE
-> Task :app:processDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
 > Task :app:javaPreCompileDebug UP-TO-DATE
 > Task :app:mergeDebugShaders UP-TO-DATE
 > Task :app:compileDebugShaders NO-SOURCE
 > Task :app:generateDebugAssets UP-TO-DATE
-> Task :app:mergeDebugAssets UP-TO-DATE
-> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
 > Task :app:desugarDebugFileDependencies UP-TO-DATE
-> Task :app:checkDebugDuplicateClasses UP-TO-DATE
-> Task :app:mergeExtDexDebug UP-TO-DATE
-> Task :app:mergeLibDexDebug UP-TO-DATE
+> Task :app:compressDebugAssets
 > Task :app:mergeDebugJniLibFolders UP-TO-DATE
-> Task :app:mergeDebugNativeLibs UP-TO-DATE
-> Task :app:stripDebugDebugSymbols UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses
+> Task :app:mergeDebugNativeLibs
+> Task :app:mergeLibDexDebug UP-TO-DATE
 > Task :app:validateSigningDebug UP-TO-DATE
 > Task :app:writeDebugAppMetadata UP-TO-DATE
 > Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :app:processDebugManifestForPackage
 
+> Task :app:stripDebugDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libjpeg.so, libleptonica.so, libpngx.so, libtesseract.so.
+
+> Task :app:processDebugResources
+> Task :app:mergeExtDexDebug
 > Task :app:compileDebugKotlin
-e: file:///D:/DocFlowOffline/app/src/main/java/com/docflowoffline/DocumentScreens.kt:631:25 'val' cannot be reassigned.
+e: file:///D:/DocFlowOffline/app/src/main/java/com/docflowoffline/DocumentEngines.kt:3015:35 Unresolved reference 'MAX_CELLS'.
 
 > Task :app:compileDebugKotlin FAILED
 
@@ -43,17 +45,17 @@ e: file:///D:/DocFlowOffline/app/src/main/java/com/docflowoffline/DocumentScreen
 
 FAILURE: Build failed with an exception.
 
-* What went wrong:
+- What went wrong:
 Execution failed for task ':app:compileDebugKotlin'.
 > A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
-   > Compilation error. See log for more details
+   > Compilation error. See log for more details
 
-* Try:
+- Try:
 > Run with --info or --debug option to get more log output.
 > Run with --scan to generate a Build Scan (powered by Develocity).
 > Get more help at https://help.gradle.org.
 
-* Exception is:
+- Exception is:
 org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':app:compileDebugKotlin'.
 	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.lambda$executeIfValid$1(ExecuteActionsTaskExecuter.java:135)
 	at org.gradle.internal.Try$Failure.ifSuccessfulOrElse(Try.java:288)
@@ -260,5 +262,6 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 For more on this, please refer to https://docs.gradle.org/9.2.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
 
-BUILD FAILED in 20s
-28 actionable tasks: 1 executed, 27 up-to-date
+BUILD FAILED in 45s
+28 actionable tasks: 14 executed, 14 up-to-date
+vẫn lỗi bạn
