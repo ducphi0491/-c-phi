@@ -1,1 +1,47 @@
-tag:TTAlphaTab
+---------------------------- PROCESS STARTED (22007) for package ducphi.tunnerinstrument ----------------------------
+2026-10-22 09:18:28.306 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  HTML_SCRIPT_READY | alphaTab=object window=392x616
+2026-10-22 09:18:28.307 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  WINDOW_LOADED | alphaTab=object
+2026-10-22 09:18:28.309 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  INIT_ATTEMPT | n=0 viewport=393x0 alphaTab=object
+2026-10-22 09:18:28.317 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1695
+2026-10-22 09:18:28.338 22007-22007 TTAlphaTab              ducphi.tunnerinstrument              I  PAGE_FINISHED view=1080x1695
+2026-10-22 09:18:29.512 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  INIT_ATTEMPT | n=8 viewport=393x0 alphaTab=object
+2026-10-22 09:18:30.113 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              W  INIT_FALLBACK | initializing with 0px viewport; awaiting Android layout
+2026-10-22 09:18:30.114 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  API_CONSTRUCT | viewport=393x0
+2026-10-22 09:18:30.140 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  API_READY | viewport=393x0
+2026-10-22 09:18:30.142 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 393x616
+2026-10-22 09:18:30.159 22007-22007 TTAlphaTab              ducphi.tunnerinstrument              I  ANDROID_API_READY queue=false
+2026-10-22 09:18:30.469 22007-22007 TTAlphaTab              ducphi.tunnerinstrument              I  ANDROID_OPEN_SONG type=gp4
+2026-10-22 09:18:30.469 22007-22007 TTAlphaTab              ducphi.tunnerinstrument              I  DISPATCH_SCORE_NOW
+2026-10-22 09:18:30.471 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  SCORE_FETCH_STARTED | local=false
+2026-10-22 09:18:30.644 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1701
+2026-10-22 09:18:30.666 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1713
+2026-10-22 09:18:30.672 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  SCORE_FETCH_OK | bytes=3891
+2026-10-22 09:18:30.690 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  SCORE_PARSED | tracks=1
+2026-10-22 09:18:30.985 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:30.986 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  ANDROID_SCORE_LOADED error=false tracksJsonLen=30
+2026-10-22 09:18:31.175 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:31.176 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  SVG_VISIBLE | svg=67
+2026-10-22 09:18:31.176 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  ANDROID_SCORE_RENDERED
+2026-10-22 09:18:31.183 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1746
+2026-10-22 09:18:31.184 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1760
+2026-10-22 09:18:31.184 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1773
+2026-10-22 09:18:31.186 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1784
+2026-10-22 09:18:31.187 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1801
+2026-10-22 09:18:31.188 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1807
+2026-10-22 09:18:31.188 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1815
+2026-10-22 09:18:31.189 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1818
+2026-10-22 09:18:31.190 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1822
+2026-10-22 09:18:31.191 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1824
+2026-10-22 09:18:31.192 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1825
+2026-10-22 09:18:31.192 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1826
+2026-10-22 09:18:31.193 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1827
+2026-10-22 09:18:31.193 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  VIEWPORT_CHANGED | 1080x1839
+2026-10-22 09:18:31.439 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:31.589 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:32.103 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:32.747 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:33.403 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:34.049 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:34.698 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:35.360 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
+2026-10-22 09:18:36.002 22007-22219 TTAlphaTab              ducphi.tunnerinstrument              I  RENDER_FINISHED | svgs=67 first=393x49
