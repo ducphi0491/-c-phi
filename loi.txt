@@ -1,75 +1,70 @@
-Dear Third-Party Data Safety Team,
+View, edit, and convert Word, Excel, and PDF files offline.
 
-Thank you for your feedback regarding the OAuth verification of MeloWave.
 
-We have prepared an updated demonstration video and would like to provide additional clarification regarding our requested Google Drive scope.
+**DocFlow Offline – All-in-One Document Viewer, Editor & Converter**
 
-**Application Information**
-- Application: MeloWave – Offline Music & MP3
-- Google Cloud Project ID: melowave-f8056
-- Requested scope: https://www.googleapis.com/auth/drive.readonly
+Manage your documents anytime, anywhere — even without an internet connection!
 
-**1. Scope Justification**
+DocFlow Offline is a convenient document management app that lets you view, edit, organize, and convert Word, Excel, PDF, and other common file formats directly on your Android device.
 
-MeloWave is an Android music player that allows users to access and play audio files stored in their personal Google Drive accounts.
+Whether you're working, studying, or managing personal documents, DocFlow Offline puts essential office tools in one easy-to-use app.
 
-The `drive.readonly` scope is required for the following features:
+**KEY FEATURES**
 
-- Browse existing Google Drive folders and nested subfolders directly within the application.
-- Discover supported audio files across the user's Drive folder hierarchy.
-- Select an entire folder and collect audio files from its subfolders into a music playlist.
-- Read and stream audio files directly from Google Drive.
-- Access previously authorized Drive content without requiring users to individually select every audio file through Google Picker.
+📄 **Word Document Tools**
+- Open and read DOCX documents.
+- Create and edit documents.
+- Format text with basic editing tools.
+- Search and replace text.
+- Export supported document content to PDF.
 
-Our existing `drive.file` integration only allows access to files specifically selected or authorized for the application. This does not fully support browsing the user's existing Drive folder hierarchy and discovering audio files that have not been individually selected.
+📊 **Excel Spreadsheet Tools**
+- Open, create, and edit XLSX spreadsheets.
+- Work with multiple worksheets.
+- Use common formulas and calculation functions.
+- Format cells, adjust colors, and merge cells.
+- Zoom in or out for easier spreadsheet navigation.
+- Save edited spreadsheets and export to PDF.
 
-The narrower `drive.metadata.readonly` scope is insufficient because audio playback requires reading the actual file content, not just metadata.
+📕 **PDF Tools**
+- Open and read PDF documents.
+- Zoom and navigate through pages.
+- Search and select text in supported PDFs.
+- Merge multiple PDF files.
+- Extract selected PDF pages.
+- Convert PDF pages to PNG images.
+- Create PDF documents from images.
 
-MeloWave only requires read access for these features. The `drive.readonly` functionality does not modify, delete, or change the sharing permissions of users' Drive files.
+🔄 **Document Conversion**
+- Word to PDF.
+- Excel to PDF.
+- Text-based PDF to Word.
+- Text-based PDF to Excel.
+- Images to PDF.
+- PDF to PNG.
 
-**2. OAuth Scope Alignment**
+📁 **Easy File Management**
+- Browse files by document type.
+- Quickly access recently opened documents.
+- Organize and manage your documents.
+- Save and share files using Android's file tools.
 
-We have prepared a dedicated review build that explicitly requests the `drive.readonly` scope, corresponding to the scope submitted for verification.
+🔒 **100% OFFLINE & PRIVATE**
 
-Our existing production version continues using the previously implemented `drive.file` integration.
+No internet connection required for document processing.
 
-The new restricted-scope functionality is being tested separately to avoid affecting existing production users.
+Your documents are processed locally on your device without being uploaded to external servers.
 
-**3. Updated OAuth Demonstration Video**
+Enjoy a convenient, private document workflow wherever you are.
 
-We have recorded a new demonstration showing the Google OAuth authorization process, including the expanded permission details and the application's Google Drive functionality.
+✨ **SIMPLE & USER-FRIENDLY**
 
-Video link:
+DocFlow Offline features a clean interface, easy navigation, and practical tools designed for everyday document tasks.
 
-https://youtube.com/shorts/X8fQ-PiXF7A?feature=share
+**IMPORTANT NOTES**
 
-The video demonstrates:
+Some advanced formatting, complex layouts, and embedded elements may not be fully preserved during conversion.
 
-1. Opening MeloWave and selecting personal Google Drive access.
-2. Displaying the Google OAuth authorization flow.
-3. Expanding the permission details to show the requested access.
-4. Granting the requested permission.
-5. Browsing available Google Drive content within MeloWave.
-6. Selecting audio files, adding them to the music library, and playing them successfully.
+Text extraction requires a PDF with selectable text. OCR for scanned documents and images is not currently supported.
 
-**4. Application Testing Access**
-
-If your verification team would like to install and test MeloWave directly, we are happy to provide access through the Google Play Console Internal Testing track.
-
-Please provide the Google account email address(es) your reviewers will use for testing.
-
-We will add those email addresses to our authorized tester list and provide the Internal Testing installation link and step-by-step instructions.
-
-We are also happy to provide any additional testing information required to complete the verification process.
-
-**5. Request for Continued Verification**
-
-We kindly request that you review our updated demonstration and continue the verification process for the `drive.readonly` scope.
-
-If any additional evidence or specific changes are required, please let us know so we can address them promptly.
-
-Thank you for your time and support.
-
-Best regards,
-
-MeloWave Development Team
+**DocFlow Offline – Your documents, your device, your control.**
