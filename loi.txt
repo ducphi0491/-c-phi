@@ -1,1 +1,3 @@
-https://www.youtube.com/watch?v=kw2alFJbgJM
+        versionCode = if (melowaveReadonlyReview) 39 else 38
+        versionName = if (melowaveReadonlyReview) "2.1.8-oauth-review" else "2.1.8"
+        buildConfigField("boolean", "DRIVE_READONLY_REVIEW", melowaveReadonlyReview.toString())
