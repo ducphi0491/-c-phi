@@ -1,1 +1,75 @@
+Dear Third-Party Data Safety Team,
+
+Thank you for your feedback regarding the OAuth verification of MeloWave.
+
+We have prepared an updated demonstration video and would like to provide additional clarification regarding our requested Google Drive scope.
+
+**Application Information**
+- Application: MeloWave – Offline Music & MP3
+- Google Cloud Project ID: melowave-f8056
+- Requested scope: https://www.googleapis.com/auth/drive.readonly
+
+**1. Scope Justification**
+
+MeloWave is an Android music player that allows users to access and play audio files stored in their personal Google Drive accounts.
+
+The `drive.readonly` scope is required for the following features:
+
+- Browse existing Google Drive folders and nested subfolders directly within the application.
+- Discover supported audio files across the user's Drive folder hierarchy.
+- Select an entire folder and collect audio files from its subfolders into a music playlist.
+- Read and stream audio files directly from Google Drive.
+- Access previously authorized Drive content without requiring users to individually select every audio file through Google Picker.
+
+Our existing `drive.file` integration only allows access to files specifically selected or authorized for the application. This does not fully support browsing the user's existing Drive folder hierarchy and discovering audio files that have not been individually selected.
+
+The narrower `drive.metadata.readonly` scope is insufficient because audio playback requires reading the actual file content, not just metadata.
+
+MeloWave only requires read access for these features. The `drive.readonly` functionality does not modify, delete, or change the sharing permissions of users' Drive files.
+
+**2. OAuth Scope Alignment**
+
+We have prepared a dedicated review build that explicitly requests the `drive.readonly` scope, corresponding to the scope submitted for verification.
+
+Our existing production version continues using the previously implemented `drive.file` integration.
+
+The new restricted-scope functionality is being tested separately to avoid affecting existing production users.
+
+**3. Updated OAuth Demonstration Video**
+
+We have recorded a new demonstration showing the Google OAuth authorization process, including the expanded permission details and the application's Google Drive functionality.
+
+Video link:
+
 https://youtube.com/shorts/X8fQ-PiXF7A?feature=share
+
+The video demonstrates:
+
+1. Opening MeloWave and selecting personal Google Drive access.
+2. Displaying the Google OAuth authorization flow.
+3. Expanding the permission details to show the requested access.
+4. Granting the requested permission.
+5. Browsing available Google Drive content within MeloWave.
+6. Selecting audio files, adding them to the music library, and playing them successfully.
+
+**4. Application Testing Access**
+
+If your verification team would like to install and test MeloWave directly, we are happy to provide access through the Google Play Console Internal Testing track.
+
+Please provide the Google account email address(es) your reviewers will use for testing.
+
+We will add those email addresses to our authorized tester list and provide the Internal Testing installation link and step-by-step instructions.
+
+We are also happy to provide any additional testing information required to complete the verification process.
+
+**5. Request for Continued Verification**
+
+We kindly request that you review our updated demonstration and continue the verification process for the `drive.readonly` scope.
+
+If any additional evidence or specific changes are required, please let us know so we can address them promptly.
+
+Thank you for your time and support.
+
+Best regards,
+
+MeloWave Development Team
