@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "974937151673",
+    "project_id": "docfow-a9f0f",
+    "storage_bucket": "docfow-a9f0f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:974937151673:android:40b881a8db2d5285a16368",
+        "android_client_info": {
+          "package_name": "ducphi.docflow"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "974937151673-679lj6uc6bp1s2ne021cmatailj56f2b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9El3lPvyGmi-eE1UwtVxKnGA5K-rwVBc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "974937151673-679lj6uc6bp1s2ne021cmatailj56f2b.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
