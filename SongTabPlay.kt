@@ -2156,6 +2156,28 @@ private fun BangNhacScreenContent(
     val accentColor = if (localIsDark) Color(0xFF9FA8DA) else Color(0xFF5E35B1)
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    val isTabJsReady = remember { AtomicBoolean(false) }
+    val pendingTabSongScript = remember { AtomicReference<String?>(null) }
+
+    fun dispatchPendingTabSong(target: WebView) {
+        pendingTabSongScript.getAndSet(null)?.let { command ->
+            target.evaluateJavascript(command, null)
+        }
+    }
+
+    fun syncTabViewport(target: WebView) {
+        target.post {
+            val viewportWidth = target.width
+            val viewportHeight = target.height
+            if (viewportWidth > 0 && viewportHeight > 0) {
+                target.evaluateJavascript(
+                    "javascript:if(typeof onAndroidViewportChanged==='function'){" +
+                            "onAndroidViewportChanged($viewportWidth,$viewportHeight);}",
+                    null
+                )
+            }
+        }
+    }
 
     var selectedMusicSection by remember {
         mutableStateOf(MusicLibrarySection.NHAC_VIET)
@@ -2190,6 +2212,8 @@ private fun BangNhacScreenContent(
     var isPlayerReady by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var hasScore by remember { mutableStateOf(false) }
+    // Banner TAB chi duoc hien thi khi nguoi dung cuon qua phan cuoi ban nhac.
+    var showTabBottomBanner by remember { mutableStateOf(false) }
 
     // BPM đang hiển thị trong ô nhập và BPM đã áp dụng vào bản nhạc.
     var bpmText by remember { mutableStateOf("") }
@@ -2312,23 +2336,7 @@ private fun BangNhacScreenContent(
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
-                    val target = view ?: return
-                    target.post {
-                        val viewportWidth = target.width.coerceAtLeast(0)
-                        val viewportHeight = target.height.coerceAtLeast(0)
-                        target.evaluateJavascript(
-                            """javascript:(function syncViewport(attempt) {
-                                if (typeof onAndroidViewportChanged === 'function') {
-                                    onAndroidViewportChanged($viewportWidth, $viewportHeight);
-                                    return;
-                                }
-                                if (attempt < 40) {
-                                    setTimeout(function() { syncViewport(attempt + 1); }, 50);
-                                }
-                            })(0);""".trimIndent(),
-                            null
-                        )
-                    }
+                    view?.let(::syncTabViewport)
                 }
 
                 override fun shouldInterceptRequest(
@@ -2403,31 +2411,22 @@ private fun BangNhacScreenContent(
                 }
             }
 
-            // alphaTab có thể được khởi tạo khi WebView chưa gắn vào Compose và kích thước
-            // vẫn bằng 0. Đồng bộ lại viewport mỗi khi WebView được gắn, đổi chiều hoặc đổi cỡ.
-            addOnLayoutChangeListener { target, left, top, right, bottom,
+            addOnLayoutChangeListener { view, left, top, right, bottom,
                                         oldLeft, oldTop, oldRight, oldBottom ->
-                val viewportWidth = right - left
-                val viewportHeight = bottom - top
-                val oldViewportWidth = oldRight - oldLeft
-                val oldViewportHeight = oldBottom - oldTop
-                if (
-                    viewportWidth > 0 &&
-                    viewportHeight > 0 &&
-                    (viewportWidth != oldViewportWidth || viewportHeight != oldViewportHeight)
-                ) {
-                    target.post {
-                        (target as? WebView)?.evaluateJavascript(
-                            "javascript:if(typeof onAndroidViewportChanged==='function'){" +
-                                    "onAndroidViewportChanged($viewportWidth,$viewportHeight);" +
-                                    "}",
-                            null
-                        )
-                    }
-                }
+                val changed = right - left != oldRight - oldLeft ||
+                        bottom - top != oldBottom - oldTop
+                if (changed) (view as? WebView)?.let(::syncTabViewport)
             }
 
             addJavascriptInterface(object {
+                @JavascriptInterface
+                fun onTabReady() {
+                    mainHandler.post {
+                        isTabJsReady.set(true)
+                        webViewInstance?.let(::dispatchPendingTabSong)
+                    }
+                }
+
                 @JavascriptInterface
                 fun onPlayerReady() {
                     mainHandler.post {
@@ -2595,19 +2594,32 @@ private fun BangNhacScreenContent(
                 }
 
                 @JavascriptInterface
+                fun onTabBottomBannerVisibilityChanged(visible: Boolean) {
+                    // JavaScriptInterface co the duoc goi tren background thread.
+                    mainHandler.post {
+                        val shouldShow = visible && hasScore && !isLoadingSong && currentSong != null
+                        if (showTabBottomBanner != shouldShow) {
+                            showTabBottomBanner = shouldShow
+                        }
+                    }
+                }
+
+                @JavascriptInterface
                 fun onScoreLoaded(tracksJson: String, title: String) {
-                    // alphaTab đã đọc xong dữ liệu nên có thể giải phóng bản sao byte local.
-                    // Chưa đặt hasScore=true ở đây vì SVG có thể vẫn chưa được render.
+                    // AlphaTab đã đọc xong dữ liệu nên có thể giải phóng bản sao byte local.
                     localScorePayload.set(null)
                     mainHandler.post {
                         if (title.startsWith("Lỗi")) {
                             isLoadingSong = false
                             hasScore = false
+                            showTabBottomBanner = false
                             isPlayerReady = false
                             currentBpm = 0
                             bpmText = ""
                             Toast.makeText(context, title, Toast.LENGTH_SHORT).show()
                         } else {
+                            hasScore = true
+                            isLoadingSong = false
                             val parsedTracks = mutableListOf<AlphaTrack>()
                             try {
                                 val arr = JSONArray(tracksJson)
@@ -2638,17 +2650,6 @@ private fun BangNhacScreenContent(
                         }
                     }
                 }
-
-                @JavascriptInterface
-                fun onScoreRendered() {
-                    mainHandler.post {
-                        // Bỏ qua callback trễ của bài cũ sau khi người dùng đã quay lại danh sách.
-                        if (currentSong != null && isLoadingSong) {
-                            hasScore = true
-                            isLoadingSong = false
-                        }
-                    }
-                }
             }, "AndroidInterface")
 
             // Trình duyệt khởi tạo với cờ DarkTheme hiện tại
@@ -2664,6 +2665,8 @@ private fun BangNhacScreenContent(
 
     LaunchedEffect(webView) {
         webViewInstance = webView
+        syncTabViewport(webView)
+        if (isTabJsReady.get()) dispatchPendingTabSong(webView)
     }
 
     // Gọi JS thay đổi giao diện mượt mà không tải lại nhạc
@@ -3630,6 +3633,7 @@ private fun BangNhacScreenContent(
         focusManager.clearFocus()
 
         currentSong = song
+        showTabBottomBanner = false
         isLoadingSong = true
         isPlaying = false
         isPlayerReady = false
@@ -3645,11 +3649,13 @@ private fun BangNhacScreenContent(
 
         val quotedFileUrl = JSONObject.quote(song.fileUrl)
         val quotedSongTitle = JSONObject.quote(resolveScoreFallbackTitle(song))
-        webViewInstance?.evaluateJavascript("javascript:stopPlayer();", null)
-        webViewInstance?.evaluateJavascript(
-            "javascript:loadScoreFromUrl($quotedFileUrl, $quotedSongTitle);",
-            null
+        pendingTabSongScript.set(
+            "javascript:if(typeof stopPlayer==='function')stopPlayer();" +
+                    "loadScoreFromUrl($quotedFileUrl, $quotedSongTitle);"
         )
+        if (isTabJsReady.get()) {
+            webViewInstance?.let(::dispatchPendingTabSong)
+        }
     }
 
     // Mở file GP trực tiếp từ bộ nhớ máy bằng Android Storage Access Framework.
@@ -3827,6 +3833,7 @@ private fun BangNhacScreenContent(
                                         // Dọn bản nhạc rồi quay lại đúng danh sách trước đó.
                                         currentSong = null
                                         hasScore = false
+                                        showTabBottomBanner = false
                                         isLoadingSong = false
                                         isPlaying = false
                                         isPlayerReady = false
@@ -3834,12 +3841,8 @@ private fun BangNhacScreenContent(
                                         bpmText = ""
                                         tracks = emptyList()
                                         localScorePayload.set(null)
-                                        webViewInstance?.evaluateJavascript(
-                                            "javascript:stopPlayer();" +
-                                                    "if(typeof cancelPendingScoreRender==='function'){" +
-                                                    "cancelPendingScoreRender();}",
-                                            null
-                                        )
+                                        pendingTabSongScript.set(null)
+                                        webViewInstance?.evaluateJavascript("javascript:stopPlayer();", null)
 
                                         searchSongs(
                                             section = selectedMusicSection,
@@ -4482,24 +4485,11 @@ private fun BangNhacScreenContent(
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = {
-                            // Tháo WebView khỏi parent cũ (nếu có) trước khi gắn vào View mới của Dialog.
+                            // Tháo WebView khỏi parent cũ (nếu có) trước khi gắn vào View mới của Dialog
                             (webView.parent as? android.view.ViewGroup)?.removeView(webView)
                             webView
                         },
-                        update = { target ->
-                            // update cũng chạy sau khi Compose đã đo được kích thước thật. Đây là
-                            // lớp dự phòng cho trường hợp WebView đã tải HTML trước khi được attach.
-                            target.post {
-                                if (target.width > 0 && target.height > 0) {
-                                    target.evaluateJavascript(
-                                        "javascript:if(typeof onAndroidViewportChanged==='function'){" +
-                                                "onAndroidViewportChanged(${target.width},${target.height});" +
-                                                "}",
-                                        null
-                                    )
-                                }
-                            }
-                        }
+                        update = { target -> syncTabViewport(target) }
                     )
 
                     // LỚP TRUNG GIAN 1: TRẠNG THÁI ĐANG TẢI / CHƯA CÓ DỮ LIỆU
@@ -5255,6 +5245,18 @@ private fun BangNhacScreenContent(
                         }
                     }
                 }
+
+                // Khong chiem chieu cao man hinh khi dang doc / choi TAB.
+                // Chi hien banner khi JS xac nhan nguoi dung da cuon den SAU ban nhac.
+                // Van giu banner ngoai WebView de khong can thiep AlphaTab va AdMob.
+                if (hasScore && showTabBottomBanner) {
+                    SongDetailBottomBannerAd(
+                        currentLang = currentLang,
+                        surfaceColor = if (localIsDark) Color.Black else surfaceColor,
+                        textColor = if (localIsDark) Color.White else textColor,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp)
+                    )
+                }
             }
         }
     }
@@ -5339,26 +5341,58 @@ private fun getAlphaTabHtml(
             <script src="https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/alphaTab.js"></script>
             <style id="dynamic-theme-style"></style>
             <style>
-                html, body { 
-                    margin: 0; padding: 0; 
-                    background: transparent; 
-                    overflow: hidden; 
+                html, body {
+                    margin: 0; padding: 0;
+                    width: 100%; height: 100%;
+                    min-width: 100%; min-height: 100%;
+                    background: transparent;
+                    overflow: hidden;
                 }
-                
-                .wrapper { 
-                    position: absolute; 
-                    top: 0; left: 0; right: 0; bottom: 0;
-                    overflow-y: auto; 
-                    overflow-x: hidden; 
-                    -webkit-overflow-scrolling: touch; 
+
+                body { position: relative; }
+
+                .wrapper {
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100vw; height: 100vh;
+                    min-height: 100vh;
+                    box-sizing: border-box;
+                    overflow-y: auto;
+                    overflow-x: hidden;
+                    -webkit-overflow-scrolling: touch;
                 }
-                
-                #alphatab-container { 
+
+                #alphatab-container {
                     position: relative;
-                    width: 100%; 
+                    width: 100%;
                     box-sizing: border-box;
                     margin-top: -10px;
-                    padding-bottom: 60vh; 
+                    padding-bottom: 60vh;
+                    filter: none !important;
+                }
+
+                /* Ban TAB ngan van cho phep cuon xuong sau bai de xem banner.
+                   Khong ap dung khi xuat PDF de tranh trang giay trang. */
+                body:not(.pdf-export-mode) #alphatab-container {
+                    min-height: calc(100vh + 150px);
+                }
+
+                /* Không tạo một GPU layer khổng lồ cho toàn bộ bài ở chế độ tối. */
+                body.tt-tab-dark:not(.pdf-export-mode) #alphatab-container svg:not(.tunertools-note-name-overlay) {
+                    filter: invert(1) hue-rotate(180deg);
+                }
+
+                body.tt-tab-dark:not(.pdf-export-mode) .tunertools-note-name {
+                    fill: #b8c2cd;
+                    stroke: rgba(0, 0, 0, 0.92);
+                }
+
+                body.tt-tab-dark:not(.pdf-export-mode) .tunertools-note-name.is-active {
+                    fill: #d0b9ff;
+                }
+
+                body.pdf-export-mode #alphatab-container svg {
+                    filter: none !important;
                 }
 
                 /*
@@ -5473,6 +5507,10 @@ private fun getAlphaTabHtml(
                         padding-bottom: 0 !important;
                     }
 
+                    #alphatab-container svg {
+                        filter: none !important;
+                    }
+
                     .at-cursor-bar,
                     .at-cursor-beat {
                         display: none !important;
@@ -5492,16 +5530,165 @@ private fun getAlphaTabHtml(
                 var pdfExportOriginalState = null;
                 var pdfExportReadyTimer = null;
                 var pdfExportFallbackTimer = null;
+                var alphaTabInitRetryTimer = null;
+                var lastAndroidViewportWidth = 0;
+                var lastAndroidViewportHeight = 0;
+                var lastSyncedCssViewportWidth = 0;
+
+                function syncWebViewViewportBox(androidWidth, androidHeight) {
+                    var root = document.documentElement;
+                    var body = document.body;
+                    var wrapper = document.getElementById('scroll-wrapper');
+                    if (!root || !body || !wrapper || isPdfExportMode) {
+                        return {
+                            width: wrapper ? wrapper.clientWidth : 0,
+                            height: wrapper ? wrapper.clientHeight : 0
+                        };
+                    }
+
+                    var dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+                    var physicalWidth = Math.max(0, Number(androidWidth) || 0);
+                    var physicalHeight = Math.max(0, Number(androidHeight) || 0);
+                    var cssWidth = Math.round(Number(window.innerWidth) || 0);
+                    var cssHeight = Math.round(Number(window.innerHeight) || 0);
+
+                    if (cssWidth <= 1 && physicalWidth > 0) cssWidth = Math.round(physicalWidth / dpr);
+                    if (cssHeight <= 1 && physicalHeight > 0) cssHeight = Math.round(physicalHeight / dpr);
+                    if (cssWidth <= 1) cssWidth = Math.round(Number(root.clientWidth) || 0);
+                    if (cssHeight <= 1) cssHeight = Math.round(Number(root.clientHeight) || 0);
+                    if (cssWidth <= 1 || cssHeight <= 1) {
+                        return { width: wrapper.clientWidth || 0, height: wrapper.clientHeight || 0 };
+                    }
+
+                    root.style.width = cssWidth + 'px';
+                    root.style.height = cssHeight + 'px';
+                    root.style.minHeight = cssHeight + 'px';
+                    body.style.width = cssWidth + 'px';
+                    body.style.height = cssHeight + 'px';
+                    body.style.minHeight = cssHeight + 'px';
+                    wrapper.style.position = 'fixed';
+                    wrapper.style.top = '0px';
+                    wrapper.style.left = '0px';
+                    wrapper.style.right = 'auto';
+                    wrapper.style.bottom = 'auto';
+                    wrapper.style.width = cssWidth + 'px';
+                    wrapper.style.height = cssHeight + 'px';
+                    wrapper.style.minHeight = cssHeight + 'px';
+
+                    return { width: wrapper.clientWidth || cssWidth, height: wrapper.clientHeight || cssHeight };
+                }
+
+                function onAndroidViewportChanged(width, height) {
+                    width = Math.max(0, Math.round(Number(width) || 0));
+                    height = Math.max(0, Math.round(Number(height) || 0));
+                    if (width > 0) lastAndroidViewportWidth = width;
+                    if (height > 0) lastAndroidViewportHeight = height;
+
+                    var previousWidth = lastSyncedCssViewportWidth;
+                    var viewport = syncWebViewViewportBox(width, height);
+                    if (viewport.width <= 1 || viewport.height <= 1) return;
+                    lastSyncedCssViewportWidth = viewport.width;
+
+                    if (!isApiReady || !api) {
+                        initAlphaTab(0);
+                    } else if (
+                        previousWidth > 0 &&
+                        previousWidth !== viewport.width &&
+                        api.score &&
+                        !isPdfExportMode
+                    ) {
+                        tabBannerLastScoreSvg = null;
+                        window.dispatchEvent(new Event('resize'));
+                    }
+                    // Re-evaluate when Compose inserts/removes the ad and changes
+                    // WebView height. The two thresholds prevent visibility loops.
+                    if (isApiReady) requestAnimationFrame(updateTabBannerAtScroll);
+                }
+
+                // Vi tri banner dua vao khuong nhac SVG cuoi cung, KHONG dua vao
+                // padding-bottom 60vh hoac min-height cua #alphatab-container.
+                // Hai khoang trong CSS do khong phai la noi dung bai hat.
+                var tabBannerVisible = false;
+                var tabBannerManuallyScrolled = false;
+                var tabBannerPreviousScrollTop = 0;
+                var tabBannerLastScoreSvg = null;
+
+                function notifyTabBannerVisibility(visible) {
+                    visible = !!visible;
+                    if (visible === tabBannerVisible) return;
+                    tabBannerVisible = visible;
+                    if (window.AndroidInterface &&
+                        typeof window.AndroidInterface.onTabBottomBannerVisibilityChanged === 'function') {
+                        window.AndroidInterface.onTabBottomBannerVisibilityChanged(visible);
+                    }
+                }
+
+                function resetTabBannerForScore() {
+                    tabBannerManuallyScrolled = false;
+                    tabBannerPreviousScrollTop = 0;
+                    tabBannerLastScoreSvg = null;
+                    notifyTabBannerVisibility(false);
+                }
+
+                function findLastScoreSvg(score) {
+                    if (tabBannerLastScoreSvg && score.contains(tabBannerLastScoreSvg)) {
+                        return tabBannerLastScoreSvg;
+                    }
+                    // AlphaTab ve cac he khuong thanh SVG. Loai tru overlay ten not
+                    // va cac SVG dieu khien nho khong phai khuong nhac.
+                    var svgList = score.querySelectorAll('svg:not(.tunertools-note-name-overlay)');
+                    for (var i = svgList.length - 1; i >= 0; i--) {
+                        var rect = svgList[i].getBoundingClientRect();
+                        if (rect.width >= 60 && rect.height >= 20) {
+                            tabBannerLastScoreSvg = svgList[i];
+                            return tabBannerLastScoreSvg;
+                        }
+                    }
+                    return null;
+                }
+
+                function updateTabBannerAtScroll() {
+                    var wrapper = document.getElementById('scroll-wrapper');
+                    var score = document.getElementById('alphatab-container');
+                    if (!wrapper || !score || !api || !api.score ||
+                        isScoreLoading || isPdfExportMode) {
+                        notifyTabBannerVisibility(false);
+                        return;
+                    }
+
+                    var lastSvg = findLastScoreSvg(score);
+                    if (!lastSvg) {
+                        notifyTabBannerVisibility(false);
+                        return;
+                    }
+
+                    var viewportTop = wrapper.getBoundingClientRect().top;
+                    var visibleBottom = wrapper.scrollTop + wrapper.clientHeight;
+                    var songEnd = lastSvg.getBoundingClientRect().bottom -
+                        viewportTop + wrapper.scrollTop;
+
+                    // Khi phan cuoi khuong nhac da nam trong khung nhin, banner
+                    // xuat hien. Khi banner lam WebView thap xuong, giu nguong
+                    // an cach xa hon de tranh nhap nhay do resize.
+                    var threshold = tabBannerVisible ? songEnd - 200 : songEnd - 18;
+                    var maxScrollTop = Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
+                    var minimumScrollTop = Math.min(56, Math.max(16, maxScrollTop - 16));
+                    notifyTabBannerVisibility(
+                        tabBannerManuallyScrolled &&
+                        wrapper.scrollTop >= minimumScrollTop &&
+                        visibleBottom >= threshold
+                    );
+                }
 
                 // Hàm thay đổi giao diện động
                 function toggleTheme(isDarkTheme) {
                     currentThemeIsDark = !!isDarkTheme;
                     var container = document.getElementById('alphatab-container');
-                    if(container) {
-                        container.style.filter = (isPdfExportMode || !currentThemeIsDark)
-                            ? ''
-                            : 'invert(1) hue-rotate(180deg)';
-                    }
+                    if (container) container.style.filter = 'none';
+                    document.body.classList.toggle(
+                        'tt-tab-dark',
+                        currentThemeIsDark && !isPdfExportMode
+                    );
 
                     var fallbackTitleElement = document.getElementById('tunertools-score-title-fallback');
                     if (fallbackTitleElement) {
@@ -5526,8 +5713,9 @@ private fun getAlphaTabHtml(
                     }
                 }
                 
-                // Set màu ngay khi tải lần đầu
+                // Set màu và kích thước thật ngay khi tải lần đầu.
                 toggleTheme($isDarkInitial);
+                syncWebViewViewportBox(0, 0);
 
                 var api = null;
                 var currentTracks = [];
@@ -5541,15 +5729,6 @@ private fun getAlphaTabHtml(
                 var soundFontLoadFailedPrefix = $quotedSoundFontLoadFailedPrefix;
                 var standardSoundFontUrl = $quotedStandardSoundFontUrl;
                 var isScoreLoading = false;
-                var scoreAwaitingFirstRender = false;
-                var scoreRenderRecoveryTimer = null;
-                var scoreRenderRecoveryAttempts = 0;
-                var isScoreRenderInProgress = false;
-                var scoreRenderStartedAt = 0;
-                var lastAndroidViewportWidth = 0;
-                var lastAndroidViewportHeight = 0;
-                var viewportSyncTimer = null;
-                var alphaTabInitRetryTimer = null;
                 var lastKnownPlayerState = 0;
                 var autoPlayAfterSoundFontReady = false;
                 var autoFallbackInProgress = false;
@@ -6874,6 +7053,7 @@ private fun getAlphaTabHtml(
                         };
 
                         api.stop();
+                        notifyTabBannerVisibility(false);
                         isPdfExportMode = true;
                         pdfExportWaitingForRender = true;
                         document.documentElement.classList.add('pdf-export-mode');
@@ -6913,6 +7093,10 @@ private fun getAlphaTabHtml(
                     isPdfExportMode = false;
                     document.documentElement.classList.remove('pdf-export-mode');
                     document.body.classList.remove('pdf-export-mode');
+                    syncWebViewViewportBox(
+                        lastAndroidViewportWidth,
+                        lastAndroidViewportHeight
+                    );
 
                     try {
                         if (api && api.score && pdfExportOriginalState) {
@@ -7138,152 +7322,43 @@ private fun getAlphaTabHtml(
                     }
                 }
 
-                function hasVisibleRenderedScore() {
-                    var container = document.getElementById('alphatab-container');
-                    if (!container) return false;
-
-                    var scoreSvgs = container.querySelectorAll('svg');
-                    for (var i = 0; i < scoreSvgs.length; i++) {
-                        var svg = scoreSvgs[i];
-                        var rect = svg.getBoundingClientRect();
-                        if (rect.width <= 8 || rect.height <= 24) continue;
-
-                        if (
-                            svg.querySelectorAll(
-                                'path, line, polyline, polygon, text, use, rect, circle, ellipse'
-                            ).length > 4
-                        ) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
-                function finishFirstScoreRenderIfVisible() {
-                    if (!scoreAwaitingFirstRender || !hasVisibleRenderedScore()) return false;
-
-                    scoreAwaitingFirstRender = false;
-                    scoreRenderRecoveryAttempts = 0;
-                    clearTimeout(scoreRenderRecoveryTimer);
-                    AndroidInterface.onScoreRendered();
-                    return true;
-                }
-
-                function cancelPendingScoreRender() {
-                    scoreAwaitingFirstRender = false;
-                    scoreRenderRecoveryAttempts = 0;
-                    isScoreRenderInProgress = false;
-                    scoreRenderStartedAt = 0;
-                    clearTimeout(scoreRenderRecoveryTimer);
-                    clearTimeout(viewportSyncTimer);
-                }
-
-                function scheduleScoreRenderRecovery(delayMs) {
-                    clearTimeout(scoreRenderRecoveryTimer);
-                    scoreRenderRecoveryTimer = setTimeout(function() {
-                        if (!scoreAwaitingFirstRender || !api || !api.score || isPdfExportMode) {
-                            return;
-                        }
-
-                        if (finishFirstScoreRenderIfVisible()) return;
-
-                        if (scoreRenderRecoveryAttempts >= 15) {
-                            cancelPendingScoreRender();
-                            AndroidInterface.onScoreLoaded(
-                                "[]",
-                                "Lỗi hiển thị bản nhạc: WebView không tạo được khuông nhạc."
-                            );
-                            return;
-                        }
-
-                        // Không ngắt một bản nhạc lớn đang render bình thường. Chỉ can thiệp nếu
-                        // render đã treo quá lâu mà DOM vẫn chưa có khuông nhạc.
-                        if (
-                            isScoreRenderInProgress &&
-                            Date.now() - scoreRenderStartedAt < 12000
-                        ) {
-                            scheduleScoreRenderRecovery(500);
-                            return;
-                        }
-
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        var container = document.getElementById('alphatab-container');
-                        var width = wrapper ? wrapper.clientWidth : 0;
-                        var height = wrapper ? wrapper.clientHeight : 0;
-
-                        if (width <= 1 || height <= 1 || !container) {
-                            scoreRenderRecoveryAttempts++;
-                            scheduleScoreRenderRecovery(
-                                Math.min(1800, 250 + scoreRenderRecoveryAttempts * 180)
-                            );
-                            return;
-                        }
-
-                        // Buộc alphaTab nhận kích thước thật của WebView rồi render lại.
-                        // Không gọi API private triggerResize; resize event kích hoạt cơ chế
-                        // tự đo của alphaTab và listener phía dưới sẽ render đúng một lần.
-                        window.dispatchEvent(new Event('resize'));
-
-                        scoreRenderRecoveryAttempts++;
-                        scheduleScoreRenderRecovery(
-                            Math.min(1800, 450 + scoreRenderRecoveryAttempts * 220)
-                        );
-                    }, Math.max(0, Number(delayMs) || 0));
-                }
-
-                function onAndroidViewportChanged(width, height) {
-                    width = Math.max(0, Math.round(Number(width) || 0));
-                    height = Math.max(0, Math.round(Number(height) || 0));
-                    if (width <= 0 || height <= 0) return;
-
-                    var sizeChanged =
-                        width !== lastAndroidViewportWidth ||
-                        height !== lastAndroidViewportHeight;
-                    lastAndroidViewportWidth = width;
-                    lastAndroidViewportHeight = height;
-
-                    // AndroidView.update có thể chạy lại do state Compose khác thay đổi. Không
-                    // render lại bản nhạc nếu kích thước giữ nguyên và không chờ render đầu tiên.
-                    if (!sizeChanged && !scoreAwaitingFirstRender) return;
-
-                    clearTimeout(viewportSyncTimer);
-                    viewportSyncTimer = setTimeout(function() {
-                        if (!api || !isApiReady) return;
-
-                        // alphaTab đăng ký resize listener trên cửa sổ. WebView tải khi chưa attach
-                        // không phải lúc nào cũng phát sự kiện này, nên Android chủ động gửi lại.
-                        window.dispatchEvent(new Event('resize'));
-
-                        if (scoreAwaitingFirstRender) {
-                            scheduleScoreRenderRecovery(sizeChanged ? 220 : 320);
-                        }
-                    }, sizeChanged ? 40 : 120);
-                }
-
                 function initAlphaTab(attempt) {
                     attempt = Number(attempt) || 0;
                     if (isApiReady || api) return;
 
                     var wrapper = document.getElementById('scroll-wrapper');
                     var container = document.getElementById('alphatab-container');
+                    var viewport = syncWebViewViewportBox(
+                        lastAndroidViewportWidth,
+                        lastAndroidViewportHeight
+                    );
+
                     if (
                         !wrapper ||
                         !container ||
-                        wrapper.clientWidth <= 1 ||
-                        wrapper.clientHeight <= 1
+                        typeof alphaTab === 'undefined' ||
+                        viewport.width <= 1 ||
+                        viewport.height <= 1
                     ) {
                         clearTimeout(alphaTabInitRetryTimer);
                         alphaTabInitRetryTimer = setTimeout(function() {
                             initAlphaTab(attempt + 1);
-                        }, Math.min(500, 50 + attempt * 10));
+                        }, attempt < 20 ? 100 : 250);
                         return;
                     }
 
+                    clearTimeout(alphaTabInitRetryTimer);
                     installDetachedTabRhythmPatch();
                     
                     wrapper.addEventListener('touchstart', function() {
                         isUserScrolling = true;
                         clearTimeout(scrollTimeout);
+                    }, { passive: true });
+
+                    wrapper.addEventListener('touchmove', function() {
+                        // WebView co the phat scroll sau touchmove (inertia/fling).
+                        // Ghi nhan thao tac thuc, khong phu thuoc event scroll dau tien.
+                        if (wrapper.scrollTop > 0) tabBannerManuallyScrolled = true;
                     }, { passive: true });
 
                     wrapper.addEventListener('touchend', function() {
@@ -7294,6 +7369,18 @@ private fun getAlphaTabHtml(
                         isUserScrolling = true;
                         clearTimeout(scrollTimeout);
                         scrollTimeout = setTimeout(function() { isUserScrolling = false; }, 3000);
+                    }, { passive: true });
+
+                    wrapper.addEventListener('scroll', function() {
+                        var newScrollTop = Math.max(0, wrapper.scrollTop);
+                        // AlphaTab tu cuon theo not dang phat khong duoc tinh
+                        // la nguoi dung chu dong cuon den cuoi bai.
+                        if (isUserScrolling &&
+                            newScrollTop > tabBannerPreviousScrollTop + 0.5) {
+                            tabBannerManuallyScrolled = true;
+                        }
+                        tabBannerPreviousScrollTop = newScrollTop;
+                        updateTabBannerAtScroll();
                     }, { passive: true });
 
                     api = new alphaTab.AlphaTabApi(document.getElementById('alphatab-container'), {
@@ -7325,11 +7412,14 @@ private fun getAlphaTabHtml(
                             rhythmHeight: 25,
                             elements: { scoreTitle: true }
                         },
-                        player: { 
+                        player: {
                             enablePlayer: true,
                             enableCursor: true,
                             soundFont: $quotedInitialSoundFontUrl,
-                            scrollElement: wrapper
+                            scrollElement: wrapper,
+                            // Không để alphaTab tự nhảy tới khuông đầu khi vừa tạo cursor.
+                            // Cuộn theo khuông lúc phát được xử lý bởi playerPositionChanged.
+                            scrollMode: 'Off'
                         }
                     });
 
@@ -7387,7 +7477,9 @@ private fun getAlphaTabHtml(
                     });
 
                     api.playerPositionChanged.on(function(e) {
-                        if (isUserScrolling) return;
+                        // Sự kiện này cũng phát sinh khi MIDI/cursor vừa khởi tạo.
+                        // Chỉ tự cuộn khi người dùng đã thật sự bấm Play.
+                        if (isUserScrolling || lastKnownPlayerState !== 1) return;
 
                         var cursor = document.querySelector('.at-cursor-beat');
                         if (cursor) {
@@ -7407,7 +7499,6 @@ private fun getAlphaTabHtml(
 
                         if (isScoreLoading) {
                             isScoreLoading = false;
-                            cancelPendingScoreRender();
                             AndroidInterface.onScoreLoaded("[]", message);
                         } else if (isSoundFontLoading || pendingSoundFontMode) {
                             var failedMode = pendingSoundFontMode ||
@@ -7420,35 +7511,17 @@ private fun getAlphaTabHtml(
                             isSoundFontLoading = false;
                             AndroidInterface.onSoundFontLoadFailed(failedMode, message);
                         } else {
-                            cancelPendingScoreRender();
                             AndroidInterface.onScoreLoaded("[]", message);
                         }
                     });
-
-                    if (api.renderStarted && typeof api.renderStarted.on === 'function') {
-                        api.renderStarted.on(function() {
-                            isScoreRenderInProgress = true;
-                            scoreRenderStartedAt = Date.now();
-                        });
-                    }
 
                     // Kiểm tra lại đúng kích thước SVG sau khi alphaTab đã gắn kết quả
                     // vào DOM. Nếu font thực tế vẫn rộng hơn màn hình thì tự co thêm.
                     var completedRenderEvent = api.postRenderFinished || api.renderFinished;
                     if (completedRenderEvent && typeof completedRenderEvent.on === 'function') {
                         completedRenderEvent.on(function() {
-                            isScoreRenderInProgress = false;
-                            scoreRenderStartedAt = 0;
                             verifyRenderedTitleFits();
                             renderNoteNameOverlay();
-
-                            // scoreLoaded chỉ xác nhận dữ liệu đã được đọc. Chỉ mở giao diện điều
-                            // khiển sau khi SVG thực sự xuất hiện trong DOM của WebView.
-                            requestAnimationFrame(function() {
-                                if (!finishFirstScoreRenderIfVisible() && scoreAwaitingFirstRender) {
-                                    scheduleScoreRenderRecovery(180);
-                                }
-                            });
 
                             // Mỗi lần mở bài mới phải quay về đúng đầu bản nhạc để người dùng
                             // nhìn thấy tiêu đề. Không áp dụng khi chỉ đổi track hoặc đổi chế độ.
@@ -7457,6 +7530,10 @@ private fun getAlphaTabHtml(
                                 var renderedWrapper = document.getElementById('scroll-wrapper');
                                 if (renderedWrapper) renderedWrapper.scrollTop = 0;
                             }
+
+                            // Sau khi alphaTab ve lai, SVG cuoi co the da bi thay the.
+                            tabBannerLastScoreSvg = null;
+                            setTimeout(updateTabBannerAtScroll, 50);
 
                             if (pdfExportWaitingForRender) {
                                 // Đợi tiêu đề và các SVG ổn định; nếu alphaTab render lại,
@@ -7471,9 +7548,6 @@ private fun getAlphaTabHtml(
 
                     api.scoreLoaded.on(function(score) {
                         isScoreLoading = false;
-                        scoreAwaitingFirstRender = true;
-                        scoreRenderRecoveryAttempts = 0;
-                        clearTimeout(scoreRenderRecoveryTimer);
                         soundFontCompatibilityScoreGeneration++;
                         resetSoundFontCompatibilityState();
                         autoFallbackInProgress = false;
@@ -7500,10 +7574,6 @@ private fun getAlphaTabHtml(
                         var title = String(score.title || currentScoreTitle || 'Bài nhạc').trim();
                         AndroidInterface.onScoreLoaded(JSON.stringify(tracksData), title);
 
-                        // Nếu lần render tự động ban đầu chạy khi WebView chưa có kích thước,
-                        // watchdog sẽ phát resize và render lại sau khi Compose đã đo xong.
-                        scheduleScoreRenderRecovery(350);
-
                         // Một số bản alphaTab không tạo header nếu file gốc không có metadata.
                         // Kiểm tra lại sau render; nếu vẫn thiếu thì hiển thị title dự phòng
                         // ngay trong vùng bản nhạc, phía trên khuông đầu tiên.
@@ -7518,22 +7588,13 @@ private fun getAlphaTabHtml(
                         clearTimeout(titleResizeTimer);
                         titleResizeTimer = setTimeout(function() {
                             if (!api || !api.score || isPdfExportMode) return;
-
-                            // Cập nhật font theo chiều rộng mới rồi render đúng một lần.
-                            applyResponsiveSongHeader(api.score, false);
-                            api.render();
-
-                            if (scoreAwaitingFirstRender) {
-                                scheduleScoreRenderRecovery(320);
-                            }
+                            applyResponsiveSongHeader(api.score, true);
                         }, 180);
                     });
 
                     isApiReady = true;
-                    onAndroidViewportChanged(
-                        wrapper.clientWidth || window.innerWidth || 0,
-                        wrapper.clientHeight || window.innerHeight || 0
-                    );
+                    lastSyncedCssViewportWidth = wrapper.clientWidth || lastSyncedCssViewportWidth;
+                    AndroidInterface.onTabReady();
                 }
                 
                 async function loadScoreFromUrl(fileUrl, fallbackTitle) {
@@ -7549,6 +7610,7 @@ private fun getAlphaTabHtml(
                             .replace(/\s+/g, ' ')
                             .trim();
                         hideFallbackScoreTitle();
+                        resetTabBannerForScore();
                         scrollToTopAfterNextRender = true;
 
                         // Xóa vị trí cuộn của bài trước ngay khi bắt đầu tải. Sau lần render
@@ -7557,11 +7619,6 @@ private fun getAlphaTabHtml(
                         if (wrapper) wrapper.scrollTop = 0;
 
                         isScoreLoading = true;
-                        scoreAwaitingFirstRender = false;
-                        scoreRenderRecoveryAttempts = 0;
-                        isScoreRenderInProgress = false;
-                        scoreRenderStartedAt = 0;
-                        clearTimeout(scoreRenderRecoveryTimer);
                         resetSoundFontCompatibilityState();
                         autoFallbackInProgress = false;
                         autoPlayAfterSoundFontReady = false;
@@ -7571,7 +7628,6 @@ private fun getAlphaTabHtml(
                         api.load(new Uint8Array(buffer));
                     } catch (err) {
                         isScoreLoading = false;
-                        cancelPendingScoreRender();
                         AndroidInterface.onScoreLoaded("[]", "Lỗi Fetch JS: " + err.message);
                     }
                 }
@@ -7612,10 +7668,19 @@ private fun getAlphaTabHtml(
                 }
                 function stopPlayer() {
                     resetSoundFontCompatibilityState();
-                    api.stop();
+                    if (api) api.stop();
                 }
 
-                window.onload = initAlphaTab;
+                window.addEventListener('load', function() {
+                    syncWebViewViewportBox(
+                        lastAndroidViewportWidth,
+                        lastAndroidViewportHeight
+                    );
+                    initAlphaTab(0);
+                });
+                if (document.readyState === 'complete') {
+                    setTimeout(function() { initAlphaTab(0); }, 0);
+                }
             </script>
         </body>
         </html>
