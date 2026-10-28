@@ -1,4 +1,34 @@
-py import_songsterr.py import --source "C:\inetpub\wwwroot\tab" --original "C:\inetpub\wwwroot\tab\songsterr_database.db" --db "gp_fresh_1600000.db"
+C:\TunerToolsGP_Fresh>py import_songsterr.py import --source "C:\inetpub\wwwroot\tab" --original "C:\inetpub\wwwroot\tab\songsterr_database.db" --db "gp_fresh_1600000.db"
+Import original metadata. This process does NOT upload files.
+  Read 100,000 | Inserted 99,887 | Missing physical files 31
+  Read 200,000 | Inserted 199,847 | Missing physical files 31
+  Read 300,000 | Inserted 299,730 | Missing physical files 33
+  Read 400,000 | Inserted 399,551 | Missing physical files 34
+  Read 500,000 | Inserted 499,332 | Missing physical files 35
+  Read 600,000 | Inserted 598,932 | Missing physical files 37
+  Read 700,000 | Inserted 697,880 | Missing physical files 38
+  Read 800,000 | Inserted 797,077 | Missing physical files 42
+  Read 900,000 | Inserted 896,504 | Missing physical files 46
+  Read 1,000,000 | Inserted 995,800 | Missing physical files 48
+  Read 1,100,000 | Inserted 1,095,190 | Missing physical files 48
+  Read 1,200,000 | Inserted 1,194,306 | Missing physical files 49
+  Read 1,300,000 | Inserted 1,293,371 | Missing physical files 72
+  Read 1,400,000 | Inserted 1,392,023 | Missing physical files 73
+  Read 1,500,000 | Inserted 1,490,452 | Missing physical files 73
+  Read 1,600,000 | Inserted 1,589,047 | Missing physical files 76
+=== IMPORT SUMMARY ===
+scanned: 1,650,639
+inserted: 1,638,763
+missing_id: 1
+missing_path: 0
+unsafe_path: 0
+missing_file: 76
+invalid_ext: 0
+duplicates: 11,799
+Missing-file examples: C:\TunerToolsGP_Fresh\songsterr_import_missing_samples.csv
+Tong ban ghi: 1,638,763 | Da co Drive ID: 0 | Con lai: 1,638,763
+  Root Drive ID: (chua tao)
+NEXT: run tt_gp_bulk.py scan to add unlisted physical files and rebuild FTS5.
+No uploads performed. Original DB was opened read-only.
 
-
-py tt_gp_bulk.py status --db "gp_fresh_1600000.db"
+C:\TunerToolsGP_Fresh>
