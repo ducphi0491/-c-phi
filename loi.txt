@@ -1,1 +1,14 @@
-dir drive_token.json credentials.json
+C:\TunerToolsGP_Fresh>dir drive_token.json credentials.json
+ Volume in drive C has no label.
+ Volume Serial Number is 68CD-32E9
+
+ Directory of C:\TunerToolsGP_Fresh
+
+05-10-2026  23:11               726 drive_token.json
+
+ Directory of C:\TunerToolsGP_Fresh
+
+               1 File(s)            726 bytes
+               0 Dir(s)   5,813,047,296 bytes free
+
+C:\TunerToolsGP_Fresh>
