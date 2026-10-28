@@ -1,1 +1,2 @@
 py -u tt_gp_bulk.py upload --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --workers 8 --rate 3.0 --limit 0 --yes
+dir C:\TunerToolsGP_Fresh\gp_fresh_1600000.db
