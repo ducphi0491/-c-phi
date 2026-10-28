@@ -1,1 +1,3 @@
 py -u tt_gp_bulk.py upload --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --workers 6 --rate 2.5 --limit 300 --yes
+
+py -c "import sqlite3; c=sqlite3.connect('gp_fresh_1600000.db'); print('Thu muc Drive da tao:',c.execute('SELECT COUNT(*) FROM bulk_meta WHERE key LIKE ?',('drive_shard_%',)).fetchone()[0],'/256'); c.close()"
