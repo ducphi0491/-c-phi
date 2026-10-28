@@ -1,12 +1,3 @@
-C:\TunerToolsGP_Fresh>py tt_gp_bulk.py auth
-Mo trinh duyet de dang nhap tai khoan Drive se luu file.
-Please visit this URL to authorize this application: https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=263677770333-ni4ka86q520a987phltmlpunhftb9p1c.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A61060%2F&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file&state=6myovIyjMejI5i5Dxigs0uNZmak5Qe&code_challenge=1m8slHY1q2fl7wIhr1tBzUXjsHrM7rGhHn_Iv5K-eoA&code_challenge_method=S256&access_type=offline
-C:\Program Files\Python311\Lib\site-packages\google\api_core\_python_version_support.py:254: FutureWarning: You are using a Python version (3.11.9) which Google will stop supporting in new releases of google.api_core once it reaches its end of life (2027-10-24). Please upgrade to the latest Python version, or at least Python 3.12, to continue receiving updates for google.api_core past that date.
-  warnings.warn(message, FutureWarning)
-Google Drive API dang hoat dong.
-Tai khoan: ducphi0491@gmail.com
-Dung luong cho phep (GB): 5497.56
-Dung luong da dung (GB): 6.16
-KHONG chia se drive_token.json, credentials.json len chat, web hay Git.
-
-C:\TunerToolsGP_Fresh>
+py tt_gp_bulk.py upload --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --workers 4 --rate 2.5 --limit 100 --yes
+py tt_gp_bulk.py status --db "gp_fresh_1600000.db"
+py tt_gp_bulk.py verify --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --sample 20
