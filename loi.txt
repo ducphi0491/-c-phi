@@ -1,5 +1,4 @@
-C:\TunerToolsGP_Fresh>py tt_gp_bulk.py status --db "gp_fresh_1600000.db"
-Tong ban ghi: 0 | Da co Drive ID: 0 | Con lai: 0
-  Root Drive ID: (chua tao)
+py import_songsterr.py import --source "C:\inetpub\wwwroot\tab" --original "C:\inetpub\wwwroot\tab\songsterr_database.db" --db "gp_fresh_1600000.db"
 
-C:\TunerToolsGP_Fresh>
+
+py tt_gp_bulk.py status --db "gp_fresh_1600000.db"
