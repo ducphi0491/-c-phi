@@ -1,3 +1,117 @@
-py tt_gp_bulk.py verify --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --sample 100
+C:\TunerToolsGP_Fresh>py -u tt_gp_bulk.py upload --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --workers 4 --rate 2.5 --limit 10000 --yes
+C:\Program Files\Python311\Lib\site-packages\google\api_core\_python_version_support.py:254: FutureWarning: You are using a Python version (3.11.9) which Google will stop supporting in new releases of google.api_core once it reaches its end of life (2027-10-24). Please upgrade to the latest Python version, or at least Python 3.12, to continue receiving updates for google.api_core past that date.
+  warnings.warn(message, FutureWarning)
+Dang tai len Drive: ducphi0491@gmail.com
+[DEDUP] Dang tim duong dan trung (khong upload)...
+  Kiem tra 500,000 ban ghi...
+  Kiem tra 1,000,000 ban ghi...
+  Kiem tra 1,500,000 ban ghi...
+[DEDUP] Nhom cung file: 2,937 | Ban ghi alias: 2,963 | Co the dung lai Drive ID: 0 | Nhom da co >1 Drive ID: 0 | Khong xac minh duoc: 0 | 10.2s
+Su dung thu muc da tao: TunerTools_GP_FRESH_1M6_20261028_173202 (1ItcS-AJqnnH2iKrBhBn33qU774EUtwxF)
+Xu ly 100 | Thanh cong 100 | Loi 0 | 1.74 file/s
+Xu ly 200 | Thanh cong 200 | Loi 0 | 1.78 file/s
+Xu ly 300 | Thanh cong 300 | Loi 0 | 1.79 file/s
+Xu ly 400 | Thanh cong 400 | Loi 0 | 1.79 file/s
+Xu ly 500 | Thanh cong 500 | Loi 0 | 1.78 file/s
+Xu ly 600 | Thanh cong 600 | Loi 0 | 1.77 file/s
+Xu ly 700 | Thanh cong 700 | Loi 0 | 1.76 file/s
+Xu ly 800 | Thanh cong 800 | Loi 0 | 1.76 file/s
+Xu ly 900 | Thanh cong 900 | Loi 0 | 1.76 file/s
+Xu ly 1,000 | Thanh cong 1,000 | Loi 0 | 1.76 file/s
+Xu ly 1,100 | Thanh cong 1,100 | Loi 0 | 1.77 file/s
+Xu ly 1,200 | Thanh cong 1,200 | Loi 0 | 1.77 file/s
+Xu ly 1,300 | Thanh cong 1,300 | Loi 0 | 1.78 file/s
+Xu ly 1,400 | Thanh cong 1,400 | Loi 0 | 1.78 file/s
+Xu ly 1,500 | Thanh cong 1,500 | Loi 0 | 1.79 file/s
+Xu ly 1,600 | Thanh cong 1,600 | Loi 0 | 1.79 file/s
+Xu ly 1,700 | Thanh cong 1,700 | Loi 0 | 1.79 file/s
+Xu ly 1,800 | Thanh cong 1,800 | Loi 0 | 1.79 file/s
+Xu ly 1,900 | Thanh cong 1,900 | Loi 0 | 1.79 file/s
+Xu ly 2,000 | Thanh cong 2,000 | Loi 0 | 1.79 file/s
+Xu ly 2,100 | Thanh cong 2,100 | Loi 0 | 1.79 file/s
+Xu ly 2,200 | Thanh cong 2,200 | Loi 0 | 1.79 file/s
+Xu ly 2,300 | Thanh cong 2,300 | Loi 0 | 1.76 file/s
+Xu ly 2,400 | Thanh cong 2,400 | Loi 0 | 1.77 file/s
+Xu ly 2,500 | Thanh cong 2,500 | Loi 0 | 1.76 file/s
+Xu ly 2,600 | Thanh cong 2,600 | Loi 0 | 1.77 file/s
+Xu ly 2,700 | Thanh cong 2,700 | Loi 0 | 1.77 file/s
+Xu ly 2,800 | Thanh cong 2,800 | Loi 0 | 1.77 file/s
+Xu ly 2,900 | Thanh cong 2,900 | Loi 0 | 1.78 file/s
+Xu ly 3,000 | Thanh cong 3,000 | Loi 0 | 1.78 file/s
+Xu ly 3,100 | Thanh cong 3,100 | Loi 0 | 1.78 file/s
+Xu ly 3,200 | Thanh cong 3,200 | Loi 0 | 1.78 file/s
+Xu ly 3,300 | Thanh cong 3,300 | Loi 0 | 1.75 file/s
+Xu ly 3,400 | Thanh cong 3,400 | Loi 0 | 1.75 file/s
+Xu ly 3,500 | Thanh cong 3,500 | Loi 0 | 1.75 file/s
+Xu ly 3,600 | Thanh cong 3,600 | Loi 0 | 1.75 file/s
+Xu ly 3,700 | Thanh cong 3,700 | Loi 0 | 1.75 file/s
+Xu ly 3,800 | Thanh cong 3,800 | Loi 0 | 1.76 file/s
+Xu ly 3,900 | Thanh cong 3,900 | Loi 0 | 1.76 file/s
+Xu ly 4,000 | Thanh cong 4,000 | Loi 0 | 1.76 file/s
+Xu ly 4,100 | Thanh cong 4,100 | Loi 0 | 1.76 file/s
+Xu ly 4,200 | Thanh cong 4,200 | Loi 0 | 1.76 file/s
+Xu ly 4,300 | Thanh cong 4,300 | Loi 0 | 1.76 file/s
+Xu ly 4,400 | Thanh cong 4,400 | Loi 0 | 1.77 file/s
+Xu ly 4,500 | Thanh cong 4,500 | Loi 0 | 1.77 file/s
+Xu ly 4,600 | Thanh cong 4,600 | Loi 0 | 1.77 file/s
+Xu ly 4,700 | Thanh cong 4,700 | Loi 0 | 1.77 file/s
+Xu ly 4,800 | Thanh cong 4,800 | Loi 0 | 1.77 file/s
+Xu ly 4,900 | Thanh cong 4,900 | Loi 0 | 1.77 file/s
+Xu ly 5,000 | Thanh cong 5,000 | Loi 0 | 1.77 file/s
+Xu ly 5,100 | Thanh cong 5,100 | Loi 0 | 1.78 file/s
+Xu ly 5,200 | Thanh cong 5,200 | Loi 0 | 1.78 file/s
+Xu ly 5,300 | Thanh cong 5,300 | Loi 0 | 1.78 file/s
+Xu ly 5,400 | Thanh cong 5,400 | Loi 0 | 1.78 file/s
+Xu ly 5,500 | Thanh cong 5,500 | Loi 0 | 1.78 file/s
+Xu ly 5,600 | Thanh cong 5,600 | Loi 0 | 1.78 file/s
+Xu ly 5,700 | Thanh cong 5,700 | Loi 0 | 1.78 file/s
+Xu ly 5,800 | Thanh cong 5,800 | Loi 0 | 1.78 file/s
+Xu ly 5,900 | Thanh cong 5,900 | Loi 0 | 1.78 file/s
+Xu ly 6,000 | Thanh cong 6,000 | Loi 0 | 1.78 file/s
+Xu ly 6,100 | Thanh cong 6,100 | Loi 0 | 1.78 file/s
+Xu ly 6,200 | Thanh cong 6,200 | Loi 0 | 1.78 file/s
+Xu ly 6,300 | Thanh cong 6,300 | Loi 0 | 1.78 file/s
+Xu ly 6,400 | Thanh cong 6,400 | Loi 0 | 1.78 file/s
+Xu ly 6,500 | Thanh cong 6,500 | Loi 0 | 1.78 file/s
+Xu ly 6,600 | Thanh cong 6,600 | Loi 0 | 1.78 file/s
+Xu ly 6,700 | Thanh cong 6,700 | Loi 0 | 1.78 file/s
+Xu ly 6,800 | Thanh cong 6,800 | Loi 0 | 1.78 file/s
+Xu ly 6,900 | Thanh cong 6,900 | Loi 0 | 1.78 file/s
+Xu ly 7,000 | Thanh cong 7,000 | Loi 0 | 1.78 file/s
+Xu ly 7,100 | Thanh cong 7,100 | Loi 0 | 1.78 file/s
+Xu ly 7,200 | Thanh cong 7,200 | Loi 0 | 1.78 file/s
+Xu ly 7,300 | Thanh cong 7,300 | Loi 0 | 1.78 file/s
+Xu ly 7,400 | Thanh cong 7,400 | Loi 0 | 1.78 file/s
+Xu ly 7,500 | Thanh cong 7,500 | Loi 0 | 1.78 file/s
+Xu ly 7,600 | Thanh cong 7,600 | Loi 0 | 1.78 file/s
+Xu ly 7,700 | Thanh cong 7,700 | Loi 0 | 1.78 file/s
+Xu ly 7,800 | Thanh cong 7,800 | Loi 0 | 1.78 file/s
+Xu ly 7,900 | Thanh cong 7,900 | Loi 0 | 1.78 file/s
+Xu ly 8,000 | Thanh cong 8,000 | Loi 0 | 1.78 file/s
+Xu ly 8,100 | Thanh cong 8,100 | Loi 0 | 1.78 file/s
+Xu ly 8,200 | Thanh cong 8,200 | Loi 0 | 1.78 file/s
+Xu ly 8,300 | Thanh cong 8,300 | Loi 0 | 1.78 file/s
+Xu ly 8,400 | Thanh cong 8,400 | Loi 0 | 1.78 file/s
+Xu ly 8,500 | Thanh cong 8,500 | Loi 0 | 1.78 file/s
+Xu ly 8,600 | Thanh cong 8,600 | Loi 0 | 1.78 file/s
+Xu ly 8,700 | Thanh cong 8,700 | Loi 0 | 1.78 file/s
+Xu ly 8,800 | Thanh cong 8,800 | Loi 0 | 1.78 file/s
+Xu ly 8,900 | Thanh cong 8,900 | Loi 0 | 1.78 file/s
+Xu ly 9,000 | Thanh cong 9,000 | Loi 0 | 1.78 file/s
+Xu ly 9,100 | Thanh cong 9,100 | Loi 0 | 1.77 file/s
+Xu ly 9,200 | Thanh cong 9,200 | Loi 0 | 1.77 file/s
+Xu ly 9,300 | Thanh cong 9,300 | Loi 0 | 1.77 file/s
+Xu ly 9,400 | Thanh cong 9,400 | Loi 0 | 1.77 file/s
+Xu ly 9,500 | Thanh cong 9,500 | Loi 0 | 1.77 file/s
+Xu ly 9,600 | Thanh cong 9,600 | Loi 0 | 1.77 file/s
+Xu ly 9,700 | Thanh cong 9,700 | Loi 0 | 1.77 file/s
+Xu ly 9,800 | Thanh cong 9,800 | Loi 0 | 1.76 file/s
+Xu ly 9,900 | Thanh cong 9,900 | Loi 0 | 1.76 file/s
+Xu ly 10,000 | Thanh cong 10,000 | Loi 0 | 1.76 file/s
+KET QUA dot upload:
+  Thanh cong 10,000 | Loi 0 | Tong xu ly 10,000
+  Alias bo qua upload rieng: 0 | Gop bang Drive ID: 2,963 alias toi da
+Tong ban ghi: 1,641,938 | Da co Drive ID: 11,102 | Con lai: 1,630,836
+  Root Drive ID: 1ItcS-AJqnnH2iKrBhBn33qU774EUtwxF
 
-py -u tt_gp_bulk.py upload --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db" --workers 4 --rate 2.5 --limit 10000 --yes
+C:\TunerToolsGP_Fresh>
