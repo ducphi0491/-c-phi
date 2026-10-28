@@ -1,3 +1,9 @@
 py tt_gp_bulk.py scan --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db"
 
 py tt_gp_bulk.py status --db "gp_fresh_1600000.db"
+
+
+
+C:\TunerToolsGP_Fresh>py tt_gp_bulk.py scan --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db"
+Quet file tu: C:\inetpub\wwwroot\tab
+Duong dan luu DB bat dau bang: tab/
