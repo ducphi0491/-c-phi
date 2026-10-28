@@ -1,1 +1,8 @@
-C:\TunerToolsGP_Fresh
+cd C:\TunerToolsGP_Fresh
+py -m pip install -r requirements.txt
+
+py check_db.py
+
+py tt_gp_bulk.py scan --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db"
+
+py tt_gp_bulk.py status
