@@ -1,2 +1,18 @@
-cd C:\TunerToolsGP_Fresh
-py import_songsterr.py audit --source "C:\inetpub\wwwroot\tab" --original "C:\inetpub\wwwroot\tab\songsterr_database.db"
+Microsoft Windows [Version 10.0.17763.8389]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Users\Administrator>cd C:\TunerToolsGP_Fresh
+
+C:\TunerToolsGP_Fresh>py import_songsterr.py audit --source "C:\inetpub\wwwroot\tab" --original "C:\inetpub\wwwroot\tab\songsterr_database.db"
+=== AUDIT SONGSTERR (READ ONLY) ===
+Rows: 1,650,639 | Empty IDs: 1 | Empty paths: 1
+Rows with both ID and path: 1,650,638
+Sampled: present=150, missing=0, invalid_path=0
+  OK: +/+caro/+caro - Todo Es Por Nada.gp4
+  OK: C/Crack Ov Dawn/Crack Ov Dawn - Miss Suicide.gp4
+  OK: I/In Flames/In Flames - In Flames - Satellites and Astronauts.gp3
+  OK: N/Nightwish/Nightwish - Angels Fall First (3).gp4
+  OK: S/Smith, Elliott/Smith, Elliott - Pictures Of Me.gp4
+No DB changes and no Google Drive uploads.
+
+C:\TunerToolsGP_Fresh>
