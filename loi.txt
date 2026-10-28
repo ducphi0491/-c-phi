@@ -1,2 +1,4 @@
 cd C:\TunerToolsGP_Fresh
 copy tt_gp_bulk.py tt_gp_bulk_old.py
+
+py -u tt_gp_bulk.py dedup --source "C:\inetpub\wwwroot\tab" --db "gp_fresh_1600000.db"
