@@ -2454,9 +2454,10 @@ fun SettingsScreen(
     var showCopyrightDialog by remember { mutableStateOf(false) }
     var showGuideMenu by remember { mutableStateOf(false) }
     var showLoginPromptDialog by remember { mutableStateOf(false) }
-    // ĐÃ ĐỔI SANG 4 CẤP ĐỘ
+    // Quyền Admin/Mod được xác minh lại khi mở Settings, khi app resume và khi bấm tài khoản.
     var userRole by remember { mutableStateOf("user") }
-    val isStaff = userRole in listOf("super_admin", "admin", "mod")
+    var verifiedRoleEmail by remember { mutableStateOf("") }
+    var isCheckingAdminRole by remember { mutableStateOf(false) }
 
     var showSupportCenter by remember { mutableStateOf(false) }
     var unreadSupportCount by remember { mutableStateOf(0) }
@@ -2524,6 +2525,10 @@ fun SettingsScreen(
     var loggedInUserPhotoUrl by remember {
         mutableStateOf(initialGoogleAccount?.photoUrl?.toString())
     }
+    // Không cho phép sử dụng quyền đã xác minh cho một Gmail khác.
+    val isStaff = userRole in listOf("super_admin", "admin", "mod") &&
+            verifiedRoleEmail == loggedInUserEmail?.trim()?.lowercase(java.util.Locale.ROOT)
+
     // VIP chỉ bật khi Gmail đã được Admin cấp quyền Documents thực sự
     // VÀ đồng thời có quyền sử dụng SongTab. Tài khoản chỉ có trial 30 ngày
     // sẽ không được gắn nhãn VIP.
@@ -2566,65 +2571,101 @@ fun SettingsScreen(
                 loggedInUserPhotoUrl = account?.photoUrl?.toString()
                 Toast.makeText(context, "${CoreTranslator.getString("hello_user", currentLang)}, $loggedInUserName", Toast.LENGTH_SHORT).show()
 
-                account?.email?.let { email ->
-                    coroutineScope.launch {
-                        try {
-                            userRole = SongScraper.getUserRole(email)
-                        } catch (e: Exception) {
-                            userRole = "user" // <-- Đã sửa lỗi isAdmin ở đây
-                        }
-                    }
-                }
+                // loggedInUserEmail thay đổi sẽ tự kích hoạt kiểm tra quyền bên dưới.
+                userRole = "user"
+                verifiedRoleEmail = ""
             } catch (e: com.google.android.gms.common.api.ApiException) { Toast.makeText(context, "${CoreTranslator.getString("error_prefix", currentLang)}: ${e.statusCode}", Toast.LENGTH_SHORT).show() }
         }
     }
 
+    // Gắn với vòng đời thực tế của app, không phụ thuộc việc đổi tab.
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    // Cập nhật key từ isAdmin thành isStaff
-    DisposableEffect(lifecycleOwner, isStaff, deviceId) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                // Làm mới tên, Gmail và ảnh đại diện khi quay lại Settings sau đăng nhập.
-                val resumedAccount = com.google.android.gms.auth.api.signin.GoogleSignIn
-                    .getLastSignedInAccount(context)
-                loggedInUserName = googleAccountDisplayName(resumedAccount)
-                loggedInUserEmail = resumedAccount?.email
-                loggedInUserPhotoUrl = resumedAccount?.photoUrl?.toString()
-
-                coroutineScope.launch {
-                    val requesterEmail = resumedAccount?.email.orEmpty()
-                    val (count, _) = TunerSupportApi.getSupportData(deviceId, requesterEmail)
-                    unreadSupportCount = count
-                    refreshVipAccountStatus(resumedAccount?.email)
+    var isSettingsResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+    DisposableEffect(lifecycleOwner, deviceId) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    // Tự làm mới khi quay lại app, dù vẫn ở tab Cài đặt.
+                    val resumedAccount = com.google.android.gms.auth.api.signin.GoogleSignIn
+                        .getLastSignedInAccount(context)
+                    loggedInUserName = googleAccountDisplayName(resumedAccount)
+                    loggedInUserEmail = resumedAccount?.email
+                    loggedInUserPhotoUrl = resumedAccount?.photoUrl?.toString()
+                    isSettingsResumed = true
+                    coroutineScope.launch {
+                        try {
+                            refreshVipAccountStatus(resumedAccount?.email)
+                        } catch (cancel: kotlinx.coroutines.CancellationException) {
+                            throw cancel
+                        } catch (e: Exception) {
+                            android.util.Log.w("SettingsAccess", "Không thể cập nhật VIP", e)
+                        }
+                    }
                 }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> isSettingsResumed = false
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-
-        coroutineScope.launch {
-            val requesterEmail = com.google.android.gms.auth.api.signin.GoogleSignIn
-                .getLastSignedInAccount(context)?.email.orEmpty()
-            val (count, _) = TunerSupportApi.getSupportData(deviceId, requesterEmail)
-            unreadSupportCount = count
-        }
-
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(loggedInUserName, loggedInUserEmail) {
-        val email = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)?.email
-        if (email != null) {
-            coroutineScope.launch {
-                try {
-                    userRole = SongScraper.getUserRole(email)
-                } catch (e: Exception) {
-                    userRole = "user" // <-- Đã sửa lỗi isAdmin ở đây
-                }
-                refreshVipAccountStatus(email)
-            }
-        } else {
-            userRole = "user" // <-- Đã sửa lỗi isAdmin ở đây
+    // Khi thay đổi Gmail, loại bỏ ngay quyền cũ và cập nhật lại VIP.
+    LaunchedEffect(loggedInUserEmail) {
+        userRole = "user"
+        verifiedRoleEmail = ""
+        unreadSupportCount = 0
+        showSupportCenter = false
+        val email = loggedInUserEmail?.trim().orEmpty()
+        if (email.isBlank()) {
             isVipAccount = false
+        } else {
+            try {
+                refreshVipAccountStatus(email)
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (e: Exception) {
+                android.util.Log.w("SettingsAccess", "Không thể cập nhật VIP", e)
+            }
+        }
+    }
+
+    // Đồng bộ quyền Admin/Mod và badge hỗ trợ ngay khi vào Settings;
+    // tự đọc lại sau mỗi 15 giây trong khi người dùng đang ở tab này.
+    // Chuyển sang tab khác / thoát app sẽ tự dừng vòng lặp này.
+    LaunchedEffect(loggedInUserEmail, isSettingsResumed, deviceId) {
+        val checkedEmail = loggedInUserEmail?.trim().orEmpty()
+        if (!isSettingsResumed || checkedEmail.isBlank()) return@LaunchedEffect
+        while (true) {
+            try {
+                val latestRole = SongScraper.getUserRole(checkedEmail)
+                if (loggedInUserEmail?.trim()?.equals(checkedEmail, ignoreCase = true) == true) {
+                    userRole = latestRole
+                    verifiedRoleEmail = checkedEmail.lowercase(java.util.Locale.ROOT)
+                    if (latestRole !in listOf("super_admin", "admin", "mod")) {
+                        showSupportCenter = false
+                    }
+                }
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (e: Exception) {
+                // Không giả định role trên máy chủ khi mất mạng; click sẽ xác minh lại.
+                android.util.Log.w("SettingsAccess", "Không thể cập nhật quyền Admin", e)
+            }
+
+            try {
+                val (count, _) = TunerSupportApi.getSupportData(deviceId, checkedEmail)
+                if (loggedInUserEmail?.trim()?.equals(checkedEmail, ignoreCase = true) == true) {
+                    unreadSupportCount = count
+                }
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (e: Exception) {
+                android.util.Log.w("SettingsAccess", "Không thể cập nhật số tin hỗ trợ", e)
+            }
+            kotlinx.coroutines.delay(15_000L)
         }
     }
 
@@ -2932,8 +2973,46 @@ fun SettingsScreen(
                         .weight(1f)
                         .clip(RoundedCornerShape(10.dp))
                         .then(
-                            if (isStaff && (loggedInUserName != null || loggedInUserEmail != null)) {
-                                Modifier.clickable { showSupportCenter = true }
+                            if (!loggedInUserEmail.isNullOrBlank()) {
+                                Modifier.clickable(enabled = !isCheckingAdminRole) {
+                                    val emailToCheck = loggedInUserEmail?.trim().orEmpty()
+                                    if (emailToCheck.isNotBlank()) {
+                                        coroutineScope.launch {
+                                            isCheckingAdminRole = true
+                                            try {
+                                                // Bắt buộc xác thực trực tiếp khi nhấn, không dùng quyền cache.
+                                                val latestRole = SongScraper.getUserRole(emailToCheck)
+                                                if (loggedInUserEmail?.trim()
+                                                        ?.equals(emailToCheck, ignoreCase = true) == true) {
+                                                    userRole = latestRole
+                                                    verifiedRoleEmail = emailToCheck.lowercase(java.util.Locale.ROOT)
+                                                    if (latestRole in listOf("super_admin", "admin", "mod")) {
+                                                        showSupportCenter = true
+                                                    } else {
+                                                        Toast.makeText(
+                                                            context,
+                                                            if (currentLang == "vi") "Tài khoản chưa được cấp quyền Admin/Mod."
+                                                            else "This account does not have Admin/Moderator access.",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                }
+                                            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                                                throw cancel
+                                            } catch (e: Exception) {
+                                                android.util.Log.w("SettingsAccess", "Xác minh quyền Admin thất bại", e)
+                                                Toast.makeText(
+                                                    context,
+                                                    if (currentLang == "vi") "Không thể xác minh quyền Admin. Hãy kiểm tra kết nối mạng."
+                                                    else "Could not verify Admin access. Check your connection.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            } finally {
+                                                isCheckingAdminRole = false
+                                            }
+                                        }
+                                    }
+                                }
                             } else {
                                 Modifier
                             }
@@ -3053,6 +3132,14 @@ fun SettingsScreen(
                                 modifier = Modifier.weight(1f, fill = false)
                             )
 
+                            if (isCheckingAdminRole) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = tunaGreen,
+                                    strokeWidth = 2.dp
+                                )
+                            }
                             if (isVipAccount) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Box(
@@ -3114,6 +3201,9 @@ fun SettingsScreen(
                                 loggedInUserEmail = null
                                 loggedInUserPhotoUrl = null
                                 userRole = "user"
+                                verifiedRoleEmail = ""
+                                showSupportCenter = false
+                                unreadSupportCount = 0
                                 isVipAccount = false
                                 DocumentAccessStore.clear(context)
                                 Toast.makeText(
