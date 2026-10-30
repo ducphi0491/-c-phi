@@ -1,1 +1,4 @@
-(Get-Item "C:\inetpub\wwwroot\tunertools\app-guides\songs\search\videos\video.mp4").Length
+PS C:\Users\Administrator> (Get-Item "C:\inetpub\wwwroot\tunertools\app-guides\songs\search\videos\video.mp4").Length
+76675672
+PS C:\Users\Administrator>
+
