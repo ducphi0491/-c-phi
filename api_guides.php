@@ -14,12 +14,18 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('X-Content-Type-Options: nosniff');
 
-const GUIDE_BASE_URL = 'https://tunertools.top/app-guides';
+// IIS deployment verified by the owner:
+// C:/inetpub/wwwroot/tunertools/app-guides/api_guides.php
+// PUBLIC API URL: https://tunertools.top/tunertools/app-guides/api_guides.php
+// IIS/FastCGI can report SCRIPT_NAME without the /tunertools virtual path,
+// so do NOT auto-detect the URL prefix using SCRIPT_NAME.
+// Set the public prefix explicitly for this installation.
+define('GUIDE_BASE_URL', 'https://tunertools.top/tunertools/app-guides');
 const GUIDE_CATEGORIES = ['songs', 'chords', 'tuner', 'metronome', 'training', 'documents', 'settings'];
 const GUIDE_LANGUAGES = ['vi', 'en', 'es', 'fr', 'de', 'ru', 'ja', 'zh', 'th', 'lo', 'km', 'ko', 'pt', 'sw', 'ar'];
 // Support both layouts: api_guides.php next to app-guides/ OR inside app-guides/
 // (as in the owner's current C:/inetpub/wwwroot/tunertools/app-guides folder).
-// GUIDE_BASE_URL stays the same in both cases.
+// The public URL is explicitly configured above for this IIS deployment.
 define('GUIDE_DIR', is_dir(__DIR__ . '/songs') ? __DIR__ : __DIR__ . '/app-guides');
 
 function guidesReply(int $status, array $payload): void {
