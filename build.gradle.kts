@@ -21,8 +21,8 @@ android {
         applicationId = "ducphi.tunnerinstrument"
         minSdk = 24
         targetSdk = 36
-        versionCode = 59
-        versionName = "2.1.6"
+        versionCode = 62
+        versionName = "2.1.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
