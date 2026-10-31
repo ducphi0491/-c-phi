@@ -2,3 +2,6 @@
 https://tunertools.top/api_songs.php?action=check_update_v2&after=0&utm_source=chatgpt.com
 https://tunertools.top/api_songs.php?action=sync_bootstrap_v2&last_update=2000-01-01+00:00:00&limit=1&utm_source=chatgpt.com
 https://tunertools.top/api_songs.php?action=sync_v2&after=0&limit=1&utm_source=chatgpt.com
+{"success":false,"code":"SYNC_CURSOR_QUERY_FAILED","trace_id":"e382de2215","error":"Lỗi đồng bộ phía máy chủ. Kiểm tra PHP error log theo trace_id."}
+{"success":false,"code":"SYNC_CURSOR_QUERY_FAILED","trace_id":"c772a3ce96","error":"Lỗi đồng bộ phía máy chủ. Kiểm tra PHP error log theo trace_id."}
+{"success":false,"code":"SYNC_CURSOR_QUERY_FAILED","trace_id":"9e9043db1d","error":"Lỗi đồng bộ phía máy chủ. Kiểm tra PHP error log theo trace_id."}
