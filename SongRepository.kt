@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -24,6 +26,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -101,9 +104,11 @@ private object TunerDbBundleInstaller {
 
     private const val PREF_NAME = "tuner_database_bundle"
     private const val KEY_INSTALLED_RELEASE = "installed_release"
+    // Tu 2.1.9 tro di: luu bang chung da chuyen doi/kiem tra, khong thay DB lan nua.
+    private const val KEY_COMPAT_VALIDATED_219 = "db_compat_validated_219"
+    private const val KEY_LAST_READY_APP_VERSION = "db_last_ready_app_version"
 
     private const val LEGACY_MAIN_DB_NAME = "tuner_songs.db"
-    private const val LEGACY_TEMP_DB_NAME = "tuner_songs_temp.db"
     private const val LEGACY_LYRICS_DB_NAME = "tuner_lyrics.db"
 
     suspend fun ensureInstalled(context: Context): DbBundleInstallResult = withContext(Dispatchers.IO) {
@@ -116,89 +121,116 @@ private object TunerDbBundleInstaller {
         val mainDb = context.getDatabasePath(MAIN_DB_NAME)
         val lyricsDb = context.getDatabasePath(LYRICS_DB_NAME)
         val installedRelease = prefs.getInt(KEY_INSTALLED_RELEASE, 0)
-
-        if (
-            installedRelease == DATA_RELEASE &&
-            mainDb.exists() && mainDb.length() > 1_000_000L &&
-            lyricsDb.exists() && lyricsDb.length() > 1_000_000L
-        ) {
-            deleteLegacyDatabases(context)
-            return DbBundleInstallResult(true, "Database ready")
-        }
-
-        // Recover a completed install if the app was stopped just before saving the marker.
-        if (mainDb.exists() && lyricsDb.exists()) {
-            try {
-                val count = verifyMainDatabase(mainDb)
-                verifyLyricsDatabase(lyricsDb, count)
-                if (prefs.edit().putInt(KEY_INSTALLED_RELEASE, DATA_RELEASE).commit()) {
-                    deleteLegacyDatabases(context)
-                    return DbBundleInstallResult(true, "Database recovered", count)
-                }
-            } catch (_: Exception) {
-                deleteSqliteFile(mainDb)
-                deleteSqliteFile(lyricsDb)
-            }
-        }
-
+        val validatedFor219 = prefs.getBoolean(KEY_COMPAT_VALIDATED_219, false)
         val databaseDir = mainDb.parentFile
             ?: return DbBundleInstallResult(false, "Cannot locate database directory")
         databaseDir.mkdirs()
 
+        // From Tuner Tools 2.1.8 to 2.1.9: reuse the existing V2 pair.
+        // Installed app VERSION_NAME is not the prior installed version.
+        // Therefore we use database identity and SQLite schema, never an inferred
+        // old version, to decide whether a database is ready.
+        if (mainDb.exists() && lyricsDb.exists()) {
+            if (validatedFor219 &&
+                mainDb.length() > 1_000_000L && lyricsDb.length() > 1_000_000L
+            ) {
+                return DbBundleInstallResult(true, "Database ready (delta sync)")
+            }
+            return try {
+                // Verify the actual V2 schema once when upgrading from 2.1.8.
+                // Count mismatches or embedded lyrics should not force a reinstall;
+                // 2.1.8 could already have locally edited or partially synced data.
+                val count = verifyMainDatabase(mainDb, strictContents = false)
+                verifyLyricsDatabase(lyricsDb, count, strictCounts = false)
+                require(markDatabasesReady(prefs)) {
+                    "Cannot persist database compatibility state"
+                }
+                DbBundleInstallResult(true, "Database ready (delta sync)", count)
+            } catch (e: Exception) {
+                Log.e("TunerDbInstaller", "Existing V2 database is not compatible", e)
+                DbBundleInstallResult(
+                    false,
+                    "Database V2 chua tuong thich. Da giu nguyen tat ca file .db; khong tu dong thay the."
+                )
+            }
+        }
+
+        // Do not wipe a partially present pair, even if the legacy marker is missing.
+        // A real user's 2.1.8 database can exist without a reliable release marker.
+        if (mainDb.exists() || lyricsDb.exists()) {
+            return DbBundleInstallResult(
+                false,
+                "Thieu mot file database V2. Du lieu con lai duoc giu nguyen de phuc hoi an toan."
+            )
+        }
+
+        // 2.1.2 and older are not auto-migrated by this release. The user has
+        // confirmed that those versions require uninstall/reinstall. Never silently
+        // replace a legacy database just because a version marker is absent.
+        if (context.getDatabasePath(LEGACY_MAIN_DB_NAME).exists() ||
+            context.getDatabasePath(LEGACY_LYRICS_DB_NAME).exists()
+        ) {
+            return DbBundleInstallResult(
+                false,
+                "Phat hien database phien ban cu. Can cai moi ung dung; khong tu dong xoa du lieu cu."
+            )
+        }
+
+        // If the V2 installer previously completed but files disappeared, stop
+        // instead of automatically replacing a user's database.
+        if (installedRelease > 0 || validatedFor219) {
+            return DbBundleInstallResult(
+                false,
+                "Database da duoc cai truoc day nhung hien khong con. Khong tu dong thay the."
+            )
+        }
+
+        // Fresh installs only: inflate the complete seed database pair once.
+        // All subsequent application versions keep the pair and use Sync V2.
         val tempMain = File(databaseDir, "$MAIN_DB_NAME.installing")
         val tempLyrics = File(databaseDir, "$LYRICS_DB_NAME.installing")
         deleteSqliteFile(tempMain)
         deleteSqliteFile(tempLyrics)
-
-        return try {
+        try {
             checkAvailableStorage(databaseDir)
-
             extractZipAsset(context, MAIN_ASSET, tempMain)
             extractZipAsset(context, LYRICS_ASSET, tempLyrics)
-
-            val sourceSongCount = verifyMainDatabase(tempMain)
-            verifyLyricsDatabase(tempLyrics, sourceSongCount)
-
+            val seedCount = verifyMainDatabase(tempMain)
+            verifyLyricsDatabase(tempLyrics, seedCount)
             setDatabaseVersion(tempMain, MAIN_SCHEMA_VERSION)
             setDatabaseVersion(tempLyrics, LYRICS_SCHEMA_VERSION)
 
-            // Replace only v2 targets here. The 212 MB legacy DB is kept until final verification.
-            deleteSqliteFile(mainDb)
-            deleteSqliteFile(lyricsDb)
             moveDatabaseFile(tempMain, mainDb)
             moveDatabaseFile(tempLyrics, lyricsDb)
+            val finalCount = verifyMainDatabase(mainDb)
+            verifyLyricsDatabase(lyricsDb, finalCount)
 
-            val finalSongCount = verifyMainDatabase(mainDb)
-            verifyLyricsDatabase(lyricsDb, finalSongCount)
+            // A fresh seed starts a new delta synchronization history.
+            require(
+                context.getSharedPreferences("tuner_song_sync_v2", Context.MODE_PRIVATE)
+                    .edit().clear().commit()
+            ) { "Cannot reset fresh-install sync state" }
+            require(markDatabasesReady(prefs)) { "Cannot save seed state" }
 
-            require(prefs.edit().putInt(KEY_INSTALLED_RELEASE, DATA_RELEASE).commit()) {
-                "Cannot save database install state"
-            }
-
-            // The old DB and all locally created chord versions are intentionally removed.
-            deleteLegacyDatabases(context)
-
-            DbBundleInstallResult(
-                success = true,
-                message = "Database updated successfully",
-                songCount = finalSongCount
-            )
+            return DbBundleInstallResult(true, "Seed installed (delta sync ready)", finalCount)
         } catch (e: Exception) {
-            Log.e("TunerDbInstaller", "Database installation failed", e)
+            Log.e("TunerDbInstaller", "Fresh seed installation failed", e)
             deleteSqliteFile(tempMain)
             deleteSqliteFile(tempLyrics)
-
-            // If the marker was not saved, do not leave a half-installed v2 pair.
-            if (prefs.getInt(KEY_INSTALLED_RELEASE, 0) != DATA_RELEASE) {
-                deleteSqliteFile(mainDb)
-                deleteSqliteFile(lyricsDb)
-            }
-
-            DbBundleInstallResult(
-                success = false,
-                message = e.message ?: "Cannot prepare song database"
-            )
+            // Both paths were absent before this first install; any files created
+            // in this try block are incomplete seed files, not existing user data.
+            deleteSqliteFile(mainDb)
+            deleteSqliteFile(lyricsDb)
+            return DbBundleInstallResult(false, e.message ?: "Cannot install initial database")
         }
+    }
+
+    private fun markDatabasesReady(prefs: android.content.SharedPreferences): Boolean {
+        return prefs.edit()
+            .putInt(KEY_INSTALLED_RELEASE, DATA_RELEASE)
+            .putBoolean(KEY_COMPAT_VALIDATED_219, true)
+            .putString(KEY_LAST_READY_APP_VERSION, BuildConfig.VERSION_NAME)
+            .commit()
     }
 
     private fun checkAvailableStorage(databaseDir: File) {
@@ -232,7 +264,7 @@ private object TunerDbBundleInstaller {
         }
     }
 
-    private fun verifyMainDatabase(file: File): Long {
+    private fun verifyMainDatabase(file: File, strictContents: Boolean = true): Long {
         require(file.exists()) { "Metadata database not found" }
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
@@ -250,8 +282,12 @@ private object TunerDbBundleInstaller {
                 db,
                 "SELECT COUNT(*) FROM songs WHERE TRIM(COALESCE(lyrics, '')) <> ''"
             )
-            require(nonEmptyLyrics == 0L) {
-                "Metadata database still contains $nonEmptyLyrics full lyrics rows"
+            if (strictContents) {
+                require(nonEmptyLyrics == 0L) {
+                    "Metadata database still contains $nonEmptyLyrics full lyrics rows"
+                }
+            } else if (nonEmptyLyrics > 0L) {
+                Log.w("TunerDbInstaller", "Existing V2 has $nonEmptyLyrics inline lyrics; preserving data")
             }
             return count
         } finally {
@@ -259,7 +295,7 @@ private object TunerDbBundleInstaller {
         }
     }
 
-    private fun verifyLyricsDatabase(file: File, expectedSongCount: Long) {
+    private fun verifyLyricsDatabase(file: File, expectedSongCount: Long, strictCounts: Boolean = true) {
         require(file.exists()) { "Lyrics database not found" }
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
@@ -270,8 +306,12 @@ private object TunerDbBundleInstaller {
             require("raw_bytes" in columns) { "Lyrics database is missing raw_bytes" }
 
             val count = queryLong(db, "SELECT COUNT(*) FROM lyrics")
-            require(count == expectedSongCount) {
-                "Lyrics row count ($count) differs from song count ($expectedSongCount)"
+            if (strictCounts) {
+                require(count == expectedSongCount) {
+                    "Lyrics row count ($count) differs from song count ($expectedSongCount)"
+                }
+            } else if (count != expectedSongCount) {
+                Log.w("TunerDbInstaller", "V2 row count mismatch ($count vs $expectedSongCount); preserving existing databases")
             }
 
             db.rawQuery(
@@ -346,12 +386,6 @@ private object TunerDbBundleInstaller {
             .use { it.readText() }
     }
 
-    private fun deleteLegacyDatabases(context: Context) {
-        deleteSqliteFile(context.getDatabasePath(LEGACY_MAIN_DB_NAME))
-        deleteSqliteFile(context.getDatabasePath(LEGACY_TEMP_DB_NAME))
-        deleteSqliteFile(context.getDatabasePath(LEGACY_LYRICS_DB_NAME))
-    }
-
     private fun deleteSqliteFile(file: File) {
         try {
             val deleted = SQLiteDatabase.deleteDatabase(file)
@@ -375,6 +409,10 @@ private object TunerDbBundleInstaller {
 // ==========================================
 class TunerDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, TunerDbBundleInstaller.MAIN_DB_NAME, null, 4) {
+
+    init {
+        setWriteAheadLoggingEnabled(true)
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         // The prebuilt DB is installed before this helper is created.
@@ -400,6 +438,10 @@ class TunerDatabaseHelper(context: Context) :
 
 class LyricsDatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, TunerDbBundleInstaller.LYRICS_DB_NAME, null, 1) {
+
+    init {
+        setWriteAheadLoggingEnabled(true)
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -454,12 +496,22 @@ class CaSiDatabaseHelper(private val context: Context) : SQLiteOpenHelper(contex
 // ==========================================
 class SongRepository(context: Context) {
     companion object {
+        private const val SYNC_PREF_NAME = "tuner_song_sync_v2"
+        private const val KEY_BOOTSTRAP_DONE = "bootstrap_done"
+        private const val KEY_BOOTSTRAP_TIME = "bootstrap_time"
+        private const val KEY_BOOTSTRAP_ID = "bootstrap_id"
+        private const val KEY_BOOTSTRAP_SNAPSHOT = "bootstrap_snapshot_cursor"
+        private const val KEY_DELTA_CURSOR = "delta_cursor"
+        private const val SYNC_PAGE_SIZE = 100
+        private val songSyncMutex = Mutex()
+
         suspend fun prepareDatabases(context: Context): DbBundleInstallResult {
             return TunerDbBundleInstaller.ensureInstalled(context.applicationContext)
         }
     }
 
     private val appContext = context.applicationContext
+    private val syncPrefs = appContext.getSharedPreferences(SYNC_PREF_NAME, Context.MODE_PRIVATE)
     private val dbHelper = TunerDatabaseHelper(appContext)
     private val lyricsDbHelper = LyricsDatabaseHelper(appContext)
     private val caSiDbHelper = CaSiDatabaseHelper(appContext)
@@ -644,9 +696,9 @@ class SongRepository(context: Context) {
     suspend fun getCustomSongLocalByTitle(title: String, singer: String = ""): Song? = withContext(Dispatchers.IO) {
         val db = dbHelper.readableDatabase
         val query = if (singer.isNotBlank()) {
-            "SELECT * FROM songs WHERE title = ? COLLATE NOCASE AND singerNames = ? COLLATE NOCASE AND id LIKE 'local_%' LIMIT 1"
+            "SELECT * FROM songs WHERE title = ? COLLATE NOCASE AND singerNames = ? COLLATE NOCASE AND id GLOB 'local_*' LIMIT 1"
         } else {
-            "SELECT * FROM songs WHERE title = ? COLLATE NOCASE AND id LIKE 'local_%' LIMIT 1"
+            "SELECT * FROM songs WHERE title = ? COLLATE NOCASE AND id GLOB 'local_*' LIMIT 1"
         }
         val args = if (singer.isNotBlank()) arrayOf(title.trim(), singer.trim()) else arrayOf(title.trim())
         db.rawQuery(query, args).use { cursor ->
@@ -777,7 +829,7 @@ class SongRepository(context: Context) {
                 singerNames LIKE ? COLLATE NOCASE OR
                 authorName LIKE ? COLLATE NOCASE
             )
-              AND (id NOT LIKE 'local_%' OR title NOT IN (SELECT title FROM songs WHERE id NOT LIKE 'local_%'))
+              AND (id NOT GLOB 'local_*' OR title NOT IN (SELECT title FROM songs WHERE id NOT GLOB 'local_*'))
             ORDER BY viewCount DESC, updatedAt DESC
             $limitClause
         """.trimIndent()
@@ -808,19 +860,132 @@ class SongRepository(context: Context) {
         emit(songs)
     }.flowOn(Dispatchers.IO)
 
+    // vi: giu NGUYEN logic trending truoc khi them bo loc quoc te.
+    // Cac ngon ngu khac: loc ca si quoc te TRUOC khi xep hang viewCount.
+    // Khong doi tim kiem, Top 50, goi y bai hat hoac schema SQLite.
     fun getTrendingSongsOffline(currentLang: String): Flow<List<Song>> = flow {
+        val isVietnamese = currentLang.trim()
+            .substringBefore('-').substringBefore('_')
+            .equals("vi", ignoreCase = true)
+
+        if (isVietnamese) {
+            // Khop 100% voi truy van va fallback cua ban truoc:
+            // Top 15 luot xem toan DB; neu tat ca viewCount=0 thi lay goi y cu.
+            val originalTrending = mutableListOf<Song>()
+            dbHelper.readableDatabase.rawQuery(
+                "SELECT * FROM songs ORDER BY viewCount DESC LIMIT 15",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) originalTrending.add(mapCursorToSong(cursor))
+            }
+            if (originalTrending.isEmpty() || originalTrending.all { it.viewCount == 0 }) {
+                emit(getFamousSongsCrossDb(15, currentLang))
+            } else {
+                emit(originalTrending)
+            }
+            return@flow
+        }
+
+        val requiredRegion = 2 // Quoc te; chi dung cho ngon ngu khac vi.
+        val maxSongs = 15
         val songs = mutableListOf<Song>()
-        dbHelper.readableDatabase.rawQuery(
-            "SELECT * FROM songs ORDER BY viewCount DESC LIMIT 15",
-            null
-        ).use { cursor ->
-            while (cursor.moveToNext()) songs.add(mapCursorToSong(cursor))
+
+        try {
+            val accentsRegex = Regex("\\p{M}+")
+            val separatorsRegex = Regex("[^\\p{L}\\p{N}]+")
+
+            // Cung chuan hoa ca danh sach nghe si va cot singerNames.
+            // So sanh theo ranh gioi tu, tranh khop nham cac ten ngan.
+            fun normalizedArtist(value: String): String {
+                return java.text.Normalizer.normalize(
+                    value.trim().lowercase(java.util.Locale.ROOT),
+                    java.text.Normalizer.Form.NFD
+                ).replace('đ', 'd')
+                    .replace(accentsRegex, "")
+                    .replace(separatorsRegex, " ")
+                    .trim()
+            }
+
+            // Du lieu khu_vuc da co trong ca_si.db, khong can sua database.
+            // Neu ten nghe si xuat hien o ca hai khu vuc, danh dau khong ro rang (3).
+            val regionsByArtist = HashMap<String, Int>()
+            caSiDbHelper.readableDatabase.rawQuery(
+                "SELECT ten_ca_si, khu_vuc FROM danh_sach_ca_si " +
+                        "WHERE TRIM(COALESCE(ten_ca_si, '')) <> ''",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val artist = normalizedArtist(cursor.getString(0) ?: "")
+                    if (artist.isBlank()) continue
+                    val area = (cursor.getString(1) ?: "").trim()
+                    val region = if (area.isBlank() || area.equals("viet_nam", ignoreCase = true)) 1 else 2
+                    regionsByArtist[artist] = (regionsByArtist[artist] ?: 0) or region
+                }
+            }
+
+            // Index theo tu dau tien, de khong phai duyet tat ca nghe si cho moi bai.
+            val artistsByFirstWord = HashMap<String, MutableList<Pair<String, Int>>>()
+            for ((artist, region) in regionsByArtist) {
+                artistsByFirstWord.getOrPut(artist.substringBefore(' ')) {
+                    mutableListOf()
+                }.add(artist to region)
+            }
+            val singerRegionCache = HashMap<String, Int>()
+
+            fun regionForSinger(rawSinger: String): Int {
+                val singer = normalizedArtist(rawSinger)
+                if (singer.isBlank()) return 0
+                singerRegionCache[singer]?.let { return it }
+
+                // Uu tien ten chinh xac, sau do moi xu ly nhieu nghe si/feat.
+                val exact = regionsByArtist[singer]
+                if (exact != null) {
+                    singerRegionCache[singer] = exact
+                    return exact
+                }
+
+                val padded = " $singer "
+                var region = 0
+                for (word in singer.split(' ').distinct()) {
+                    for ((artist, artistRegion) in artistsByFirstWord[word].orEmpty()) {
+                        // Ten qua ngan chi duoc tinh khi trung toan bo, tranh nham lan.
+                        if (artist.length < 3) continue
+                        if (padded.contains(" $artist ")) {
+                            region = region or artistRegion
+                            if (region == 3) break
+                        }
+                    }
+                    if (region == 3) break
+                }
+                singerRegionCache[singer] = region
+                return region
+            }
+
+            // Quet theo viewCount tu cao xuong thap, CHI lay 15 bai DUNG khu vuc.
+            // Khong LIMIT 15 truoc khi loc: top 15 toan DB co the deu la nhac Viet.
+            if (regionsByArtist.isNotEmpty()) {
+                dbHelper.readableDatabase.rawQuery(
+                    "SELECT * FROM songs ORDER BY viewCount DESC, updatedAt DESC, id ASC",
+                    null
+                ).use { cursor ->
+                    val singerIndex = cursor.getColumnIndexOrThrow("singerNames")
+                    while (songs.size < maxSongs && cursor.moveToNext()) {
+                        val singer = if (cursor.isNull(singerIndex)) "" else cursor.getString(singerIndex)
+                        if (regionForSinger(singer ?: "") == requiredRegion) {
+                            songs.add(mapCursorToSong(cursor))
+                        }
+                    }
+                }
+            }
+            Log.d("SongRepository", "Trending lang=$currentLang, artists=${regionsByArtist.size}, songs=${songs.size}")
+        } catch (error: Exception) {
+            // Khong fallback sang danh sach chua loc: se hien sai nhac cho nguoi quoc te.
+            Log.e("SongRepository", "Cannot load region-filtered trending songs", error)
         }
-        if (songs.isEmpty() || songs.all { it.viewCount == 0 }) {
-            emit(getFamousSongsCrossDb(15, currentLang))
-        } else {
-            emit(songs)
-        }
+
+        // Van giu thu tu viewCount, ke ca khi luot xem bang 0.
+        // Khong chen ngau nhien nhac Viet vao danh sach quoc te khi thieu bai.
+        emit(songs)
     }.flowOn(Dispatchers.IO)
 
     data class ArtistOffline(val name: String, val totalSongs: Int, val youtubeUrl: String)
@@ -917,134 +1082,468 @@ class SongRepository(context: Context) {
 
     fun getLastUpdateTimestamp(): String {
         var lastUpdate = "2000-01-01 00:00:00"
-        dbHelper.readableDatabase.rawQuery("SELECT MAX(updatedAt) FROM songs", null).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0)?.let { lastUpdate = it }
+        dbHelper.readableDatabase.rawQuery(
+            "SELECT MAX(updatedAt) FROM songs WHERE id NOT GLOB 'local_*'",
+            null
+        ).use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) {
+                cursor.getString(0)?.takeIf { it.isNotBlank() }?.let { lastUpdate = it }
+            }
         }
         return lastUpdate
     }
 
-    suspend fun checkHasUpdate(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val lastUpdate = getLastUpdateTimestamp()
-            val apiUrl = "${getRealApiUrl()}?action=check_update&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}"
-            val response = client.newCall(Request.Builder().url(apiUrl).build()).execute()
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: "{}"
-                return@withContext JSONObject(body).optBoolean("has_update", false)
-            }
-        } catch (e: Exception) {
-            Log.e("SongRepository", "Cannot check updates", e)
+    private data class SyncBatchResult(
+        var upserted: Int = 0,
+        var deleted: Int = 0
+    ) {
+        val total: Int get() = upserted + deleted
+        operator fun plusAssign(other: SyncBatchResult) {
+            upserted += other.upserted
+            deleted += other.deleted
         }
-        false
     }
 
-    suspend fun syncNewSongsOnline(): String = withContext(Dispatchers.IO) {
+    private class SyncV2UnavailableException(message: String) : IOException(message)
+    private class SyncHttpException(val statusCode: Int, message: String) : IOException(message)
+
+    private fun JSONObject.stringOrEmpty(name: String): String {
+        return if (!has(name) || isNull(name)) "" else optString(name, "")
+    }
+
+    private fun fetchJson(url: String, readTimeoutSeconds: Long = 60L): JSONObject {
+        val requestClient = client.newBuilder()
+            .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+            .build()
+
+        requestClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
+            val rawBody = response.body?.string().orEmpty()
+            val json = try {
+                if (rawBody.isBlank()) JSONObject() else JSONObject(rawBody)
+            } catch (e: Exception) {
+                if (response.isSuccessful) {
+                    throw SyncV2UnavailableException("Máy chủ chưa hỗ trợ JSON Sync V2")
+                }
+                throw SyncHttpException(response.code, "Phản hồi máy chủ không hợp lệ")
+            }
+
+            val apiCode = json.optString("code", "")
+            if (response.code == 409 && apiCode == "SYNC_SCHEMA_MISSING") {
+                throw SyncV2UnavailableException("Máy chủ chưa chạy ALTER_song_sync_v2.sql")
+            }
+            if (!response.isSuccessful) {
+                throw SyncHttpException(response.code, json.optString("error", "HTTP ${response.code}"))
+            }
+            return json
+        }
+    }
+
+    private suspend fun legacyCheckHasUpdate(): Boolean = withContext(Dispatchers.IO) {
         try {
             val lastUpdate = getLastUpdateTimestamp()
-            val apiUrl = "${getRealApiUrl()}?action=sync&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}"
-            val syncClient = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
-            val response = syncClient.newCall(Request.Builder().url(apiUrl).build()).execute()
-            if (!response.isSuccessful) return@withContext "L\u1ed7i m\u00e1y ch\u1ee7: ${response.code}"
-
-            val inputStream = response.body?.byteStream() ?: return@withContext "D\u1eef li\u1ec7u tr\u1ed1ng"
-            val mainDb = dbHelper.writableDatabase
-            val lyricsDb = lyricsDbHelper.writableDatabase
-
-            val mainSql = """
-                INSERT OR REPLACE INTO songs (
-                    id, title, originalKey, rhythm, chordList, lyrics, favoriteCount,
-                    viewCount, commentCount, ratingStars, ratingCount, genre,
-                    authorName, singerNames, youtubeUrl, createdAt, updatedAt,
-                    bpm, slug, image_count, id_zing_mp3, hasLyrics
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """.trimIndent()
-            val lyricsSql = "INSERT OR REPLACE INTO lyrics (song_id, lyrics_z, raw_bytes) VALUES (?, ?, ?)"
-            val mainStatement = mainDb.compileStatement(mainSql)
-            val lyricsStatement = lyricsDb.compileStatement(lyricsSql)
-
-            var lyricsTransactionOpen = false
-            mainDb.beginTransaction()
-            lyricsDb.beginTransaction()
-            lyricsTransactionOpen = true
-            try {
-                val reader = android.util.JsonReader(java.io.InputStreamReader(inputStream, Charsets.UTF_8))
-                var count = 0
-                reader.beginArray()
-                while (reader.hasNext()) {
-                    val songData = HashMap<String, String>()
-                    reader.beginObject()
-                    while (reader.hasNext()) {
-                        val key = reader.nextName()
-                        when (reader.peek()) {
-                            android.util.JsonToken.NULL -> {
-                                reader.nextNull()
-                                songData[key] = ""
-                            }
-                            android.util.JsonToken.BOOLEAN -> songData[key] = reader.nextBoolean().toString()
-                            android.util.JsonToken.STRING,
-                            android.util.JsonToken.NUMBER -> songData[key] = reader.nextString()
-                            else -> reader.skipValue()
-                        }
-                    }
-                    reader.endObject()
-
-                    val songId = songData["id"] ?: ""
-                    if (songId.isBlank()) continue
-                    val lyricsText = songData["lyrics"] ?: ""
-                    val compressed = compressLyrics(lyricsText)
-
-                    lyricsStatement.clearBindings()
-                    lyricsStatement.bindString(1, songId)
-                    lyricsStatement.bindBlob(2, compressed)
-                    lyricsStatement.bindLong(3, lyricsText.toByteArray(Charsets.UTF_8).size.toLong())
-                    lyricsStatement.executeInsert()
-
-                    mainStatement.clearBindings()
-                    mainStatement.bindString(1, songId)
-                    mainStatement.bindString(2, songData["title"] ?: "")
-                    mainStatement.bindString(3, songData["originalKey"] ?: "")
-                    mainStatement.bindString(4, songData["rhythm"] ?: "")
-                    mainStatement.bindString(5, songData["chordList"] ?: "")
-                    mainStatement.bindString(6, "")
-                    mainStatement.bindLong(7, (songData["favoriteCount"] ?: "0").toLongOrNull() ?: 0L)
-                    mainStatement.bindLong(8, (songData["viewCount"] ?: "0").toLongOrNull() ?: 0L)
-                    mainStatement.bindLong(9, (songData["commentCount"] ?: "0").toLongOrNull() ?: 0L)
-                    mainStatement.bindDouble(10, (songData["ratingStars"] ?: "0.0").toDoubleOrNull() ?: 0.0)
-                    mainStatement.bindLong(11, (songData["ratingCount"] ?: "0").toLongOrNull() ?: 0L)
-                    mainStatement.bindString(12, songData["genre"] ?: "")
-                    mainStatement.bindString(13, songData["authorName"] ?: "")
-                    mainStatement.bindString(14, songData["singerNames"] ?: "")
-                    mainStatement.bindString(15, songData["youtubeUrl"] ?: "")
-                    mainStatement.bindString(16, songData["createdAt"] ?: "")
-                    mainStatement.bindString(17, songData["updatedAt"] ?: "")
-                    mainStatement.bindLong(18, (songData["bpm"] ?: "0").toLongOrNull() ?: 0L)
-                    mainStatement.bindString(19, songData["slug"] ?: "")
-                    mainStatement.bindLong(20, (songData["image_count"] ?: "0").toLongOrNull() ?: 0L)
-                    mainStatement.bindString(21, songData["id_zing_mp3"] ?: "")
-                    mainStatement.bindLong(22, if (lyricsText.isNotBlank()) 1L else 0L)
-                    mainStatement.executeInsert()
-                    count++
-                }
-                reader.endArray()
-                reader.close()
-
-                // Commit lyrics first. If metadata commit later fails, only harmless orphan blobs remain.
-                lyricsDb.setTransactionSuccessful()
-                lyricsDb.endTransaction()
-                lyricsTransactionOpen = false
-                mainDb.setTransactionSuccessful()
-                return@withContext "\u0110\u00e3 c\u1eadp nh\u1eadt th\u00e0nh c\u00f4ng $count b\u00e0i h\u00e1t m\u1edbi!"
-            } finally {
-                if (lyricsTransactionOpen) {
-                    try { lyricsDb.endTransaction() } catch (_: Exception) {}
-                }
-                mainDb.endTransaction()
-                mainStatement.close()
-                lyricsStatement.close()
+            val apiUrl = "${getRealApiUrl()}?action=check_update&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}" 
+            client.newCall(Request.Builder().url(apiUrl).build()).execute().use { response ->
+                if (!response.isSuccessful) return@withContext false
+                val body = response.body?.string() ?: "{}"
+                JSONObject(body).optBoolean("has_update", false)
             }
         } catch (e: Exception) {
-            Log.e("SongRepository", "Song synchronization failed", e)
-            return@withContext "L\u1ed7i m\u1ea1ng: Kh\u00f4ng th\u1ec3 \u0111\u1ed3ng b\u1ed9 d\u1eef li\u1ec7u"
+            Log.e("SongRepository", "Cannot check legacy updates", e)
+            false
+        }
+    }
+
+    suspend fun checkHasUpdate(): Boolean = withContext(Dispatchers.IO) {
+        // Bản đầu tiên dùng Sync V2 phải bootstrap một lần từ DB hiện tại.
+        if (!syncPrefs.getBoolean(KEY_BOOTSTRAP_DONE, false)) {
+            return@withContext true
+        }
+
+        try {
+            val cursor = syncPrefs.getLong(KEY_DELTA_CURSOR, 0L).coerceAtLeast(0L)
+            val apiUrl = "${getRealApiUrl()}?action=check_update_v2&after=$cursor"
+            val json = fetchJson(apiUrl, 20L)
+            if (!json.has("has_update")) {
+                throw SyncV2UnavailableException("Action check_update_v2 chưa có trên máy chủ")
+            }
+            json.optBoolean("has_update", false)
+        } catch (e: SyncV2UnavailableException) {
+            Log.w("SongRepository", "Sync V2 unavailable; checking legacy API", e)
+            legacyCheckHasUpdate()
+        } catch (e: Exception) {
+            Log.e("SongRepository", "Cannot check updates", e)
+            false
+        }
+    }
+
+    suspend fun syncNewSongsOnline(): String = songSyncMutex.withLock {
+        withContext(Dispatchers.IO) {
+            try {
+                val result = syncUsingV2()
+                return@withContext if (result.total == 0) {
+                    "Dữ liệu đã là phiên bản mới nhất."
+                } else {
+                    "Đã cập nhật ${result.upserted} bài và xóa ${result.deleted} bài cũ."
+                }
+            } catch (e: SyncV2UnavailableException) {
+                // Cho phép phát hành PHP trước/sau Android mà không làm app cũ hoặc app mới bị ngắt.
+                Log.w("SongRepository", "Falling back to legacy song sync", e)
+                return@withContext syncLegacySongsOnline()
+            } catch (e: SyncHttpException) {
+                Log.e("SongRepository", "Song Sync V2 server error", e)
+                return@withContext "Lỗi máy chủ: ${e.statusCode}"
+            } catch (e: Exception) {
+                Log.e("SongRepository", "Song synchronization failed", e)
+                return@withContext "Lỗi mạng: Không thể đồng bộ dữ liệu"
+            }
+        }
+    }
+
+    private fun syncUsingV2(): SyncBatchResult {
+        val total = SyncBatchResult()
+        if (!syncPrefs.getBoolean(KEY_BOOTSTRAP_DONE, false)) {
+            total += runBootstrapV2()
+        }
+        total += runDeltaSyncV2()
+        return total
+    }
+
+    private fun runBootstrapV2(): SyncBatchResult {
+        val total = SyncBatchResult()
+        var pageGuard = 0
+
+        while (!syncPrefs.getBoolean(KEY_BOOTSTRAP_DONE, false)) {
+            pageGuard++
+            if (pageGuard > 100_000) throw IOException("Bootstrap vượt quá số trang an toàn")
+
+            val hasSavedProgress = syncPrefs.contains(KEY_BOOTSTRAP_TIME)
+            val lastUpdate = if (hasSavedProgress) {
+                syncPrefs.getString(KEY_BOOTSTRAP_TIME, "2000-01-01 00:00:00")
+                    ?: "2000-01-01 00:00:00"
+            } else {
+                getLastUpdateTimestamp()
+            }
+            val lastId = syncPrefs.getString(KEY_BOOTSTRAP_ID, "").orEmpty()
+            val hasSnapshot = syncPrefs.contains(KEY_BOOTSTRAP_SNAPSHOT)
+            val snapshotCursor = if (hasSnapshot) {
+                syncPrefs.getLong(KEY_BOOTSTRAP_SNAPSHOT, 0L).coerceAtLeast(0L)
+            } else {
+                null
+            }
+
+            val url = buildString {
+                append(getRealApiUrl())
+                append("?action=sync_bootstrap_v2")
+                append("&last_update=")
+                append(URLEncoder.encode(lastUpdate, "UTF-8"))
+                append("&last_id=")
+                append(URLEncoder.encode(lastId, "UTF-8"))
+                append("&limit=")
+                append(SYNC_PAGE_SIZE)
+                if (snapshotCursor != null) {
+                    append("&snapshot_cursor=")
+                    append(snapshotCursor)
+                }
+            }
+
+            val json = fetchJson(url, 90L)
+            if (!json.has("items") || !json.has("snapshot_cursor")) {
+                throw SyncV2UnavailableException("Action sync_bootstrap_v2 chưa có trên máy chủ")
+            }
+
+            val items = json.optJSONArray("items") ?: JSONArray()
+            val pageResult = applySyncItems(items, deltaMode = false)
+            total += pageResult
+
+            val nextUpdate = json.optString("next_updated_at", lastUpdate)
+            val nextId = json.optString("next_id", lastId)
+            val returnedSnapshot = json.optLong("snapshot_cursor", snapshotCursor ?: 0L)
+            val hasMore = json.optBoolean("has_more", false)
+
+            if (hasMore && nextUpdate == lastUpdate && nextId == lastId) {
+                throw IOException("Máy chủ không dịch chuyển cursor bootstrap")
+            }
+
+            val editor = syncPrefs.edit()
+                .putString(KEY_BOOTSTRAP_TIME, nextUpdate)
+                .putString(KEY_BOOTSTRAP_ID, nextId)
+                .putLong(KEY_BOOTSTRAP_SNAPSHOT, returnedSnapshot)
+
+            if (hasMore) {
+                require(editor.commit()) { "Không lưu được tiến độ bootstrap" }
+            } else {
+                require(
+                    editor
+                        // Replay toàn bộ change log kể từ lúc cài migration để nhận cả các sự kiện delete
+                        // đã phát sinh trước khi thiết bị bootstrap. Upsert lặp lại là an toàn.
+                        .putLong(KEY_DELTA_CURSOR, 0L)
+                        .putBoolean(KEY_BOOTSTRAP_DONE, true)
+                        .remove(KEY_BOOTSTRAP_TIME)
+                        .remove(KEY_BOOTSTRAP_ID)
+                        .remove(KEY_BOOTSTRAP_SNAPSHOT)
+                        .commit()
+                ) { "Không lưu được cursor Sync V2" }
+            }
+        }
+
+        return total
+    }
+
+    private fun runDeltaSyncV2(): SyncBatchResult {
+        val total = SyncBatchResult()
+        var cursor = syncPrefs.getLong(KEY_DELTA_CURSOR, 0L).coerceAtLeast(0L)
+        var pageGuard = 0
+
+        while (true) {
+            pageGuard++
+            if (pageGuard > 100_000) throw IOException("Delta sync vượt quá số trang an toàn")
+
+            val url = "${getRealApiUrl()}?action=sync_v2&after=$cursor&limit=$SYNC_PAGE_SIZE"
+            val json = fetchJson(url, 90L)
+            if (!json.has("changes") || !json.has("next_cursor")) {
+                throw SyncV2UnavailableException("Action sync_v2 chưa có trên máy chủ")
+            }
+
+            val changes = json.optJSONArray("changes") ?: JSONArray()
+            val pageResult = applySyncItems(changes, deltaMode = true)
+            total += pageResult
+
+            val nextCursor = json.optLong("next_cursor", cursor).coerceAtLeast(cursor)
+            val hasMore = json.optBoolean("has_more", false)
+
+            if (hasMore && nextCursor <= cursor) {
+                throw IOException("Máy chủ không dịch chuyển delta cursor")
+            }
+
+            // Chỉ nâng cursor sau khi cả metadata và lyrics của trang đã được ghi xong.
+            require(syncPrefs.edit().putLong(KEY_DELTA_CURSOR, nextCursor).commit()) {
+                "Không lưu được delta cursor"
+            }
+            cursor = nextCursor
+
+            if (!hasMore) break
+        }
+
+        return total
+    }
+
+    private fun applySyncItems(items: JSONArray, deltaMode: Boolean): SyncBatchResult {
+        if (items.length() == 0) return SyncBatchResult()
+
+        val mainDb = dbHelper.writableDatabase
+        val lyricsDb = lyricsDbHelper.writableDatabase
+        val result = SyncBatchResult()
+
+        val mainSql = """
+            INSERT OR REPLACE INTO songs (
+                id, title, originalKey, rhythm, chordList, lyrics, favoriteCount,
+                viewCount, commentCount, ratingStars, ratingCount, genre,
+                authorName, singerNames, youtubeUrl, createdAt, updatedAt,
+                bpm, slug, image_count, id_zing_mp3, hasLyrics
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """.trimIndent()
+        val lyricsSql = "INSERT OR REPLACE INTO lyrics (song_id, lyrics_z, raw_bytes) VALUES (?, ?, ?)"
+        val mainStatement = mainDb.compileStatement(mainSql)
+        val lyricsStatement = lyricsDb.compileStatement(lyricsSql)
+
+        var mainTransactionOpen = false
+        var lyricsTransactionOpen = false
+        try {
+            mainDb.beginTransaction()
+            mainTransactionOpen = true
+            lyricsDb.beginTransaction()
+            lyricsTransactionOpen = true
+
+            for (index in 0 until items.length()) {
+                if (deltaMode) {
+                    val change = items.optJSONObject(index) ?: continue
+                    val operation = change.optString("operation", "upsert")
+                    val songId = change.optString("song_id", "")
+
+                    if (operation == "delete") {
+                        if (songId.isNotBlank() && !songId.startsWith("local_")) {
+                            val deletedMain = mainDb.delete("songs", "id = ?", arrayOf(songId))
+                            val deletedLyrics = lyricsDb.delete("lyrics", "song_id = ?", arrayOf(songId))
+                            if (deletedMain > 0 || deletedLyrics > 0) result.deleted++
+                        }
+                    } else {
+                        val song = change.optJSONObject("song") ?: continue
+                        if (upsertSongFromJson(song, mainStatement, lyricsStatement)) result.upserted++
+                    }
+                } else {
+                    val song = items.optJSONObject(index) ?: continue
+                    if (upsertSongFromJson(song, mainStatement, lyricsStatement)) result.upserted++
+                }
+            }
+
+            lyricsDb.setTransactionSuccessful()
+            mainDb.setTransactionSuccessful()
+        } finally {
+            if (lyricsTransactionOpen) {
+                try { lyricsDb.endTransaction() } catch (_: Exception) {}
+            }
+            if (mainTransactionOpen) {
+                try { mainDb.endTransaction() } catch (_: Exception) {}
+            }
+            mainStatement.close()
+            lyricsStatement.close()
+        }
+
+        return result
+    }
+
+    private fun upsertSongFromJson(
+        songData: JSONObject,
+        mainStatement: android.database.sqlite.SQLiteStatement,
+        lyricsStatement: android.database.sqlite.SQLiteStatement
+    ): Boolean {
+        val songId = songData.stringOrEmpty("id")
+        if (songId.isBlank() || songId.startsWith("local_")) return false
+
+        val lyricsText = songData.stringOrEmpty("lyrics")
+        val compressed = compressLyrics(lyricsText)
+
+        lyricsStatement.clearBindings()
+        lyricsStatement.bindString(1, songId)
+        lyricsStatement.bindBlob(2, compressed)
+        lyricsStatement.bindLong(3, lyricsText.toByteArray(Charsets.UTF_8).size.toLong())
+        lyricsStatement.executeInsert()
+
+        mainStatement.clearBindings()
+        mainStatement.bindString(1, songId)
+        mainStatement.bindString(2, songData.stringOrEmpty("title"))
+        mainStatement.bindString(3, songData.stringOrEmpty("originalKey"))
+        mainStatement.bindString(4, songData.stringOrEmpty("rhythm"))
+        mainStatement.bindString(5, songData.stringOrEmpty("chordList"))
+        mainStatement.bindString(6, "")
+        mainStatement.bindLong(7, songData.optLong("favoriteCount", 0L))
+        mainStatement.bindLong(8, songData.optLong("viewCount", 0L))
+        mainStatement.bindLong(9, songData.optLong("commentCount", 0L))
+        mainStatement.bindDouble(10, songData.optDouble("ratingStars", 0.0))
+        mainStatement.bindLong(11, songData.optLong("ratingCount", 0L))
+        mainStatement.bindString(12, songData.stringOrEmpty("genre"))
+        mainStatement.bindString(13, songData.stringOrEmpty("authorName"))
+        mainStatement.bindString(14, songData.stringOrEmpty("singerNames"))
+        mainStatement.bindString(15, songData.stringOrEmpty("youtubeUrl"))
+        mainStatement.bindString(16, songData.stringOrEmpty("createdAt"))
+        mainStatement.bindString(17, songData.stringOrEmpty("updatedAt"))
+        mainStatement.bindLong(18, songData.optLong("bpm", 0L))
+        mainStatement.bindString(19, songData.stringOrEmpty("slug"))
+        mainStatement.bindLong(20, songData.optLong("image_count", 0L))
+        mainStatement.bindString(21, songData.stringOrEmpty("id_zing_mp3"))
+        mainStatement.bindLong(22, if (lyricsText.isNotBlank()) 1L else 0L)
+        mainStatement.executeInsert()
+        return true
+    }
+
+    private fun syncLegacySongsOnline(): String {
+        try {
+            val lastUpdate = getLastUpdateTimestamp()
+            val apiUrl = "${getRealApiUrl()}?action=sync&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}" 
+            val syncClient = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
+
+            syncClient.newCall(Request.Builder().url(apiUrl).build()).execute().use { response ->
+                if (!response.isSuccessful) return "Lỗi máy chủ: ${response.code}"
+
+                val inputStream = response.body?.byteStream() ?: return "Dữ liệu trống"
+                val mainDb = dbHelper.writableDatabase
+                val lyricsDb = lyricsDbHelper.writableDatabase
+
+                val mainSql = """
+                    INSERT OR REPLACE INTO songs (
+                        id, title, originalKey, rhythm, chordList, lyrics, favoriteCount,
+                        viewCount, commentCount, ratingStars, ratingCount, genre,
+                        authorName, singerNames, youtubeUrl, createdAt, updatedAt,
+                        bpm, slug, image_count, id_zing_mp3, hasLyrics
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent()
+                val lyricsSql = "INSERT OR REPLACE INTO lyrics (song_id, lyrics_z, raw_bytes) VALUES (?, ?, ?)"
+                val mainStatement = mainDb.compileStatement(mainSql)
+                val lyricsStatement = lyricsDb.compileStatement(lyricsSql)
+
+                var lyricsTransactionOpen = false
+                mainDb.beginTransaction()
+                lyricsDb.beginTransaction()
+                lyricsTransactionOpen = true
+                try {
+                    val reader = android.util.JsonReader(java.io.InputStreamReader(inputStream, Charsets.UTF_8))
+                    var count = 0
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        val songData = HashMap<String, String>()
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            val key = reader.nextName()
+                            when (reader.peek()) {
+                                android.util.JsonToken.NULL -> {
+                                    reader.nextNull()
+                                    songData[key] = ""
+                                }
+                                android.util.JsonToken.BOOLEAN -> songData[key] = reader.nextBoolean().toString()
+                                android.util.JsonToken.STRING,
+                                android.util.JsonToken.NUMBER -> songData[key] = reader.nextString()
+                                else -> reader.skipValue()
+                            }
+                        }
+                        reader.endObject()
+
+                        val songId = songData["id"] ?: ""
+                        if (songId.isBlank() || songId.startsWith("local_")) continue
+                        val lyricsText = songData["lyrics"] ?: ""
+                        val compressed = compressLyrics(lyricsText)
+
+                        lyricsStatement.clearBindings()
+                        lyricsStatement.bindString(1, songId)
+                        lyricsStatement.bindBlob(2, compressed)
+                        lyricsStatement.bindLong(3, lyricsText.toByteArray(Charsets.UTF_8).size.toLong())
+                        lyricsStatement.executeInsert()
+
+                        mainStatement.clearBindings()
+                        mainStatement.bindString(1, songId)
+                        mainStatement.bindString(2, songData["title"] ?: "")
+                        mainStatement.bindString(3, songData["originalKey"] ?: "")
+                        mainStatement.bindString(4, songData["rhythm"] ?: "")
+                        mainStatement.bindString(5, songData["chordList"] ?: "")
+                        mainStatement.bindString(6, "")
+                        mainStatement.bindLong(7, (songData["favoriteCount"] ?: "0").toLongOrNull() ?: 0L)
+                        mainStatement.bindLong(8, (songData["viewCount"] ?: "0").toLongOrNull() ?: 0L)
+                        mainStatement.bindLong(9, (songData["commentCount"] ?: "0").toLongOrNull() ?: 0L)
+                        mainStatement.bindDouble(10, (songData["ratingStars"] ?: "0.0").toDoubleOrNull() ?: 0.0)
+                        mainStatement.bindLong(11, (songData["ratingCount"] ?: "0").toLongOrNull() ?: 0L)
+                        mainStatement.bindString(12, songData["genre"] ?: "")
+                        mainStatement.bindString(13, songData["authorName"] ?: "")
+                        mainStatement.bindString(14, songData["singerNames"] ?: "")
+                        mainStatement.bindString(15, songData["youtubeUrl"] ?: "")
+                        mainStatement.bindString(16, songData["createdAt"] ?: "")
+                        mainStatement.bindString(17, songData["updatedAt"] ?: "")
+                        mainStatement.bindLong(18, (songData["bpm"] ?: "0").toLongOrNull() ?: 0L)
+                        mainStatement.bindString(19, songData["slug"] ?: "")
+                        mainStatement.bindLong(20, (songData["image_count"] ?: "0").toLongOrNull() ?: 0L)
+                        mainStatement.bindString(21, songData["id_zing_mp3"] ?: "")
+                        mainStatement.bindLong(22, if (lyricsText.isNotBlank()) 1L else 0L)
+                        mainStatement.executeInsert()
+                        count++
+                    }
+                    reader.endArray()
+                    reader.close()
+
+                    lyricsDb.setTransactionSuccessful()
+                    lyricsDb.endTransaction()
+                    lyricsTransactionOpen = false
+                    mainDb.setTransactionSuccessful()
+                    return "Đã cập nhật thành công $count bài hát mới!"
+                } finally {
+                    if (lyricsTransactionOpen) {
+                        try { lyricsDb.endTransaction() } catch (_: Exception) {}
+                    }
+                    mainDb.endTransaction()
+                    mainStatement.close()
+                    lyricsStatement.close()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("SongRepository", "Legacy song synchronization failed", e)
+            return "Lỗi mạng: Không thể đồng bộ dữ liệu"
         }
     }
 
@@ -1064,7 +1563,7 @@ class SongRepository(context: Context) {
             val mainDb = dbHelper.writableDatabase
             val ids = mutableListOf<String>()
             mainDb.rawQuery(
-                "SELECT id FROM songs WHERE title = ? COLLATE NOCASE AND singerNames = ? COLLATE NOCASE AND id LIKE 'local_%'",
+                "SELECT id FROM songs WHERE title = ? COLLATE NOCASE AND singerNames = ? COLLATE NOCASE AND id GLOB 'local_*'",
                 arrayOf(title.trim(), singer.trim())
             ).use { cursor ->
                 while (cursor.moveToNext()) ids.add(cursor.getString(0) ?: "")
@@ -1072,7 +1571,7 @@ class SongRepository(context: Context) {
 
             val deleted = mainDb.delete(
                 "songs",
-                "title = ? COLLATE NOCASE AND singerNames = ? COLLATE NOCASE AND id LIKE 'local_%'",
+                "title = ? COLLATE NOCASE AND singerNames = ? COLLATE NOCASE AND id GLOB 'local_*'",
                 arrayOf(title.trim(), singer.trim())
             )
             val lyricsDb = lyricsDbHelper.writableDatabase
@@ -1106,7 +1605,16 @@ class SongRepository(context: Context) {
     }
 
     suspend fun insertCustomSongLocal(song: SongDetails): Boolean = withContext(Dispatchers.IO) {
-        val newId = if (song.songId.isNotBlank()) song.songId else "local_${System.currentTimeMillis()}"
+        val newId = if (song.songId.startsWith("local_")) {
+            song.songId
+        } else {
+            val fingerprint = "${song.title.trim().lowercase()}|${song.singer.trim().lowercase()}"
+            val hash = MessageDigest.getInstance("SHA-256")
+                .digest(fingerprint.toByteArray(Charsets.UTF_8))
+                .take(10)
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            "local_$hash"
+        }
         try {
             if (!saveLyricsBlocking(newId, song.lyrics)) return@withContext false
             val now = java.text.SimpleDateFormat(
