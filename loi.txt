@@ -1,13 +1,4 @@
 
-CREATE TABLE IF NOT EXISTS song_sync_changes (
-    change_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    song_id VARCHAR(255) NOT NULL,
-    operation ENUM('upsert', 'delete') NOT NULL,
-    changed_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-
-    PRIMARY KEY (change_id),
-    KEY idx_song_sync_song_id (song_id),
-    KEY idx_song_sync_changed_at (changed_at)
-) ENGINE=InnoDB
-  DEFAULT CHARSET=utf8mb4
-  COLLATE=utf8mb4_unicode_ci;
+https://tunertools.top/api_songs.php?action=check_update_v2&after=0&utm_source=chatgpt.com
+https://tunertools.top/api_songs.php?action=sync_bootstrap_v2&last_update=2000-01-01+00:00:00&limit=1&utm_source=chatgpt.com
+https://tunertools.top/api_songs.php?action=sync_v2&after=0&limit=1&utm_source=chatgpt.com
