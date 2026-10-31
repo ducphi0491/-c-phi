@@ -1,1 +1,3 @@
-setTestDeviceIds
+---------------------------- PROCESS STARTED (22054) for package ducphi.tunnerinstrument ----------------------------
+2026-11-01 00:10:52.979 22054-22054 TunerBanner             ducphi.tunnerinstrument              I  DEBUG SDK test device hash is empty; check I/Ads Logcat for setTestDeviceIds(...) hint
+2026-11-01 00:10:53.107 22054-22337 Ads                     ducphi.tunnerinstrument              I  Use RequestConfiguration.Builder().setTestDeviceIds(Arrays.asList("15296D32E45E2F8F7E6B53F613E65A34")) to get test ads on this device.
