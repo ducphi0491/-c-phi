@@ -1,74 +1,96 @@
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$project = "C:\AudioSheetStudio\audio-sheet-studio"
-$missing = 0
+PS C:\Users\Administrator>
+>> $project = "C:\AudioSheetStudio\audio-sheet-studio"
+>> $missing = 0
+>>
+>> Write-Host "`n===== KIEM TRA AUDIO SHEET STUDIO =====" -ForegroundColor Cyan
+>>
+>> function CheckTool($name, $command, [string[]]$arguments) {
+>>     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+>>         Write-Host "[THIEU] $name" -ForegroundColor Red
+>>         $script:missing++
+>>         return
+>>     }
+>>     try {
+>>         $output = (& $command @arguments 2>&1 | Out-String).Trim()
+>>         if ($LASTEXITCODE -eq 0) {
+>>             $first = ($output -split "`r?`n")[0]
+>>             Write-Host "[OK] $name : $first" -ForegroundColor Green
+>>         } else {
+>>             Write-Host "[THIEU/LOI] $name" -ForegroundColor Red
+>>             $script:missing++
+>>         }
+>>     } catch {
+>>         Write-Host "[LOI] $name" -ForegroundColor Red
+>>         $script:missing++
+>>     }
+>> }
+>>
+>> Write-Host "`n--- 1. PHAN MEM HE THONG ---" -ForegroundColor Yellow
+>> CheckTool "Python 3.11" "py" @("-3.11", "--version")
+>> CheckTool "FFmpeg" "ffmpeg" @("-version")
+>> CheckTool "FFprobe" "ffprobe" @("-version")
+>> CheckTool "Node.js" "node" @("--version")
+>>
+>> Write-Host "`n--- 2. THU VIEN PYTHON ---" -ForegroundColor Yellow
+>> $python = Join-Path $project ".venv\Scripts\python.exe"
+>>
+>> if (Test-Path $python) {
+>>     $packages = @("fastapi", "music21", "basic_pitch", "tensorflow", "yt_dlp")
+>>     foreach ($pkg in $packages) {
+>>         & $python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('$pkg') else 1)" 2>$null
+>>         if ($LASTEXITCODE -eq 0) {
+>>             Write-Host "[OK] $pkg" -ForegroundColor Green
+>>         } else {
+>>             Write-Host "[THIEU] $pkg" -ForegroundColor Red
+>>             $missing++
+>>         }
+>>     }
+>>
+>>     $checker = Join-Path $project "scripts\check_install.py"
+>>     if (Test-Path $checker) {
+>>         Write-Host "`n--- 3. KIEM TRA CHUYEN SAU ---" -ForegroundColor Yellow
+>>         & $python $checker
+>>         if ($LASTEXITCODE -ne 0) { $missing++ }
+>>     }
+>> } else {
+>>     Write-Host "[THIEU] Moi truong .venv hoac sai duong dan du an" -ForegroundColor Red
+>>     $missing++
+>> }
+>>
+>> Write-Host "`n--- 4. MUSESCORE (TUY CHON) ---" -ForegroundColor Yellow
+>> $ms = Join-Path $env:ProgramFiles "MuseScore 4\bin\MuseScore4.exe"
+>> if (Test-Path $ms) {
+>>     Write-Host "[OK] MuseScore 4" -ForegroundColor Green
+>> } else {
+>>     Write-Host "[TUY CHON] Chua tim thay MuseScore 4" -ForegroundColor Yellow
+>> }
+>>
+>> Write-Host "`n===== KET QUA =====" -ForegroundColor Cyan
+>> if ($missing -eq 0) {
+>>     Write-Host "Khong phat hien thanh phan bat buoc bi thieu." -ForegroundColor Green
+>> } else {
+>>     Write-Host "Phat hien $missing muc thieu hoac loi." -ForegroundColor Red
+>> }
+>> Write-Host "================================" -ForegroundColor Cyan
 
-Write-Host "`n===== KIEM TRA AUDIO SHEET STUDIO =====" -ForegroundColor Cyan
+===== KIEM TRA AUDIO SHEET STUDIO =====
 
-function CheckTool($name, $command, [string[]]$arguments) {
-    if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        Write-Host "[THIEU] $name" -ForegroundColor Red
-        $script:missing++
-        return
-    }
-    try {
-        $output = (& $command @arguments 2>&1 | Out-String).Trim()
-        if ($LASTEXITCODE -eq 0) {
-            $first = ($output -split "`r?`n")[0]
-            Write-Host "[OK] $name : $first" -ForegroundColor Green
-        } else {
-            Write-Host "[THIEU/LOI] $name" -ForegroundColor Red
-            $script:missing++
-        }
-    } catch {
-        Write-Host "[LOI] $name" -ForegroundColor Red
-        $script:missing++
-    }
-}
+--- 1. PHAN MEM HE THONG ---
+[OK] Python 3.11 : Python 3.11.9
+[OK] FFmpeg : ffmpeg version 2026-06-29-git-de6bcf5c05-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
+[OK] FFprobe : ffprobe version 2026-06-29-git-de6bcf5c05-essentials_build-www.gyan.dev Copyright (c) 2007-2026 the FFmpeg developers
+[THIEU] Node.js
 
-Write-Host "`n--- 1. PHAN MEM HE THONG ---" -ForegroundColor Yellow
-CheckTool "Python 3.11" "py" @("-3.11", "--version")
-CheckTool "FFmpeg" "ffmpeg" @("-version")
-CheckTool "FFprobe" "ffprobe" @("-version")
-CheckTool "Node.js" "node" @("--version")
+--- 2. THU VIEN PYTHON ---
+[THIEU] Moi truong .venv hoac sai duong dan du an
 
-Write-Host "`n--- 2. THU VIEN PYTHON ---" -ForegroundColor Yellow
-$python = Join-Path $project ".venv\Scripts\python.exe"
+--- 4. MUSESCORE (TUY CHON) ---
+[TUY CHON] Chua tim thay MuseScore 4
 
-if (Test-Path $python) {
-    $packages = @("fastapi", "music21", "basic_pitch", "tensorflow", "yt_dlp")
-    foreach ($pkg in $packages) {
-        & $python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('$pkg') else 1)" 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "[OK] $pkg" -ForegroundColor Green
-        } else {
-            Write-Host "[THIEU] $pkg" -ForegroundColor Red
-            $missing++
-        }
-    }
-
-    $checker = Join-Path $project "scripts\check_install.py"
-    if (Test-Path $checker) {
-        Write-Host "`n--- 3. KIEM TRA CHUYEN SAU ---" -ForegroundColor Yellow
-        & $python $checker
-        if ($LASTEXITCODE -ne 0) { $missing++ }
-    }
-} else {
-    Write-Host "[THIEU] Moi truong .venv hoac sai duong dan du an" -ForegroundColor Red
-    $missing++
-}
-
-Write-Host "`n--- 4. MUSESCORE (TUY CHON) ---" -ForegroundColor Yellow
-$ms = Join-Path $env:ProgramFiles "MuseScore 4\bin\MuseScore4.exe"
-if (Test-Path $ms) {
-    Write-Host "[OK] MuseScore 4" -ForegroundColor Green
-} else {
-    Write-Host "[TUY CHON] Chua tim thay MuseScore 4" -ForegroundColor Yellow
-}
-
-Write-Host "`n===== KET QUA =====" -ForegroundColor Cyan
-if ($missing -eq 0) {
-    Write-Host "Khong phat hien thanh phan bat buoc bi thieu." -ForegroundColor Green
-} else {
-    Write-Host "Phat hien $missing muc thieu hoac loi." -ForegroundColor Red
-}
-Write-Host "================================" -ForegroundColor Cyan
+===== KET QUA =====
+Phat hien 2 muc thieu hoac loi.
+================================
+PS C:\Users\Administrator>
