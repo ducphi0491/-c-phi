@@ -1,0 +1,1335 @@
+package ducphi.tunnerinstrument
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import androidx.compose.material.icons.filled.DonutLarge
+import kotlinx.coroutines.launch
+
+// --- HÀM TIỆN ÍCH CHUYỂN ĐỔI KÝ HIỆU ÂM NHẠC CHUẨN ---
+fun String.toMusicSymbols(): String {
+    return this.replace("#", "♯").replace("b", "♭")
+}
+
+// --- HÀM XỬ LÝ NGÔN NGỮ NỘI BỘ ---
+fun getLocalString(key: String, lang: String): String {
+    return when (key) {
+        "circle_of_fifths" -> if (lang == "vi") "Vòng quãng 5" else "Circle of Fifths"
+        "swipe_to_rotate" -> if (lang == "vi") "← Kéo vòng tròn để xoay →" else "← Swipe circle to rotate →"
+        "search" -> if (lang == "vi") "Tìm kiếm" else "Search"
+        "voice_prompt" -> if (lang == "vi") "Đọc tên hợp âm (vd: Đô trưởng)" else "Say a chord (e.g. C Major)"
+        "voice_not_supported" -> if (lang == "vi") "Thiết bị không hỗ trợ tìm kiếm giọng nói" else "Voice search not supported"
+        "not_found_chord" -> if (lang == "vi") "Không tìm thấy hợp âm" else "Chord not found"
+        "position" -> if (lang == "vi") "Thế tay" else "Position"
+        "close" -> if (lang == "vi") "Đóng" else "Close"
+        else -> key
+    }
+}
+
+// --- DATA MODELS ---
+data class ChordPosition(
+    val frets: kotlin.collections.List<Int>,
+    val fingers: kotlin.collections.List<Int>,
+    val baseFret: Int,
+    val midi: kotlin.collections.List<Int>
+)
+
+data class ChordModel(
+    val key: String,
+    val suffix: String,
+    val positions: kotlin.collections.List<ChordPosition>
+)
+
+// --- HÀM TỰ ĐỘNG TÍNH TOÁN PHÂN NGÓN (FALLBACK NẾU JSON KHÔNG CÓ) ---
+fun autoCalculateFingers(frets: kotlin.collections.List<Int>): kotlin.collections.List<Int> {
+    val fingers = MutableList(frets.size) { 0 }
+    val pressed = mutableListOf<Pair<Int, Int>>() // stringIndex, fret
+
+    for (i in frets.indices) {
+        if (frets[i] > 0) pressed.add(Pair(i, frets[i]))
+    }
+    if (pressed.isEmpty()) return fingers
+
+    val minFret = pressed.minOf { it.second }
+    val minFretStrings = pressed.filter { it.second == minFret }
+
+    var currentFinger = 1
+    // Nhận diện thanh chặn (Barre)
+    val isBarre = minFretStrings.size > 1 && (minFretStrings.last().first - minFretStrings.first().first >= 1)
+
+    if (isBarre) {
+        minFretStrings.forEach { fingers[it.first] = 1 }
+        currentFinger = 2
+    }
+
+    // Phân ngón các phím còn lại theo thứ tự từ phím thấp đến cao, dây trầm đến bổng
+    val remaining = pressed.filter { if (isBarre) it.second > minFret else true }
+        .sortedWith(compareBy({ it.second }, { it.first }))
+
+    for (p in remaining) {
+        if (currentFinger <= 4) {
+            fingers[p.first] = currentFinger
+            currentFinger++
+        } else {
+            fingers[p.first] = 4 // Giới hạn tối đa ngón út
+        }
+    }
+    return fingers
+}
+
+// --- HÀM XỬ LÝ GIỌNG NÓI ---
+fun mapVoiceToChord(spokenText: String, lang: String): String {
+    var text = spokenText.lowercase().trim()
+    if (lang == "vi") {
+        val notesMap = mapOf("đô" to "C", "rê" to "D", "mi" to "E", "fa" to "F", "pha" to "F", "sol" to "G", "son" to "G", "la" to "A", "si" to "B", "xi" to "B")
+        notesMap.forEach { (k, v) -> text = text.replace(k, v) }
+        val suffixMap = mapOf("thăng" to "#", "giáng" to "b", "trưởng" to "", "thứ" to "m", "bảy" to "7", "chín" to "9", "trừ" to "-", "cộng" to "+")
+        suffixMap.forEach { (k, v) -> text = text.replace(k, v) }
+    } else {
+        val enMap = mapOf("sharp" to "#", "flat" to "b", "major" to "", "minor" to "m", "seven" to "7", "nine" to "9", "plus" to "+", "minus" to "-")
+        enMap.forEach { (k, v) -> text = text.replace(k, v) }
+    }
+    text = text.replace("\\s+".toRegex(), "")
+    return text.replaceFirstChar { it.uppercase() }
+}
+
+// --- HÀM ĐỌC JSON ---
+suspend fun loadChordsFromAssets(context: Context, fileName: String): kotlin.collections.List<ChordModel> = withContext(Dispatchers.IO) {
+    val result = mutableListOf<ChordModel>()
+    try {
+        val jsonString = context.assets.open(fileName).bufferedReader().use { it.readText() }
+        val jsonObject = JSONObject(jsonString)
+        val chordsObj = jsonObject.getJSONObject("chords")
+
+        val iter = chordsObj.keys()
+        while (iter.hasNext()) {
+            val noteKey = iter.next()
+            val chordArray = chordsObj.getJSONArray(noteKey)
+
+            for (i in 0 until chordArray.length()) {
+                val chordItem = chordArray.getJSONObject(i)
+                val key = chordItem.getString("key")
+                val suffix = chordItem.getString("suffix")
+                val positionsArray = chordItem.getJSONArray("positions")
+
+                val positionsList = mutableListOf<ChordPosition>()
+                for (j in 0 until positionsArray.length()) {
+                    val posItem = positionsArray.getJSONObject(j)
+
+                    val fretsArr = posItem.optJSONArray("frets")
+                    val fretsList = mutableListOf<Int>()
+                    if (fretsArr != null) {
+                        for (k in 0 until fretsArr.length()) {
+                            val v = fretsArr.get(k)
+                            if (v is Int) fretsList.add(v)
+                        }
+                    }
+
+                    val fingersArr = posItem.optJSONArray("fingers")
+                    var fingersList = mutableListOf<Int>()
+                    if (fingersArr != null && fingersArr.length() == fretsList.size) {
+                        for (k in 0 until fingersArr.length()) {
+                            fingersList.add(fingersArr.optInt(k, 0))
+                        }
+                    } else {
+                        // Nếu JSON thiếu ngón tay, tự động nội suy
+                        fingersList = autoCalculateFingers(fretsList).toMutableList()
+                    }
+
+                    val midiArr = posItem.optJSONArray("midi")
+                    val midiList = mutableListOf<Int>()
+                    if (midiArr != null) {
+                        for (k in 0 until midiArr.length()) {
+                            midiList.add(midiArr.getInt(k))
+                        }
+                    }
+
+                    val baseFret = posItem.optInt("baseFret", 1)
+                    positionsList.add(ChordPosition(fretsList, fingersList, baseFret, midiList))
+                }
+                result.add(ChordModel(key, suffix, positionsList))
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    result
+}
+
+fun getInstIcon(instName: String): Int {
+    return when (instName) {
+        "Guitar" -> R.drawable.logo_guitar
+        "Ukulele" -> R.drawable.logo_ukulele
+        "Piano" -> R.drawable.logo_piano
+        else -> R.drawable.logo_guitar
+    }
+}
+
+// --- GIAO DIỆN CHÍNH ---
+@Composable
+fun ChordsScreen(
+    currentLang: String = "vi",
+    bgColor: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    tunaGreen: Color,
+    initialQuery: String = "",
+    onFullScreenToggle: (Boolean) -> Unit = {}
+) {
+    val context = LocalContext.current
+    var allChords by remember { mutableStateOf<kotlin.collections.List<ChordModel>>(emptyList()) }
+    var showCircle by remember { mutableStateOf(false) }
+
+    // Quản lý trạng thái giữa Vòng quãng 5 và Vòng hoà âm
+    var isCircleOfHarmony by remember { mutableStateOf(false) }
+
+    var selectedInstrument by remember { mutableStateOf("Guitar") }
+    var isInstrumentExpanded by remember { mutableStateOf(false) }
+
+    var searchQuery by remember { mutableStateOf(initialQuery) }
+
+    var selectedKey by remember { mutableStateOf("C") }
+    var selectedSuffix by remember { mutableStateOf("major") }
+    var isKeyExpanded by remember { mutableStateOf(false) }
+    var isSuffixExpanded by remember { mutableStateOf(false) }
+
+    // Cờ đánh dấu lần đầu tiên vào tab
+    var isFirstLoad by remember { mutableStateOf(true) }
+
+    var dialogChord by remember { mutableStateOf<ChordModel?>(null) }
+    var showPracticeScreen by remember { mutableStateOf(false) }
+    val availableKeys = allChords.map { it.key }.distinct()
+    val availableSuffixes = allChords.filter { it.key == selectedKey }.map { it.suffix }.distinct()
+
+    val voiceSearchLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data
+            val matches = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                val spokenText = matches[0]
+                searchQuery = mapVoiceToChord(spokenText, currentLang)
+            }
+        }
+    }
+
+    LaunchedEffect(initialQuery) {
+        if (initialQuery.isNotBlank()) {
+            searchQuery = initialQuery
+        }
+    }
+
+    LaunchedEffect(selectedInstrument) {
+        val fileName = when (selectedInstrument) {
+            "Guitar" -> "guitar.json"
+            "Ukulele" -> "ukulele.json"
+            else -> "piano.json"
+        }
+        allChords = loadChordsFromAssets(context, fileName)
+
+        CoreAudioPlayer.init()
+        CoreAudioPlayer.loadInstrument(context, selectedInstrument)
+
+        if (allChords.isNotEmpty()) {
+            if (isFirstLoad) {
+                // Định nghĩa các Note và Hậu tố cơ bản (Trưởng, Thứ, 7)
+                val basicKeys = listOf("C", "D", "E", "F", "G", "A")
+                val basicSuffixes = listOf("major", "minor", "7")
+
+                // Lọc danh sách allChords chỉ lấy các hợp âm cơ bản
+                val basicChords = allChords.filter { it.key in basicKeys && it.suffix in basicSuffixes }
+
+                // Lấy ngẫu nhiên 1 hợp âm trong danh sách cơ bản. Fallback về random toàn bộ nếu list cơ bản trống.
+                val randomChord = if (basicChords.isNotEmpty()) basicChords.random() else allChords.random()
+
+                selectedKey = randomChord.key
+                selectedSuffix = randomChord.suffix
+                isFirstLoad = false
+            } else if (!availableKeys.contains(selectedKey)) {
+                selectedKey = allChords.first().key
+                val newSuffixes = allChords.filter { it.key == selectedKey }.map { it.suffix }
+                selectedSuffix = newSuffixes.firstOrNull() ?: "major"
+            }
+        }
+    }
+
+    LaunchedEffect(searchQuery, allChords) {
+        if (searchQuery.isNotBlank() && allChords.isNotEmpty()) {
+            val exactMatch = allChords.find { chord ->
+                val displaySuffix = when (chord.suffix) {
+                    "major" -> ""
+                    "minor" -> "m"
+                    else -> chord.suffix
+                }
+                val chordFullName = "${chord.key}$displaySuffix"
+                val isDirectMatch = chordFullName.equals(searchQuery, ignoreCase = true)
+
+                val enharmonicMap = mapOf(
+                    "C#" to "Db", "Db" to "C#",
+                    "D#" to "Eb", "Eb" to "D#",
+                    "F#" to "Gb", "Gb" to "F#",
+                    "G#" to "Ab", "Ab" to "G#",
+                    "A#" to "Bb", "Bb" to "A#"
+                )
+
+                var isEnharmonicMatch = false
+                val match = Regex("^([A-G][#b]?)(.*)").find(searchQuery)
+                if (match != null) {
+                    val root = match.groupValues[1]
+                    val suffix = match.groupValues[2]
+                    val altRoot = enharmonicMap[root]
+                    if (altRoot != null) {
+                        val altChordName = "$altRoot$suffix"
+                        isEnharmonicMatch = chordFullName.equals(altChordName, ignoreCase = true)
+                    }
+                }
+                isDirectMatch || isEnharmonicMatch
+            }
+
+            if (exactMatch != null) {
+                selectedKey = exactMatch.key
+                selectedSuffix = exactMatch.suffix
+            }
+        }
+    }
+
+    dialogChord?.let { chord ->
+        ChordDetailDialog(
+            chord = chord,
+            allChords = allChords,
+            instrument = selectedInstrument,
+            onInstrumentChange = { newInst -> selectedInstrument = newInst },
+            currentLang = currentLang,
+            textColor = textColor,
+            surfaceColor = surfaceColor,
+            bgColor = bgColor,
+            tunaGreen = tunaGreen,
+            onDismiss = { dialogChord = null }
+        )
+    }
+    if (showPracticeScreen) {
+        ChordPracticeScreen(
+            allChords = allChords,
+            instrument = selectedInstrument,
+            onInstrumentChange = { newInst -> selectedInstrument = newInst },
+            currentLang = currentLang,
+            bgColor = bgColor,
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            tunaGreen = tunaGreen,
+            onClose = {
+                showPracticeScreen = false
+                onFullScreenToggle(false)
+            },
+            onFullScreenToggle = onFullScreenToggle
+        )
+        return
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, surfaceColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .background(surfaceColor.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                .padding(12.dp)
+        ) {
+            // --- CỤM NÚT TAB VIÊN THUỐC 3D (NEUMORPHISM) ---
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(androidx.compose.foundation.shape.CircleShape) // Hình viên thuốc
+                    // RÃNH CHÌM (Sunken Track): Nền tối mờ
+                    .background(surfaceColor.copy(alpha = 0.4f))
+                    // Viền của rãnh: Tối ở trên (đổ bóng lõm), Sáng ở dưới (hắt sáng)
+                    .border(
+                        width = 1.5.dp,
+                        brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.4f),
+                                Color.White.copy(alpha = 0.05f)
+                            )
+                        ),
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+                    .padding(6.dp) // Khe hở giữa rãnh và nút bấm
+            ) {
+                // ==========================================
+                // THANH MENU VIÊN THUỐC 3D (NEUMORPHISM)
+                // ==========================================
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1. ĐỌC KÍCH THƯỚC MÀN HÌNH ĐỂ LÀM RESPONSIVE CHỮ
+                    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+                    val screenWidth = configuration.screenWidthDp
+
+                    // 2. TỰ ĐỘNG NỘI SUY SIZE CHỮ THEO BỀ NGANG THIẾT BỊ (Đảm bảo hiển thị đủ 100% chữ)
+                    val dynamicFontSize = when {
+                        screenWidth < 360 -> 10.sp // Máy rất nhỏ
+                        screenWidth < 400 -> 11.sp // Máy vừa (LG 8X)
+                        else -> 13.sp              // Máy to
+                    }
+
+                    val circleTitle = if (isCircleOfHarmony) {
+                        if (currentLang == "vi") "Hoà âm" else "Harmony"
+                    } else {
+                        if (currentLang == "vi") "Quãng 5" else "Circle"
+                    }
+
+                    val modes = listOf(
+                        if (currentLang == "vi") "Hợp âm" else "Chords", // Đổi tên hiển thị cho đồng bộ icon
+                        circleTitle,
+                        if (currentLang == "vi") "Thực hành" else "Practice"
+                    )
+
+                    // Xác định tab nào đang active dựa trên các state logic cũ
+                    val currentSelectedIndex = when {
+                        showPracticeScreen -> 2
+                        showCircle -> 1
+                        else -> 0
+                    }
+
+                    // Nhãn NEW của tab Thực hành: giữ nguyên màu nút hiện tại,
+                    // chỉ bổ sung badge vàng/đỏ nhấp nháy ở góc icon.
+                    val practiceNewTransition = rememberInfiniteTransition(
+                        label = "practiceNewBadgeBlink"
+                    )
+                    val practiceNewAlpha by practiceNewTransition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = 620, easing = LinearEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "practiceNewBadgeAlpha"
+                    )
+                    val practiceNewScale by practiceNewTransition.animateFloat(
+                        initialValue = 0.92f,
+                        targetValue = 1.06f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = 620, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "practiceNewBadgeScale"
+                    )
+
+                    modes.forEachIndexed { index, title ->
+                        val isSelected = (currentSelectedIndex == index)
+                        val contentColor = if (isSelected) Color.White else textColor.copy(alpha = 0.8f)
+
+                        // -----------------------------------------------------------
+                        // KHU VỰC XỬ LÝ ANIMATION (CHẠY KHI MỞ MÀN HÌNH HOẶC KHI CLICK)
+                        // -----------------------------------------------------------
+                        val chordScale = remember { Animatable(1f) }
+                        val circleRotation = remember { Animatable(0f) }
+                        val practiceScale = remember { Animatable(1f) } // Đổi thành Scale cho Thực hành
+
+                        // Biến trigger: Mặc định chạy lần đầu khi load màn hình, và tăng lên khi click
+                        var animTrigger by remember { mutableIntStateOf(0) }
+
+                        LaunchedEffect(animTrigger) {
+                            launch {
+                                if (index == 0) {
+                                    chordScale.snapTo(1f) // Reset
+                                    // Phóng to thu nhỏ 4 lần trong 3 giây
+                                    repeat(4) {
+                                        chordScale.animateTo(1.2f, animationSpec = tween(375, easing = FastOutSlowInEasing))
+                                        chordScale.animateTo(1f, animationSpec = tween(375, easing = FastOutSlowInEasing))
+                                    }
+                                }
+                            }
+                            launch {
+                                if (index == 1) {
+                                    circleRotation.snapTo(0f) // Reset
+                                    // Xoay 1 vòng 360 độ trong 3 giây
+                                    circleRotation.animateTo(360f, animationSpec = tween(3000, easing = LinearEasing))
+                                }
+                            }
+                            launch {
+                                if (index == 2) {
+                                    practiceScale.snapTo(1f) // Reset
+                                    // Phóng to thu nhỏ 4 lần trong 3 giây
+                                    repeat(4) {
+                                        practiceScale.animateTo(1.2f, animationSpec = tween(375, easing = FastOutSlowInEasing))
+                                        practiceScale.animateTo(1f, animationSpec = tween(375, easing = FastOutSlowInEasing))
+                                    }
+                                }
+                            }
+                        }
+                        // -----------------------------------------------------------
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    brush = if (isSelected) {
+                                        if (index == 1 && isCircleOfHarmony) {
+                                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color(0xFF9C27B0).copy(alpha = 0.8f),
+                                                    Color(0xFF6A1B9A)
+                                                )
+                                            )
+                                        } else {
+                                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                colors = listOf(
+                                                    tunaGreen.copy(alpha = 0.7f),
+                                                    tunaGreen
+                                                )
+                                            )
+                                        }
+                                    } else {
+                                        androidx.compose.ui.graphics.SolidColor(Color.Transparent)
+                                    }
+                                )
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.border(
+                                            width = 1.dp,
+                                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color.White.copy(alpha = 0.4f),
+                                                    Color.Black.copy(alpha = 0.2f)
+                                                )
+                                            ),
+                                            shape = androidx.compose.foundation.shape.CircleShape
+                                        )
+                                    } else Modifier
+                                )
+                                .clickable {
+                                    // Tăng trigger để kích hoạt lại animation cho tab vừa bấm
+                                    animTrigger++
+
+                                    when (index) {
+                                        0 -> {
+                                            showCircle = false
+                                            showPracticeScreen = false
+                                        }
+                                        1 -> {
+                                            showPracticeScreen = false
+                                            if (showCircle) {
+                                                isCircleOfHarmony = !isCircleOfHarmony
+                                            } else {
+                                                showCircle = true
+                                                isCircleOfHarmony = false
+                                            }
+                                        }
+                                        2 -> {
+                                            showPracticeScreen = true
+                                        }
+                                    }
+                                }
+                                .height(52.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            ) {
+                                when (index) {
+                                    0 -> {
+                                        Icon(
+                                            imageVector = CustomIcons.Chord,
+                                            contentDescription = null,
+                                            tint = contentColor,
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .graphicsLayer {
+                                                    scaleX = chordScale.value
+                                                    scaleY = chordScale.value
+                                                }
+                                        )
+                                    }
+                                    1 -> {
+                                        Icon(
+                                            imageVector = Icons.Default.DonutLarge,
+                                            contentDescription = null,
+                                            tint = contentColor,
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .graphicsLayer {
+                                                    rotationZ = circleRotation.value
+                                                }
+                                        )
+                                    }
+                                    2 -> {
+                                        // Icon Thực hành giữ nguyên màu hiện tại; badge NEW nằm ở góc trên phải.
+                                        Box(
+                                            modifier = Modifier.size(32.dp),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            SheetMusicIcon(
+                                                tint = contentColor,
+                                                modifier = Modifier
+                                                    .align(Alignment.CenterStart)
+                                                    .size(20.dp)
+                                                    .graphicsLayer {
+                                                        scaleX = practiceScale.value
+                                                        scaleY = practiceScale.value
+                                                    }
+                                            )
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .graphicsLayer {
+                                                        alpha = practiceNewAlpha
+                                                        scaleX = practiceNewScale
+                                                        scaleY = practiceNewScale
+                                                    }
+                                                    .background(
+                                                        color = Color.Yellow,
+                                                        shape = RoundedCornerShape(3.dp)
+                                                    )
+                                                    .padding(horizontal = 3.dp, vertical = 1.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "NEW",
+                                                    color = Color.Red,
+                                                    fontSize = 6.sp,
+                                                    lineHeight = 6.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    style = androidx.compose.ui.text.TextStyle(
+                                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(
+                                                            includeFontPadding = false
+                                                        )
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(4.dp))
+
+                                Text(
+                                    text = title,
+                                    color = contentColor,
+                                    fontSize = dynamicFontSize,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    maxLines = 2,
+                                    lineHeight = (dynamicFontSize.value * 1.1f).sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = !showCircle, enter = expandVertically(), exit = shrinkVertically()) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Divider(color = surfaceColor.copy(alpha = 0.5f), thickness = 1.dp)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = textColor),
+                        placeholder = { Text("${getLocalString("search", currentLang)}...", color = textColor.copy(alpha = 0.5f), fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = textColor, modifier = Modifier.size(20.dp)) },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                try {
+                                    val speechLang = if (currentLang == "vi") "vi-VN" else currentLang
+                                    val promptMsg = getLocalString("voice_prompt", currentLang)
+                                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLang)
+                                        putExtra(RecognizerIntent.EXTRA_PROMPT, promptMsg)
+                                    }
+                                    voiceSearchLauncher.launch(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, getLocalString("voice_not_supported", currentLang), Toast.LENGTH_SHORT).show()
+                                }
+                            }) {
+                                Icon(Icons.Default.Mic, contentDescription = "Voice", tint = tunaGreen, modifier = Modifier.size(20.dp))
+                            }
+                        },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = textColor,
+                            unfocusedTextColor = textColor,
+                            focusedContainerColor = surfaceColor,
+                            unfocusedContainerColor = surfaceColor,
+                            // Chuyển border sang trắng tinh khi nhấp/hover vào ô input
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.2f)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // 1. Thẻ Nhạc Cụ (Instrument)
+                        Box(modifier = Modifier.weight(1.15f).height(48.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxSize()
+                                    .background(surfaceColor, RoundedCornerShape(8.dp))
+                                    .border(1.dp, if (isInstrumentExpanded) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable { isInstrumentExpanded = true }
+                                    .padding(horizontal = 8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Image(painter = painterResource(id = getInstIcon(selectedInstrument)), contentDescription = null, modifier = Modifier.size(20.dp), contentScale = ContentScale.Fit)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(selectedInstrument, color = textColor, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = textColor, modifier = Modifier.size(20.dp))
+                            }
+                            DropdownMenu(expanded = isInstrumentExpanded, onDismissRequest = { isInstrumentExpanded = false }, modifier = Modifier.background(surfaceColor)) {
+                                listOf("Guitar", "Ukulele", "Piano").forEach { inst ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Image(painterResource(id = getInstIcon(inst)), contentDescription = null, modifier = Modifier.size(24.dp))
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Text(inst, color = textColor)
+                                            }
+                                        },
+                                        onClick = { selectedInstrument = inst; isInstrumentExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+
+                        // 2. Thẻ Chọn Key (C, D, E...)
+                        Box(modifier = Modifier.weight(1f).height(48.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxSize()
+                                    .background(surfaceColor, RoundedCornerShape(8.dp))
+                                    .border(1.dp, if (isKeyExpanded) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable { isKeyExpanded = true }
+                                    .padding(horizontal = 8.dp)
+                            ) {
+                                Text(selectedKey.toMusicSymbols(), color = tunaGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(20.dp))
+                            }
+                            DropdownMenu(expanded = isKeyExpanded, onDismissRequest = { isKeyExpanded = false }, modifier = Modifier.background(surfaceColor).heightIn(max = 300.dp)) {
+                                availableKeys.forEach { k ->
+                                    DropdownMenuItem(
+                                        text = { Text(k.toMusicSymbols(), color = textColor) },
+                                        onClick = {
+                                            selectedKey = k; isKeyExpanded = false
+                                            val newSuffixes = allChords.filter { it.key == k }.map { it.suffix }
+                                            if (!newSuffixes.contains(selectedSuffix)) selectedSuffix = newSuffixes.firstOrNull() ?: "major"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // 3. Thẻ Chọn Hậu Tố (maj, m, 7...)
+                        Box(modifier = Modifier.weight(1f).height(48.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxSize()
+                                    .background(surfaceColor, RoundedCornerShape(8.dp))
+                                    .border(1.dp, if (isSuffixExpanded) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable { isSuffixExpanded = true }
+                                    .padding(horizontal = 8.dp)
+                            ) {
+                                val displaySuf = when(selectedSuffix) { "major" -> "maj"; "minor" -> "m"; else -> selectedSuffix }
+                                Text(displaySuf, color = tunaGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(20.dp))
+                            }
+                            DropdownMenu(expanded = isSuffixExpanded, onDismissRequest = { isSuffixExpanded = false }, modifier = Modifier.background(surfaceColor).heightIn(max = 300.dp)) {
+                                availableSuffixes.forEach { suf ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            val sufText = when(suf) { "major" -> "maj"; "minor" -> "m"; else -> suf }
+                                            Text(sufText, color = textColor)
+                                        },
+                                        onClick = { selectedSuffix = suf; isSuffixExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
+        ) {
+            val currentChord = allChords.find { it.key == selectedKey && it.suffix == selectedSuffix }
+
+            if (showCircle) {
+                // Điều hướng giao diện dựa trên việc click chọn Quãng 5 hay Hoà âm
+                if (isCircleOfHarmony) {
+                    CircleOfHarmonyComponent(
+                        currentLang = currentLang,
+                        selectedKey = selectedKey,
+                        textColor = textColor,
+                        bgColor = bgColor,
+                        tunaGreen = tunaGreen
+                    )
+                } else {
+                    CircleOfFifthsComponent(
+                        currentLang = currentLang, selectedKey = selectedKey, selectedSuffix = selectedSuffix,
+                        textColor = textColor, bgColor = bgColor, tunaGreen = tunaGreen,
+                        onKeySelected = { newKey, newSuffix -> selectedKey = newKey; selectedSuffix = newSuffix },
+                        onChordBoxClicked = { boxKey, boxSuffix ->
+                            // 1. Bao quát mọi cách viết Suffix có thể có trong các file JSON khác nhau
+                            val possibleSuffixes = if (boxSuffix == "minor") listOf("minor", "m", "min")
+                            else if (boxSuffix == "major") listOf("major", "maj", "", "M")
+                            else listOf(boxSuffix)
+
+                            val enharmonicMap = mapOf(
+                                "C#" to "Db", "Db" to "C#",
+                                "D#" to "Eb", "Eb" to "D#",
+                                "F#" to "Gb", "Gb" to "F#",
+                                "G#" to "Ab", "Ab" to "G#",
+                                "A#" to "Bb", "Bb" to "A#"
+                            )
+                            val altKey = enharmonicMap[boxKey]
+
+                            // 2. Quét qua tất cả các kịch bản lưu trữ của JSON
+
+                            // Kịch bản A: Tìm theo Key gốc + Biến thể Suffix
+                            var chord = allChords.find { it.key == boxKey && possibleSuffixes.contains(it.suffix) }
+
+                            // Kịch bản B: Tìm theo Key đồng âm (vd: G# -> Ab) + Biến thể Suffix
+                            if (chord == null && altKey != null) {
+                                chord = allChords.find { it.key == altKey && possibleSuffixes.contains(it.suffix) }
+                            }
+
+                            // Kịch bản C: JSON lưu gộp chữ "m" thẳng vào Key (Vd: key="G#m", suffix="")
+                            if (chord == null && boxSuffix == "minor") {
+                                chord = allChords.find { (it.key == "${boxKey}m" || it.key == "${altKey}m") }
+                            }
+
+                            // 3. Hiển thị kết quả
+                            if (chord != null && chord.positions.isNotEmpty()) {
+                                dialogChord = chord
+                            } else {
+                                Toast.makeText(context, getLocalString("not_found_chord", currentLang), Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                }
+            } else {
+                if (currentChord != null && currentChord.positions.isNotEmpty()) {
+                    val positionsToDisplay = if (selectedInstrument == "Piano") {
+                        listOf(currentChord.positions.first())
+                    } else {
+                        currentChord.positions.distinctBy { it.frets to it.baseFret }
+                    }
+
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(if (selectedInstrument == "Piano") 1 else 2),
+                        verticalArrangement = Arrangement.spacedBy(30.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                        modifier = Modifier.heightIn(max = 1000.dp),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        items(positionsToDisplay) { position ->
+                            val displaySuffix = when (currentChord.suffix) { "major" -> ""; "minor" -> "m"; else -> currentChord.suffix }
+                            val chordFullName = "${currentChord.key}$displaySuffix".toMusicSymbols()
+
+                            Box(
+                                modifier = Modifier.fillMaxWidth().clickable { CoreAudioPlayer.playChord(position.midi, selectedInstrument) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (selectedInstrument == "Piano") {
+                                    PianoKeyboardDiagram(chordFullName, position.midi, textColor, tunaGreen, monochrome = true)
+                                } else {
+                                    val numStrings = if (selectedInstrument == "Guitar") 6 else 4
+                                    FretboardDiagram(chordFullName, position.frets, position.fingers, position.baseFret, numStrings, textColor, tunaGreen, monochrome = true)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                        Text(getLocalString("not_found_chord", currentLang), color = Color.Gray)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(72.dp))
+        }
+    }
+}
+
+@Composable
+fun ChordDetailDialog(
+    chord: ChordModel,
+    allChords: kotlin.collections.List<ChordModel>,
+    instrument: String,
+    onInstrumentChange: (String) -> Unit,
+    currentLang: String,
+    textColor: Color,
+    surfaceColor: Color,
+    bgColor: Color,
+    tunaGreen: Color,
+    onDismiss: () -> Unit
+) {
+    var posIndex by remember { mutableStateOf(0) }
+    var expanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(instrument) { posIndex = 0 }
+
+    val currentChord = allChords.find { it.key == chord.key && it.suffix == chord.suffix } ?: chord
+    val positions = if (instrument == "Piano") {
+        if (currentChord.positions.isNotEmpty()) listOf(currentChord.positions.first()) else emptyList()
+    } else currentChord.positions
+
+    val displaySuffix = when (currentChord.suffix) { "major" -> ""; "minor" -> "m"; else -> currentChord.suffix }
+    val chordFullName = "${currentChord.key}$displaySuffix".toMusicSymbols()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp), color = bgColor,
+            modifier = Modifier.fillMaxWidth().border(1.dp, surfaceColor, RoundedCornerShape(16.dp))
+        ) {
+            Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = chordFullName, color = textColor, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Box {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.background(surfaceColor, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 6.dp).clickable { expanded = true }
+                        ) {
+                            Image(painter = painterResource(id = getInstIcon(instrument)), contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(instrument, color = textColor, fontSize = 14.sp)
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = textColor)
+                        }
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(bgColor)) {
+                            listOf("Guitar", "Ukulele", "Piano").forEach { inst ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Image(painterResource(id = getInstIcon(inst)), contentDescription = null, modifier = Modifier.size(24.dp))
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(inst, color = textColor)
+                                        }
+                                    },
+                                    onClick = { onInstrumentChange(inst); expanded = false }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                if (positions.isNotEmpty() && positions.size > 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth(0.9f)) {
+                        IconButton(onClick = { if (posIndex > 0) posIndex-- }) {
+                            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = null, tint = if (posIndex > 0) tunaGreen else Color.Gray)
+                        }
+                        Text("${getLocalString("position", currentLang)}: ${posIndex + 1} / ${positions.size}", color = textColor.copy(alpha = 0.7f), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = { if (posIndex < positions.size - 1) posIndex++ }) {
+                            Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = if (posIndex < positions.size - 1) tunaGreen else Color.Gray)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                if (positions.isNotEmpty()) {
+                    val position = positions[posIndex]
+                    Box(modifier = Modifier.fillMaxWidth().clickable { CoreAudioPlayer.playChord(position.midi, instrument) }, contentAlignment = Alignment.Center) {
+                        if (instrument == "Piano") {
+                            PianoKeyboardDiagram(chordFullName, position.midi, textColor, tunaGreen, monochrome = true)
+                        } else {
+                            val numStrings = if (instrument == "Guitar") 6 else 4
+                            FretboardDiagram(chordFullName, position.frets, position.fingers, position.baseFret, numStrings, textColor, tunaGreen, monochrome = true)
+                        }
+                    }
+                } else {
+                    Text("No data", color = Color.Gray)
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+                Button(
+                    onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = tunaGreen),
+                    modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(25.dp)
+                ) {
+                    Text(getLocalString("close", currentLang), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PianoKeyboardDiagram(
+    chordName: String,
+    midiList: kotlin.collections.List<Int>,
+    textColor: Color,
+    tunaGreen: Color,
+    monochrome: Boolean = false
+) {
+    // textColor sáng nghĩa là ứng dụng đang ở chế độ tối; textColor tối nghĩa là chế độ sáng.
+    val isDarkUi = (textColor.red + textColor.green + textColor.blue) > 1.5f
+    val selectedWhiteKeyColor = when {
+        !monochrome -> tunaGreen.copy(alpha = 0.5f)
+        isDarkUi -> Color(0xFFBDBDBD)
+        else -> Color(0xFF424242)
+    }
+    val selectedBlackKeyColor = when {
+        !monochrome -> tunaGreen
+        isDarkUi -> Color(0xFFF5F5F5)
+        else -> Color(0xFF101010)
+    }
+    val selectedWhiteTextColor = when {
+        !monochrome -> android.graphics.Color.BLACK
+        isDarkUi -> android.graphics.Color.BLACK
+        else -> android.graphics.Color.WHITE
+    }
+    val selectedBlackTextColor = when {
+        !monochrome -> android.graphics.Color.WHITE
+        isDarkUi -> android.graphics.Color.BLACK
+        else -> android.graphics.Color.WHITE
+    }
+
+    val textPaint = remember {
+        android.graphics.Paint().apply {
+            textSize = 24f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+            color = android.graphics.Color.BLACK
+        }
+    }
+    fun getNoteName(midi: Int) =
+        listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")[midi % 12]
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        Text(text = chordName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = textColor)
+        Spacer(modifier = Modifier.height(20.dp))
+        Canvas(modifier = Modifier.width(280.dp).height(100.dp)) {
+            val w = size.width
+            val h = size.height
+            val keyW = w / 14
+            val radius = CornerRadius(8f, 8f)
+            val minMidi = midiList.minOrNull() ?: 60
+            val startMidi = (minMidi / 12) * 12
+            val whiteKeysOffsets = listOf(0, 2, 4, 5, 7, 9, 11)
+
+            var whiteIdx = 0
+            for (i in 0..24) {
+                if (whiteKeysOffsets.contains(i % 12)) {
+                    val x = whiteIdx * keyW
+                    val midiValue = startMidi + i
+                    val isHighlighted = midiList.contains(midiValue)
+                    drawRoundRect(
+                        color = if (isHighlighted) selectedWhiteKeyColor else Color.White,
+                        topLeft = Offset(x, 0f),
+                        size = Size(keyW, h),
+                        cornerRadius = radius
+                    )
+                    drawRoundRect(
+                        color = Color.Black,
+                        topLeft = Offset(x, 0f),
+                        size = Size(keyW, h),
+                        cornerRadius = radius,
+                        style = Stroke(width = 2f)
+                    )
+                    if (isHighlighted) {
+                        drawContext.canvas.nativeCanvas.drawText(
+                            getNoteName(midiValue),
+                            x + keyW / 2,
+                            h * 0.9f,
+                            textPaint.apply {
+                                color = selectedWhiteTextColor
+                                textSize = 24f
+                            }
+                        )
+                    }
+                    whiteIdx++
+                }
+            }
+
+            val blackKeysOffsets = listOf(1, 3, 6, 8, 10)
+            whiteIdx = 0
+            for (i in 0..24) {
+                if (whiteKeysOffsets.contains(i % 12)) {
+                    whiteIdx++
+                } else if (blackKeysOffsets.contains(i % 12)) {
+                    val x = whiteIdx * keyW - (keyW * 0.35f)
+                    val midiValue = startMidi + i
+                    val isHighlighted = midiList.contains(midiValue)
+                    val blackKeyH = h * 0.6f
+                    drawRoundRect(
+                        color = if (isHighlighted) selectedBlackKeyColor else Color.DarkGray,
+                        topLeft = Offset(x, 0f),
+                        size = Size(keyW * 0.7f, blackKeyH),
+                        cornerRadius = CornerRadius(6f, 6f)
+                    )
+                    if (isHighlighted) {
+                        drawContext.canvas.nativeCanvas.drawText(
+                            getNoteName(midiValue),
+                            x + (keyW * 0.7f) / 2,
+                            blackKeyH * 0.7f,
+                            textPaint.apply {
+                                color = selectedBlackTextColor
+                                textSize = 20f
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FretboardDiagram(
+    chordName: String,
+    frets: kotlin.collections.List<Int>,
+    fingers: kotlin.collections.List<Int> = emptyList(),
+    baseFret: Int,
+    numStrings: Int,
+    textColor: Color,
+    tunaGreen: Color,
+    monochrome: Boolean = false
+) {
+    // Dấu bấm chỉ chuyển sang trắng/xám ở nền tối và đen/xám ở nền sáng.
+    // Những nút, tab, ô chọn Key và các thành phần khác vẫn dùng tunaGreen như cũ.
+    val isDarkUi = (textColor.red + textColor.green + textColor.blue) > 1.5f
+    val markerColor = when {
+        !monochrome -> tunaGreen
+        isDarkUi -> Color(0xFFF2F2F2)
+        else -> Color(0xFF252525)
+    }
+    val markerTextColor = when {
+        !monochrome -> android.graphics.Color.WHITE
+        isDarkUi -> android.graphics.Color.BLACK
+        else -> android.graphics.Color.WHITE
+    }
+
+    val textPaint = remember {
+        android.graphics.Paint().apply {
+            textSize = 40f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+            color = android.graphics.Color.WHITE
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+    }
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = chordName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = textColor)
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Box(contentAlignment = Alignment.TopStart) {
+            Canvas(modifier = Modifier.width(100.dp).height(120.dp)) {
+                val w = size.width
+                val h = size.height
+                val numFrets = 4
+                val stringSpacing = w / (numStrings - 1)
+                val fretSpacing = h / numFrets
+
+                // Luôn lấy chuẩn 6 dây để vòng tròn của Ukulele không bị phóng quá lớn.
+                val standardStringSpacing = w / 5f
+                val dotRadius = standardStringSpacing * 0.52f
+
+                for (i in 0..numFrets) {
+                    val y = i * fretSpacing
+                    val isNut = (i == 0 && baseFret == 1)
+                    drawLine(
+                        color = if (isNut) textColor else textColor.copy(alpha = 0.5f),
+                        start = Offset(0f, y),
+                        end = Offset(w, y),
+                        strokeWidth = if (isNut) 12f else 3f
+                    )
+                }
+
+                for (i in 0 until numStrings) {
+                    val x = i * stringSpacing
+                    drawLine(
+                        color = textColor.copy(alpha = 0.8f),
+                        start = Offset(x, 0f),
+                        end = Offset(x, h),
+                        strokeWidth = 3f
+                    )
+                }
+
+                val pressedFingers = fingers.filterIndexed { index, finger ->
+                    finger == 1 && (frets.getOrNull(index) ?: 0) > 0
+                }
+                if (pressedFingers.size > 1) {
+                    val barreFretIndex = frets.indexOfFirst {
+                        fingers.getOrNull(frets.indexOf(it)) == 1 && it > 0
+                    }
+                    if (barreFretIndex != -1) {
+                        val barreFret = frets[barreFretIndex]
+                        val minString = frets.indexOfFirst {
+                            it == barreFret && fingers.getOrNull(frets.indexOf(it)) == 1
+                        }
+                        val maxString = frets.indexOfLast {
+                            it == barreFret && fingers.getOrNull(frets.indexOf(it)) == 1
+                        }
+
+                        if (maxString > minString) {
+                            val startX = minString * stringSpacing
+                            val endX = maxString * stringSpacing
+                            val y = (barreFret - 0.5f) * fretSpacing
+
+                            drawLine(
+                                color = markerColor,
+                                start = Offset(startX, y),
+                                end = Offset(endX, y),
+                                strokeWidth = dotRadius * 1.8f,
+                                cap = StrokeCap.Round
+                            )
+
+                            drawContext.canvas.nativeCanvas.drawText(
+                                "1",
+                                startX,
+                                y - ((textPaint.descent() + textPaint.ascent()) / 2),
+                                textPaint.apply { color = markerTextColor }
+                            )
+                        }
+                    }
+                }
+
+                frets.forEachIndexed { stringIndex, fretPosition ->
+                    val x = stringIndex * stringSpacing
+
+                    when {
+                        fretPosition == -1 -> {
+                            val xSize = dotRadius * 0.6f
+                            val topY = -fretSpacing * 0.5f
+                            drawLine(
+                                textColor,
+                                Offset(x - xSize, topY - xSize),
+                                Offset(x + xSize, topY + xSize),
+                                4f,
+                                StrokeCap.Round
+                            )
+                            drawLine(
+                                textColor,
+                                Offset(x + xSize, topY - xSize),
+                                Offset(x - xSize, topY + xSize),
+                                4f,
+                                StrokeCap.Round
+                            )
+                        }
+
+                        fretPosition == 0 -> {
+                            drawCircle(
+                                color = textColor,
+                                radius = dotRadius * 0.6f,
+                                center = Offset(x, -fretSpacing * 0.5f),
+                                style = Stroke(width = 4f)
+                            )
+                        }
+
+                        fretPosition > 0 -> {
+                            val fingerNum = fingers.getOrNull(stringIndex) ?: 0
+                            val y = (fretPosition - 0.5f) * fretSpacing
+                            val isPartOfBarre = fingerNum == 1 &&
+                                    frets.count {
+                                        it == fretPosition && fingers.getOrNull(frets.indexOf(it)) == 1
+                                    } > 1
+
+                            if (!isPartOfBarre) {
+                                drawCircle(
+                                    color = markerColor,
+                                    radius = dotRadius,
+                                    center = Offset(x, y)
+                                )
+
+                                if (fingerNum > 0) {
+                                    drawContext.canvas.nativeCanvas.drawText(
+                                        fingerNum.toString(),
+                                        x,
+                                        y - ((textPaint.descent() + textPaint.ascent()) / 2),
+                                        textPaint.apply { color = markerTextColor }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (baseFret > 1) {
+                Text(
+                    text = "${baseFret}fr",
+                    color = textColor.copy(alpha = 0.6f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.offset(x = 112.dp, y = 8.dp)
+                )
+            }
+        }
+    }
+}
