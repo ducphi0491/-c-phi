@@ -1,3 +1,8 @@
-cd "C:\AudioSheetStudio\audio-sheet-studio"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-.\.venv\Scripts\python.exe .\scripts\diagnose_ai.py
+PS C:\Users\Administrator> cd "C:\AudioSheetStudio\audio-sheet-studio"
+>>
+>> .\.venv\Scripts\python.exe .\scripts\diagnose_ai.py
+C:\Program Files\Python311\python.exe: can't open file 'C:\\AudioSheetStudio\\audio-sheet-studio\\scripts\\diagnose_ai.py': [Errno 2] No such file or directory
+PS C:\AudioSheetStudio\audio-sheet-studio>
