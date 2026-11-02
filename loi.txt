@@ -1,9 +1,28 @@
-winget install --id OpenJS.NodeJS.LTS --exact --source winget
+PS C:\Users\Administrator> winget install --id OpenJS.NodeJS.LTS --exact --source winget
+winget : The term 'winget' is not recognized as the name of a cmdlet, function, script file, or operable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ winget install --id OpenJS.NodeJS.LTS --exact --source winget
++ ~~~~~~
+    + CategoryInfo          : ObjectNotFound: (winget:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
 
-node --version
+PS C:\Users\Administrator>
+>> node --version
+>>
+node : The term 'node' is not recognized as the name of a cmdlet, function, script file, or operable program. Check
+the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:2 char:1
++ node --version
++ ~~~~
+    + CategoryInfo          : ObjectNotFound: (node:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
 
-$project = "C:\AudioSheetStudio\audio-sheet-studio"
-
-Write-Host "Thu muc du an:" (Test-Path $project)
-Write-Host "File cai dat:" (Test-Path "$project\install_windows.bat")
-Write-Host "Moi truong Python:" (Test-Path "$project\.venv\Scripts\python.exe")
+PS C:\Users\Administrator> $project = "C:\AudioSheetStudio\audio-sheet-studio"
+PS C:\Users\Administrator> Write-Host "Thu muc du an:" (Test-Path $project)
+>> Write-Host "File cai dat:" (Test-Path "$project\install_windows.bat")
+>> Write-Host "Moi truong Python:" (Test-Path "$project\.venv\Scripts\python.exe")
+Thu muc du an: False
+File cai dat: False
+Moi truong Python: False
+PS C:\Users\Administrator>
