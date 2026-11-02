@@ -1,26 +1,2 @@
-PS C:\Users\Administrator> Write-Host "Thu muc du an:" (Test-Path $project)
->> Write-Host "File cai dat:" (Test-Path "$project\install_windows.bat")
->> Write-Host "Moi truong Python:" (Test-Path "$project\.venv\Scripts\python.exe")
-Thu muc du an: False
-File cai dat: False
-Moi truong Python: False
-PS C:\Users\Administrator>
->> $zip = Get-ChildItem "$env:USERPROFILE\Downloads\AudioSheet-Studio*.zip" -File -ErrorAction SilentlyContinue |
->>     Sort-Object LastWriteTime -Descending |
->>     Select-Object -First 1
->>
->> if ($null -eq $zip) {
->>     Write-Host "KHONG TIM THAY ZIP trong Downloads. Hay tai file ZIP truoc." -ForegroundColor Red
->> } else {
->>     New-Item -ItemType Directory -Path "C:\AudioSheetStudio" -Force | Out-Null
->>     Expand-Archive -LiteralPath $zip.FullName -DestinationPath "C:\AudioSheetStudio" -Force
->>
->>     $project = "C:\AudioSheetStudio\audio-sheet-studio"
->>     Write-Host "Thu muc du an:" (Test-Path $project)
->>     Write-Host "File cai dat:" (Test-Path "$project\install_windows.bat")
->>     Write-Host "File khoi dong:" (Test-Path "$project\run_windows.bat")
->> }
-Thu muc du an: True
-File cai dat: True
-File khoi dong: True
-PS C:\Users\Administrator>
+cd "C:\AudioSheetStudio\audio-sheet-studio"
+.\install_windows.bat
