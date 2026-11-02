@@ -1,11 +1,20 @@
-==================================================
- AudioSheet Studio - cai tieng PIANO THUC (1 lan)
-==================================================
- Nguon: Salamander Grand Piano V3 (CC BY 3.0)
- Khong can cai Node.js hoac thu vien Python moi.
+$projects = @(
+    "C:\audio-sheet-studio",
+    "C:\AudioSheetStudio\audio-sheet-studio"
+)
 
+foreach ($project in $projects) {
+    if (Test-Path "$project\CHAY_WEBSITE.bat") {
+        $folder = "$project\web\piano_samples"
+        $files = @(Get-ChildItem $folder -Filter "*.mp3" -File -ErrorAction SilentlyContinue)
 
-AudioSheet Studio - TAI AM PIANO THUC
-Luu tai: C:\audio-sheet-studio\web\piano_samples
-Nguon: https://tonejs.github.io/audio/salamander/
-License: Salamander Grand Piano V3 - CC BY 3.0
+        Write-Host "`nDu an: $project" -ForegroundColor Cyan
+        Write-Host "So mau piano: $($files.Count)/30"
+
+        if ($files.Count -eq 30) {
+            Write-Host "[OK] Da co du 30 mau piano!" -ForegroundColor Green
+        } else {
+            Write-Host "[CHUA XONG] Chua du mau piano." -ForegroundColor Yellow
+        }
+    }
+}
