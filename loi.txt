@@ -1,4 +1,1 @@
-cd "C:\AudioSheetStudio\audio-sheet-studio"
-.\run_windows.bat
-
-http://127.0.0.1:8000?utm_source=chatgpt.com
+The AI engine is not ready. Re-run the installer with Python 3.11 and check the health panel.
