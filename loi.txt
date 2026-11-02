@@ -1,1 +1,6 @@
-The AI engine is not ready. Re-run the installer with Python 3.11 and check the health panel.
+$path = "C:\AudioSheetStudio\audio-sheet-studio\data\jobs"
+
+Get-ChildItem $path -Filter processor.log -Recurse -File |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 |
+    Get-Content -Tail 100
