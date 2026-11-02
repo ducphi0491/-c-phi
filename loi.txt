@@ -1,8 +1,20 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
 
-PS C:\Users\Administrator> cd "C:\AudioSheetStudio\audio-sheet-studio"
->>
->> .\.venv\Scripts\python.exe .\scripts\diagnose_ai.py
-C:\Program Files\Python311\python.exe: can't open file 'C:\\AudioSheetStudio\\audio-sheet-studio\\scripts\\diagnose_ai.py': [Errno 2] No such file or directory
-PS C:\AudioSheetStudio\audio-sheet-studio>
+$project = "C:\AudioSheetStudio\audio-sheet-studio"
+
+$zip = Get-ChildItem "$env:USERPROFILE\Downloads\AudioSheet-AI-Diagnostics*.zip" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if ($null -eq $zip) {
+    Write-Host "KHONG TIM THAY ZIP. Hay tai ban va vao Downloads." -ForegroundColor Red
+} else {
+    Expand-Archive -LiteralPath $zip.FullName -DestinationPath $project -Force
+
+    $script = Join-Path $project "scripts\diagnose_ai.py"
+
+    Write-Host "File diagnose_ai.py:" (Test-Path $script)
+
+    if (Test-Path $script) {
+        & "$project\.venv\Scripts\python.exe" $script
+    }
+}
