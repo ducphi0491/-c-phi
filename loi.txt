@@ -1,20 +1,28 @@
-$projects = @(
-    "C:\audio-sheet-studio",
-    "C:\AudioSheetStudio\audio-sheet-studio"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($project in $projects) {
-    if (Test-Path "$project\CHAY_WEBSITE.bat") {
-        $folder = "$project\web\piano_samples"
-        $files = @(Get-ChildItem $folder -Filter "*.mp3" -File -ErrorAction SilentlyContinue)
+PS C:\Users\Administrator> $projects = @(
+>>     "C:\audio-sheet-studio",
+>>     "C:\AudioSheetStudio\audio-sheet-studio"
+>> )
+>>
+>> foreach ($project in $projects) {
+>>     if (Test-Path "$project\CHAY_WEBSITE.bat") {
+>>         $folder = "$project\web\piano_samples"
+>>         $files = @(Get-ChildItem $folder -Filter "*.mp3" -File -ErrorAction SilentlyContinue)
+>>
+>>         Write-Host "`nDu an: $project" -ForegroundColor Cyan
+>>         Write-Host "So mau piano: $($files.Count)/30"
+>>
+>>         if ($files.Count -eq 30) {
+>>             Write-Host "[OK] Da co du 30 mau piano!" -ForegroundColor Green
+>>         } else {
+>>             Write-Host "[CHUA XONG] Chua du mau piano." -ForegroundColor Yellow
+>>         }
+>>     }
+>> }
 
-        Write-Host "`nDu an: $project" -ForegroundColor Cyan
-        Write-Host "So mau piano: $($files.Count)/30"
-
-        if ($files.Count -eq 30) {
-            Write-Host "[OK] Da co du 30 mau piano!" -ForegroundColor Green
-        } else {
-            Write-Host "[CHUA XONG] Chua du mau piano." -ForegroundColor Yellow
-        }
-    }
-}
+Du an: C:\audio-sheet-studio
+So mau piano: 30/30
+[OK] Da co du 30 mau piano!
+PS C:\Users\Administrator>
