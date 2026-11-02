@@ -1,6 +1,8 @@
 package ducphi.tunnerinstrument
 
+import android.content.Context
 import android.content.pm.ActivityInfo
+import org.json.JSONObject
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -15,6 +17,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,11 +38,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -61,8 +67,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -140,9 +144,9 @@ private data class FingerTrainingStage(
 // A compact curriculum is intentionally kept in this file so the
 // user only has one source file to manage and replace.
 // ============================================================
-private enum class GuidedLessonKind { FINGER, HARMONY }
+internal enum class GuidedLessonKind { FINGER, HARMONY }
 
-private enum class PracticeSubdivision(
+internal enum class PracticeSubdivision(
     val key: String,
     val titleVi: String,
     val titleEn: String,
@@ -157,7 +161,7 @@ private enum class PracticeSubdivision(
     fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
 }
 
-private enum class PracticePickingPattern(
+internal enum class PracticePickingPattern(
     val key: String,
     val titleVi: String,
     val titleEn: String
@@ -171,7 +175,7 @@ private enum class PracticePickingPattern(
     fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
 }
 
-private data class GuidedPracticeLesson(
+internal data class GuidedPracticeLesson(
     val id: String,
     val number: String,
     val kind: GuidedLessonKind,
@@ -208,7 +212,7 @@ private data class GuidedPracticeLesson(
     fun application(lang: String): String = fingerUiText(lang, applicationVi, applicationEn)
 }
 
-private data class GuidedPracticeChapter(
+internal data class GuidedPracticeChapter(
     val key: String,
     val number: String,
     val titleVi: String,
@@ -224,14 +228,14 @@ private data class GuidedPracticeChapter(
 
 private const val SEVENTH_CIRCLE_CHAPTER_KEY = "SEVENTH_CIRCLE_FOURTHS"
 
-private fun guidedPracticeChapter(key: String?): GuidedPracticeChapter? = when (key) {
+internal fun guidedPracticeChapter(key: String?): GuidedPracticeChapter? = when (key) {
     SEVENTH_CIRCLE_CHAPTER_KEY -> GuidedPracticeChapter(
         key = SEVENTH_CIRCLE_CHAPTER_KEY,
         number = "13",
         titleVi = "Hợp âm 7 theo vòng quãng 4",
         titleEn = "Seventh chords through the circle of fourths",
-        descriptionVi = "13A Trưởng  →  13B So sánh Em7/E7  →  13C Thứ",
-        descriptionEn = "13A Major  →  13B Compare Em7/E7  →  13C Minor",
+        descriptionVi = "Bài 13 gồm 3 phần: 13A Trưởng → 13B Em7/E7 → 13C Thứ",
+        descriptionEn = "Lesson 13 has 3 parts: 13A Major → 13B Em7/E7 → 13C Minor",
         accent = Color(0xFFE85D86),
         secondaryAccent = Color(0xFFFF8A50)
     )
@@ -251,7 +255,21 @@ private fun guidedCurriculumCompletedCount(
     .groupBy(::guidedCurriculumUnitKey)
     .count { (_, parts) -> parts.all { it.id in completedIds } }
 
-private object GuidedPracticeProgressStore {
+// The 13 original core lessons are always shown in numeric order across the
+// five roadmap stages. The 13A/13B/13C parts form ONE progress unit (lesson 13).
+// Do not use the separate, unnumbered free-practice activities to calculate progress.
+private fun guidedRoadmapStageForLesson(lesson: GuidedPracticeLesson): Int {
+    val lessonNumber = lesson.number.takeWhile { it.isDigit() }.toIntOrNull()
+    return when (lessonNumber) {
+        in 1..4 -> 0
+        in 5..6 -> 1
+        in 7..8 -> 2
+        in 9..11 -> 3
+        else -> 4  // Lesson 12 and all three parts of lesson 13.
+    }
+}
+
+internal object GuidedPracticeProgressStore {
     private const val PREF_NAME = "tuner_tools_guided_practice_v1"
     private const val COMPLETED_KEY = "completed_lessons"
 
@@ -277,9 +295,10 @@ private object GuidedPracticeProgressStore {
     }
 }
 
-private enum class FingerPracticeSection {
+internal enum class FingerPracticeSection {
     EXERCISES,
-    HAND_SHAPES
+    HAND_SHAPES,
+    HARMONY
 }
 
 private enum class CagedShape(
@@ -322,10 +341,10 @@ private enum class CagedShape(
         key = "G",
         titleVi = "Dạng G",
         titleEn = "G shape",
-        descriptionVi = "Gốc trên dây 6, dây 3 và dây 1; vùng C trưởng mẫu nằm ở ngăn 4-8",
-        descriptionEn = "Roots on strings 6, 3 and 1; the C-major reference box spans frets 4-8",
+        descriptionVi = "Gốc trên dây 6, dây 3 và dây 1; vùng C trưởng mẫu nằm ở ngăn 5-8",
+        descriptionEn = "Roots on strings 6, 3 and 1; the C-major reference box spans frets 5-8",
         rootString = 6,
-        lowerFretOffsetFromRoot = 4,
+        lowerFretOffsetFromRoot = 3,
         upperFretOffsetFromRoot = 0,
         supportsOpenPosition = false,
         accent = Color(0xFFF2B94B)
@@ -372,50 +391,147 @@ private enum class HandShapeScaleType(
     val degreeLabels: List<String>,
     val intervals: List<Int>,
     val usesMajorCagedFingering: Boolean,
-    val emphasizesDominantTones: Boolean = false
+    val characteristicIntervals: List<Int> = emptyList(),
+    val supportsDominantContext: Boolean = false,
+    val levelKey: String = "BASIC"
 ) {
     MAJOR(
+        // Keep the original key so saved selections from older builds remain valid.
         key = "MAJOR",
-        titleVi = "Trưởng",
-        titleEn = "Major",
+        titleVi = "Ionian (Trưởng)",
+        titleEn = "Ionian (Major)",
         formula = "1 · 2 · 3 · 4 · 5 · 6 · 7",
-        groupKey = "SEVEN_NOTE",
-        summaryVi = "Âm giai trưởng đủ 7 nốt, sáng và cân bằng.",
-        summaryEn = "A complete seven-note major scale with a bright, balanced sound.",
-        usageVi = "Dùng để luyện nền tảng, giai điệu trưởng và định vị CAGED.",
-        usageEn = "Use it for fundamentals, major melodies and CAGED mapping.",
+        groupKey = "MODES",
+        summaryVi = "Ionian là âm giai trưởng chuẩn. Bậc 7 trưởng tạo lực hút rõ về nốt gốc.",
+        summaryEn = "Ionian is the standard major scale. Its major 7th creates a strong pull toward the tonic.",
+        usageVi = "Dùng trên hợp âm trưởng, maj7 và các giai điệu trưởng thông dụng.",
+        usageEn = "Use it over major and maj7 harmony and conventional major-key melodies.",
         degreeLabels = listOf("1", "2", "3", "4", "5", "6", "7"),
         intervals = listOf(0, 2, 4, 5, 7, 9, 11),
-        usesMajorCagedFingering = true
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(11)
     ),
-    NATURAL_MINOR(
-        key = "NATURAL_MINOR",
-        titleVi = "Thứ tự nhiên",
-        titleEn = "Natural minor",
-        formula = "1 · 2 · ♭3 · 4 · 5 · ♭6 · ♭7",
-        groupKey = "SEVEN_NOTE",
-        summaryVi = "Âm giai thứ tự nhiên đủ 7 nốt, màu tối và mềm hơn.",
-        summaryEn = "A complete seven-note natural minor scale with a darker sound.",
-        usageVi = "Dùng trên các giai điệu và vòng hợp âm thứ tự nhiên.",
-        usageEn = "Use it over natural-minor melodies and progressions.",
-        degreeLabels = listOf("1", "2", "♭3", "4", "5", "♭6", "♭7"),
-        intervals = listOf(0, 2, 3, 5, 7, 8, 10),
-        usesMajorCagedFingering = false
+    DORIAN(
+        key = "DORIAN",
+        titleVi = "Dorian",
+        titleEn = "Dorian",
+        formula = "1 · 2 · ♭3 · 4 · 5 · 6 · ♭7",
+        groupKey = "MODES",
+        summaryVi = "Dorian là mode thứ có bậc 6 trưởng. Bậc 6 giúp màu thứ sáng và linh hoạt hơn Aeolian.",
+        summaryEn = "Dorian is a minor mode with a natural 6th, giving it a brighter sound than Aeolian.",
+        usageVi = "Phù hợp hợp âm m7, m6, funk, jazz và các vòng hòa âm Dorian.",
+        usageEn = "Useful over m7 and m6 harmony, funk, jazz and Dorian vamps.",
+        degreeLabels = listOf("1", "2", "♭3", "4", "5", "6", "♭7"),
+        intervals = listOf(0, 2, 3, 5, 7, 9, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(9)
+    ),
+    PHRYGIAN(
+        key = "PHRYGIAN",
+        titleVi = "Phrygian",
+        titleEn = "Phrygian",
+        formula = "1 · ♭2 · ♭3 · 4 · 5 · ♭6 · ♭7",
+        groupKey = "MODES",
+        summaryVi = "Phrygian là mode thứ có bậc ♭2 đặc trưng, tạo cảm giác tối và căng gần nốt gốc.",
+        summaryEn = "Phrygian is a minor mode whose characteristic ♭2 creates a dark, tense pull near the tonic.",
+        usageVi = "Phù hợp các nền hợp âm thứ tĩnh, metal và màu âm Tây Ban Nha; không đồng nhất với Phrygian dominant.",
+        usageEn = "Useful over static minor harmony, metal and Spanish-flavoured lines; it is not the same as Phrygian dominant.",
+        degreeLabels = listOf("1", "♭2", "♭3", "4", "5", "♭6", "♭7"),
+        intervals = listOf(0, 1, 3, 5, 7, 8, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(1)
+    ),
+    LYDIAN(
+        key = "LYDIAN",
+        titleVi = "Lydian",
+        titleEn = "Lydian",
+        formula = "1 · 2 · 3 · ♯4 · 5 · 6 · 7",
+        groupKey = "MODES",
+        summaryVi = "Lydian là mode trưởng có bậc ♯4 đặc trưng, tạo màu sáng, rộng và ít va chạm với bậc 3.",
+        summaryEn = "Lydian is a major mode with a characteristic ♯4, producing a bright and open sound.",
+        usageVi = "Phù hợp hợp âm maj7, maj7♯11 và các nền trưởng cần màu sắc bay, hiện đại.",
+        usageEn = "Useful over maj7 and maj7♯11 harmony and modern, floating major sounds.",
+        degreeLabels = listOf("1", "2", "3", "♯4", "5", "6", "7"),
+        intervals = listOf(0, 2, 4, 6, 7, 9, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(6)
     ),
     MIXOLYDIAN(
         key = "MIXOLYDIAN",
-        titleVi = "Mixolydian (7 nốt)",
-        titleEn = "Mixolydian (7 notes)",
+        titleVi = "Mixolydian",
+        titleEn = "Mixolydian",
         formula = "1 · 2 · 3 · 4 · 5 · 6 · ♭7",
-        groupKey = "SEVEN_NOTE",
-        summaryVi = "Điệu thức Mixolydian chuẩn: âm giai trưởng hạ bậc 7 xuống nửa cung.",
-        summaryEn = "Standard Mixolydian mode: a major scale with a lowered seventh degree.",
-        usageVi = "Dùng trên hợp âm dominant 7 và các vòng hòa âm Mixolydian.",
-        usageEn = "Use it over dominant-seventh harmony and Mixolydian progressions.",
+        groupKey = "MODES",
+        summaryVi = "Mixolydian là mode trưởng có bậc ♭7. Cặp 3 trưởng và ♭7 thể hiện rõ chức năng dominant.",
+        summaryEn = "Mixolydian is a major mode with a ♭7. The major 3rd and ♭7 clearly outline dominant function.",
+        usageVi = "Dùng trên hợp âm dominant 7, blues, rock, funk và các vòng hòa âm Mixolydian.",
+        usageEn = "Use it over dominant-seventh harmony, blues, rock, funk and Mixolydian progressions.",
         degreeLabels = listOf("1", "2", "3", "4", "5", "6", "♭7"),
         intervals = listOf(0, 2, 4, 5, 7, 9, 10),
         usesMajorCagedFingering = true,
-        emphasizesDominantTones = true
+        characteristicIntervals = listOf(4, 10),
+        supportsDominantContext = true
+    ),
+    NATURAL_MINOR(
+        // Keep the original key so saved selections from older builds remain valid.
+        key = "NATURAL_MINOR",
+        titleVi = "Aeolian (Thứ tự nhiên)",
+        titleEn = "Aeolian (Natural minor)",
+        formula = "1 · 2 · ♭3 · 4 · 5 · ♭6 · ♭7",
+        groupKey = "MODES",
+        summaryVi = "Aeolian chính là âm giai thứ tự nhiên. Bậc ♭6 là màu quan trọng phân biệt với Dorian.",
+        summaryEn = "Aeolian is the natural minor scale. Its ♭6 is an important contrast with Dorian.",
+        usageVi = "Dùng trên hợp âm thứ, các vòng hòa âm thứ tự nhiên và giai điệu có màu buồn, ổn định.",
+        usageEn = "Use it over minor harmony, natural-minor progressions and stable, darker melodies.",
+        degreeLabels = listOf("1", "2", "♭3", "4", "5", "♭6", "♭7"),
+        intervals = listOf(0, 2, 3, 5, 7, 8, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(8)
+    ),
+    LOCRIAN(
+        key = "LOCRIAN",
+        titleVi = "Locrian",
+        titleEn = "Locrian",
+        formula = "1 · ♭2 · ♭3 · 4 · ♭5 · ♭6 · ♭7",
+        groupKey = "MODES",
+        summaryVi = "Locrian là mode thứ có ♭5 và ♭2, nên hợp âm chủ không ổn định như các mode còn lại.",
+        summaryEn = "Locrian is a minor mode with a ♭5 and ♭2, so its tonic harmony is inherently unstable.",
+        usageVi = "Phù hợp hợp âm m7♭5 (half-diminished), bài tập nghe và các đoạn cần độ căng cao.",
+        usageEn = "Useful over m7♭5 (half-diminished) harmony, ear training and highly tense passages.",
+        degreeLabels = listOf("1", "♭2", "♭3", "4", "♭5", "♭6", "♭7"),
+        intervals = listOf(0, 1, 3, 5, 6, 8, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(6, 1)
+    ),
+    HARMONIC_MINOR(
+        key = "HARMONIC_MINOR",
+        titleVi = "Thứ hòa thanh",
+        titleEn = "Harmonic minor",
+        formula = "1 · 2 · ♭3 · 4 · 5 · ♭6 · 7",
+        groupKey = "MINOR_SCALES",
+        summaryVi = "Âm giai thứ hòa thanh nâng bậc 7 của thứ tự nhiên. Khoảng ♭6–7 tạo lực hút mạnh về nốt gốc và màu hòa âm đặc trưng.",
+        summaryEn = "Harmonic minor raises the 7th of natural minor. The ♭6–7 span creates a strong pull to the tonic and its characteristic harmonic colour.",
+        usageVi = "Dùng trong hòa âm thứ, hợp âm V7 dẫn về i, metal cổ điển, neoclassical và nhiều ngữ cảnh flamenco.",
+        usageEn = "Use it in minor-key harmony, especially V7 resolving to i, as well as classical metal, neoclassical and many flamenco contexts.",
+        degreeLabels = listOf("1", "2", "♭3", "4", "5", "♭6", "7"),
+        intervals = listOf(0, 2, 3, 5, 7, 8, 11),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(8, 11)
+    ),
+    MELODIC_MINOR(
+        key = "MELODIC_MINOR",
+        titleVi = "Thứ giai điệu (Jazz)",
+        titleEn = "Melodic minor (Jazz)",
+        formula = "1 · 2 · ♭3 · 4 · 5 · 6 · 7",
+        groupKey = "MINOR_SCALES",
+        summaryVi = "Đây là dạng jazz melodic minor: cùng một tập nốt khi đi lên và đi xuống. Nó là âm giai trưởng hạ bậc 3.",
+        summaryEn = "This is the jazz melodic-minor form: the same collection ascending and descending. It can be heard as a major scale with a lowered 3rd.",
+        usageVi = "Dùng trên hợp âm m(maj7), m6 và làm âm giai mẹ cho Lydian dominant, Altered cùng các mode melodic minor khác.",
+        usageEn = "Use it over m(maj7) and m6 harmony and as the parent scale of Lydian dominant, Altered and the other melodic-minor modes.",
+        degreeLabels = listOf("1", "2", "♭3", "4", "5", "6", "7"),
+        intervals = listOf(0, 2, 3, 5, 7, 9, 11),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(9, 11)
     ),
     MAJOR_PENTATONIC(
         key = "MAJOR_PENTATONIC",
@@ -448,18 +564,19 @@ private enum class HandShapeScaleType(
     MIXOLYDIAN_PENTATONIC(
         // Keep the original key so previously saved user preferences remain valid.
         key = "MIXOLYDIAN_PENTATONIC",
-        titleVi = "Mixolydian ngũ cung (có 4)",
-        titleEn = "Mixolydian pentatonic (with 4)",
+        titleVi = "Ngũ cung dominant (có 4)",
+        titleEn = "Dominant pentatonic (with 4)",
         formula = "1 · 3 · 4 · 5 · ♭7",
         groupKey = "MODAL_PENTATONIC",
-        summaryVi = "Biến thể được Berklee Guitar Department trình bày: bỏ bậc 2 và 6 khỏi Mixolydian. Tên được ghi kèm “có 4” vì các giáo trình không dùng hoàn toàn thống nhất.",
-        summaryEn = "The Berklee Guitar Department variant: Mixolydian without degrees 2 and 6. “With 4” is shown because method books do not use one universal naming convention.",
-        usageVi = "Giữ 3 trưởng và ♭7, đồng thời thêm bậc 4; phù hợp dominant 7, 7sus4, funk, rock và màu âm mở.",
+        summaryVi = "Biến thể bỏ bậc 2 và 6 khỏi Mixolydian. Tên được ghi kèm “có 4” vì các giáo trình không dùng hoàn toàn thống nhất.",
+        summaryEn = "A variant formed by omitting degrees 2 and 6 from Mixolydian. “With 4” is shown because methods do not use one universal naming convention.",
+        usageVi = "Giữ 3 trưởng và ♭7, đồng thời thêm bậc 4; phù hợp dominant 7, 7sus4, funk và rock.",
         usageEn = "Keeps the major 3rd and ♭7 and adds the 4th; useful over dominant 7, 7sus4, funk and rock.",
         degreeLabels = listOf("1", "3", "4", "5", "♭7"),
         intervals = listOf(0, 4, 5, 7, 10),
         usesMajorCagedFingering = true,
-        emphasizesDominantTones = true
+        characteristicIntervals = listOf(4, 10),
+        supportsDominantContext = true
     ),
     DOMINANT_PENTATONIC(
         key = "DOMINANT_PENTATONIC",
@@ -467,28 +584,421 @@ private enum class HandShapeScaleType(
         titleEn = "Dominant pentatonic (with 2)",
         formula = "1 · 2 · 3 · 5 · ♭7",
         groupKey = "MODAL_PENTATONIC",
-        summaryVi = "Biến thể dominant gồm hợp âm 7 cộng bậc 2/9. Một số giáo trình cũng gọi đây là Mixolydian ngũ cung, nên Tuner Tools ghi rõ “có 2”.",
-        summaryEn = "A dominant-seventh outline plus degree 2/9. Some methods also call it Mixolydian pentatonic, so Tuner Tools labels it explicitly as “with 2”.",
+        summaryVi = "Biến thể dominant gồm các nốt của hợp âm 7 cộng bậc 2/9. Một số giáo trình cũng gọi đây là Mixolydian ngũ cung.",
+        summaryEn = "A dominant-seventh outline plus degree 2/9. Some methods also call it Mixolydian pentatonic.",
         usageVi = "Phù hợp dominant 7/9, jazz, blues, funk và các câu solo cần tránh bậc 4.",
         usageEn = "Useful over dominant 7/9 harmony in jazz, blues and funk, especially when avoiding the 4th.",
         degreeLabels = listOf("1", "2", "3", "5", "♭7"),
         intervals = listOf(0, 2, 4, 7, 10),
         usesMajorCagedFingering = true,
-        emphasizesDominantTones = true
+        characteristicIntervals = listOf(4, 10),
+        supportsDominantContext = true
+    ),
+    MAJOR_BLUES(
+        key = "MAJOR_BLUES",
+        titleVi = "Blues trưởng",
+        titleEn = "Major blues",
+        formula = "1 · 2 · ♭3 · 3 · 5 · 6",
+        groupKey = "BLUES",
+        summaryVi = "Blues trưởng là ngũ cung trưởng cộng ♭3. Sự va chạm biểu cảm giữa ♭3 và 3 tạo màu blues.",
+        summaryEn = "The major blues scale is major pentatonic plus ♭3. The expressive tension between ♭3 and 3 creates its blues colour.",
+        usageVi = "Phù hợp major blues, country, rock and roll và solo trên nền trưởng hoặc dominant khi xử lý ♭3 như blue note.",
+        usageEn = "Useful for major blues, country and rock and roll over major or dominant harmony, treating ♭3 as a blue note.",
+        degreeLabels = listOf("1", "2", "♭3", "3", "5", "6"),
+        intervals = listOf(0, 2, 3, 4, 7, 9),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(3, 4)
+    ),
+    MINOR_BLUES(
+        key = "MINOR_BLUES",
+        titleVi = "Blues thứ",
+        titleEn = "Minor blues",
+        formula = "1 · ♭3 · 4 · ♭5 · 5 · ♭7",
+        groupKey = "BLUES",
+        summaryVi = "Blues thứ là ngũ cung thứ cộng ♭5. Bậc ♭5 là blue note đặc trưng, thường được lướt hoặc bend về bậc 5.",
+        summaryEn = "The minor blues scale is minor pentatonic plus ♭5. The ♭5 is its characteristic blue note, often approached or bent toward 5.",
+        usageVi = "Phù hợp blues, rock và các câu solo trên nền thứ hoặc dominant tùy ngữ cảnh hòa âm.",
+        usageEn = "Useful for blues and rock over minor or dominant harmony, depending on the harmonic context.",
+        degreeLabels = listOf("1", "♭3", "4", "♭5", "5", "♭7"),
+        intervals = listOf(0, 3, 5, 6, 7, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(6, 3)
+    ),
+    DORIAN_FLAT_2(
+        key = "DORIAN_FLAT_2",
+        titleVi = "Dorian ♭2",
+        titleEn = "Dorian ♭2",
+        formula = "1 · ♭2 · ♭3 · 4 · 5 · 6 · ♭7",
+        groupKey = "MELODIC_MINOR_MODES",
+        summaryVi = "Mode 2 của melodic minor. Nó giữ màu Dorian nhờ bậc 6 trưởng nhưng có thêm ♭2 tối và căng.",
+        summaryEn = "The second mode of melodic minor. It keeps Dorian's natural 6th while adding a dark, tense ♭2.",
+        usageVi = "Phù hợp hợp âm m7(♭9), nền minor sus và các đoạn jazz/fusion cần màu Dorian tối hơn.",
+        usageEn = "Useful over m7(♭9), minor-sus harmony and jazz/fusion passages requiring a darker Dorian colour.",
+        degreeLabels = listOf("1", "♭2", "♭3", "4", "5", "6", "♭7"),
+        intervals = listOf(0, 1, 3, 5, 7, 9, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(1, 9),
+        levelKey = "ADVANCED"
+    ),
+    LYDIAN_AUGMENTED(
+        key = "LYDIAN_AUGMENTED",
+        titleVi = "Lydian Augmented",
+        titleEn = "Lydian augmented",
+        formula = "1 · 2 · 3 · ♯4 · ♯5 · 6 · 7",
+        groupKey = "MELODIC_MINOR_MODES",
+        summaryVi = "Mode 3 của melodic minor, kết hợp ♯4 của Lydian với ♯5 của hợp âm augmented.",
+        summaryEn = "The third mode of melodic minor, combining Lydian's ♯4 with the augmented chord's ♯5.",
+        usageVi = "Dùng trên maj7♯5, maj7♯11♯5 và các hợp âm trưởng tăng có màu hiện đại.",
+        usageEn = "Use it over maj7♯5, maj7♯11♯5 and modern augmented-major harmony.",
+        degreeLabels = listOf("1", "2", "3", "♯4", "♯5", "6", "7"),
+        intervals = listOf(0, 2, 4, 6, 8, 9, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(6, 8),
+        levelKey = "ADVANCED"
+    ),
+    LYDIAN_DOMINANT(
+        key = "LYDIAN_DOMINANT",
+        titleVi = "Lydian Dominant",
+        titleEn = "Lydian dominant",
+        formula = "1 · 2 · 3 · ♯4 · 5 · 6 · ♭7",
+        groupKey = "MELODIC_MINOR_MODES",
+        summaryVi = "Mode 4 của melodic minor, còn gọi Lydian ♭7. Nó kết hợp ♯4/♯11 với 3 trưởng và ♭7 của dominant.",
+        summaryEn = "The fourth mode of melodic minor, also called Lydian ♭7. It combines ♯4/♯11 with the dominant major 3rd and ♭7.",
+        usageVi = "Dùng trên hợp âm 7♯11, dominant không cần giải quyết truyền thống, jazz và fusion.",
+        usageEn = "Use it over 7♯11 chords, non-resolving dominants, jazz and fusion.",
+        degreeLabels = listOf("1", "2", "3", "♯4", "5", "6", "♭7"),
+        intervals = listOf(0, 2, 4, 6, 7, 9, 10),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(6, 10),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    MIXOLYDIAN_FLAT_6(
+        key = "MIXOLYDIAN_FLAT_6",
+        titleVi = "Mixolydian ♭6",
+        titleEn = "Mixolydian ♭6",
+        formula = "1 · 2 · 3 · 4 · 5 · ♭6 · ♭7",
+        groupKey = "MELODIC_MINOR_MODES",
+        summaryVi = "Mode 5 của melodic minor. Đây là Mixolydian có ♭6, tạo màu dominant tối hơn và gần âm hưởng minor.",
+        summaryEn = "The fifth mode of melodic minor. It is Mixolydian with a ♭6, producing a darker dominant sound with a minor inflection.",
+        usageVi = "Dùng trên dominant 7(♭13), các dominant dẫn về minor và vòng hòa âm có màu điện ảnh.",
+        usageEn = "Use it over 7(♭13), dominants resolving to minor and cinematic dominant harmony.",
+        degreeLabels = listOf("1", "2", "3", "4", "5", "♭6", "♭7"),
+        intervals = listOf(0, 2, 4, 5, 7, 8, 10),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(4, 8),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    LOCRIAN_NATURAL_2(
+        key = "LOCRIAN_NATURAL_2",
+        titleVi = "Locrian ♮2",
+        titleEn = "Locrian ♮2",
+        formula = "1 · 2 · ♭3 · 4 · ♭5 · ♭6 · ♭7",
+        groupKey = "MELODIC_MINOR_MODES",
+        summaryVi = "Mode 6 của melodic minor. So với Locrian thông thường, bậc 2 được nâng thành tự nhiên nên bớt căng ở gần nốt gốc.",
+        summaryEn = "The sixth mode of melodic minor. Compared with ordinary Locrian, its natural 2nd softens the tension next to the tonic.",
+        usageVi = "Dùng trên m7♭5 khi bậc 9 tự nhiên phù hợp với hòa âm, đặc biệt trong jazz minor ii–V–i.",
+        usageEn = "Use it over m7♭5 when a natural 9 fits the harmony, especially in minor jazz ii–V–i progressions.",
+        degreeLabels = listOf("1", "2", "♭3", "4", "♭5", "♭6", "♭7"),
+        intervals = listOf(0, 2, 3, 5, 6, 8, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(2, 6),
+        levelKey = "ADVANCED"
+    ),
+    ALTERED(
+        key = "ALTERED",
+        titleVi = "Altered",
+        titleEn = "Altered",
+        formula = "1 · ♭9 · ♯9 · 3 · ♭5 · ♭13 · ♭7",
+        groupKey = "MELODIC_MINOR_MODES",
+        summaryVi = "Mode 7 của melodic minor. Ngoài 1, 3 và ♭7, nó chứa các tension dominant biến đổi: ♭9, ♯9, ♭5/♯11 và ♭13.",
+        summaryEn = "The seventh mode of melodic minor. Beyond 1, 3 and ♭7, it contains the altered dominant tensions ♭9, ♯9, ♭5/♯11 and ♭13.",
+        usageVi = "Dùng trên hợp âm 7alt, 7♭9, 7♯9, 7♭5 hoặc 7♭13 khi dominant cần giải quyết mạnh.",
+        usageEn = "Use it over 7alt, 7♭9, 7♯9, 7♭5 or 7♭13 when a dominant chord requires strong resolution.",
+        degreeLabels = listOf("1", "♭9", "♯9", "3", "♭5", "♭13", "♭7"),
+        intervals = listOf(0, 1, 3, 4, 6, 8, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(1, 3),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    LOCRIAN_NATURAL_6(
+        key = "LOCRIAN_NATURAL_6",
+        titleVi = "Locrian ♮6",
+        titleEn = "Locrian ♮6",
+        formula = "1 · ♭2 · ♭3 · 4 · ♭5 · 6 · ♭7",
+        groupKey = "HARMONIC_MINOR_MODES",
+        summaryVi = "Mode 2 của harmonic minor. Nó giữ ♭2 và ♭5 của Locrian nhưng nâng ♭6 thành bậc 6 tự nhiên.",
+        summaryEn = "The second mode of harmonic minor. It keeps Locrian's ♭2 and ♭5 while raising ♭6 to a natural 6th.",
+        usageVi = "Dùng trên m7♭5 khi bậc 13 tự nhiên phù hợp, hoặc để tạo màu half-diminished sáng hơn Locrian thường.",
+        usageEn = "Use it over m7♭5 when a natural 13 fits, or for a brighter half-diminished colour than ordinary Locrian.",
+        degreeLabels = listOf("1", "♭2", "♭3", "4", "♭5", "6", "♭7"),
+        intervals = listOf(0, 1, 3, 5, 6, 9, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(6, 9),
+        levelKey = "ADVANCED"
+    ),
+    IONIAN_AUGMENTED(
+        key = "IONIAN_AUGMENTED",
+        titleVi = "Ionian Augmented",
+        titleEn = "Ionian augmented",
+        formula = "1 · 2 · 3 · 4 · ♯5 · 6 · 7",
+        groupKey = "HARMONIC_MINOR_MODES",
+        summaryVi = "Mode 3 của harmonic minor. Đây là Ionian có ♯5, tạo hợp âm chủ maj7♯5 nhưng vẫn giữ bậc 4 tự nhiên.",
+        summaryEn = "The third mode of harmonic minor. It is Ionian with a ♯5, creating a maj7♯5 tonic while retaining a natural 4th.",
+        usageVi = "Dùng trên maj7♯5, augmented major và các đoạn cần màu trưởng tăng nhưng không có ♯4 của Lydian augmented.",
+        usageEn = "Use it over maj7♯5 and augmented-major harmony when the natural 4th is preferred to Lydian augmented's ♯4.",
+        degreeLabels = listOf("1", "2", "3", "4", "♯5", "6", "7"),
+        intervals = listOf(0, 2, 4, 5, 8, 9, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(8, 11),
+        levelKey = "ADVANCED"
+    ),
+    DORIAN_SHARP_4(
+        key = "DORIAN_SHARP_4",
+        titleVi = "Dorian ♯4 (Romanian)",
+        titleEn = "Dorian ♯4 (Romanian)",
+        formula = "1 · 2 · ♭3 · ♯4 · 5 · 6 · ♭7",
+        groupKey = "HARMONIC_MINOR_MODES",
+        summaryVi = "Mode 4 của harmonic minor. Nó giữ bậc 6 trưởng của Dorian nhưng thay bậc 4 tự nhiên bằng ♯4.",
+        summaryEn = "The fourth mode of harmonic minor. It keeps Dorian's natural 6th while replacing the natural 4th with ♯4.",
+        usageVi = "Dùng trên m7♯11, fusion, metal và các nền minor cần màu sáng nhưng căng hơn Dorian thường.",
+        usageEn = "Use it over m7♯11, fusion, metal and minor vamps requiring a brighter yet tenser colour than ordinary Dorian.",
+        degreeLabels = listOf("1", "2", "♭3", "♯4", "5", "6", "♭7"),
+        intervals = listOf(0, 2, 3, 6, 7, 9, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(6, 9),
+        levelKey = "ADVANCED"
+    ),
+    PHRYGIAN_DOMINANT(
+        key = "PHRYGIAN_DOMINANT",
+        titleVi = "Phrygian Dominant",
+        titleEn = "Phrygian dominant",
+        formula = "1 · ♭2 · 3 · 4 · 5 · ♭6 · ♭7",
+        groupKey = "HARMONIC_MINOR_MODES",
+        summaryVi = "Mode 5 của harmonic minor. Bậc ♭2 kết hợp với 3 trưởng tạo màu dominant rất rõ và khác Phrygian thường.",
+        summaryEn = "The fifth mode of harmonic minor. Its ♭2 combined with a major 3rd creates a distinctive dominant sound unlike ordinary Phrygian.",
+        usageVi = "Dùng trên V7 trong giọng thứ, dominant ♭9/♭13, metal, fusion và nhiều ngữ cảnh flamenco.",
+        usageEn = "Use it over V7 in minor keys, ♭9/♭13 dominants, metal, fusion and many flamenco contexts.",
+        degreeLabels = listOf("1", "♭2", "3", "4", "5", "♭6", "♭7"),
+        intervals = listOf(0, 1, 4, 5, 7, 8, 10),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(1, 4),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    LYDIAN_SHARP_2(
+        key = "LYDIAN_SHARP_2",
+        titleVi = "Lydian ♯2",
+        titleEn = "Lydian ♯2",
+        formula = "1 · ♯2 · 3 · ♯4 · 5 · 6 · 7",
+        groupKey = "HARMONIC_MINOR_MODES",
+        summaryVi = "Mode 6 của harmonic minor. Nó kết hợp ♯2 với ♯4 của Lydian, tạo khoảng tăng 2 ngay đầu âm giai.",
+        summaryEn = "The sixth mode of harmonic minor. It combines ♯2 with Lydian's ♯4, creating an augmented second near the tonic.",
+        usageVi = "Dùng trên maj7♯11 khi ♯9/♯2 phù hợp với giai điệu, chủ yếu trong sáng tác và jazz nâng cao.",
+        usageEn = "Use it over maj7♯11 when a ♯9/♯2 fits the line, mainly in advanced composition and jazz contexts.",
+        degreeLabels = listOf("1", "♯2", "3", "♯4", "5", "6", "7"),
+        intervals = listOf(0, 3, 4, 6, 7, 9, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(3, 6),
+        levelKey = "ADVANCED"
+    ),
+    ULTRA_LOCRIAN(
+        key = "ULTRA_LOCRIAN",
+        titleVi = "Ultra Locrian",
+        titleEn = "Ultra Locrian",
+        formula = "1 · ♭2 · ♭3 · ♭4 · ♭5 · ♭6 · ♭♭7",
+        groupKey = "HARMONIC_MINOR_MODES",
+        summaryVi = "Mode 7 của harmonic minor. Đây là tập nốt cực căng với ♭4, ♭5 và bậc 7 giáng kép; không đồng nhất với Altered/Super Locrian của melodic minor.",
+        summaryEn = "The seventh mode of harmonic minor. It is highly tense, with ♭4, ♭5 and a doubly lowered 7th; it is not the melodic-minor Altered/Super Locrian scale.",
+        usageVi = "Dùng hạn chế trong sáng tác, hòa âm diminished/altered và luyện nghe nâng cao; nên luôn đọc kèm công thức.",
+        usageEn = "Use sparingly in composition, diminished/altered harmony and advanced ear training; always read it together with its formula.",
+        degreeLabels = listOf("1", "♭2", "♭3", "♭4", "♭5", "♭6", "♭♭7"),
+        intervals = listOf(0, 1, 3, 4, 6, 8, 9),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(4, 9),
+        levelKey = "ADVANCED"
+    ),
+    WHOLE_TONE(
+        key = "WHOLE_TONE",
+        titleVi = "Toàn cung",
+        titleEn = "Whole tone",
+        formula = "1 · 2 · 3 · ♯4 · ♯5 · ♭7",
+        groupKey = "SYMMETRIC",
+        summaryVi = "Âm giai sáu nốt chỉ gồm các quãng toàn cung. Vì không có nửa cung, nó tạo cảm giác lơ lửng và không ổn định.",
+        summaryEn = "A six-note scale built entirely from whole steps. With no semitones, it sounds floating and unresolved.",
+        usageVi = "Dùng trên hợp âm augmented và dominant có ♯5/♭5 khi cần màu mơ hồ, đối xứng.",
+        usageEn = "Use it over augmented harmony and dominant chords with ♯5/♭5 for an ambiguous, symmetrical colour.",
+        degreeLabels = listOf("1", "2", "3", "♯4", "♯5", "♭7"),
+        intervals = listOf(0, 2, 4, 6, 8, 10),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(6, 8),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    DIMINISHED_HALF_WHOLE(
+        key = "DIMINISHED_HALF_WHOLE",
+        titleVi = "Diminished nửa–cung / toàn–cung",
+        titleEn = "Diminished half–whole",
+        formula = "1 · ♭9 · ♯9 · 3 · ♯11 · 5 · 13 · ♭7",
+        groupKey = "SYMMETRIC",
+        summaryVi = "Âm giai tám nốt đối xứng, luân phiên nửa cung rồi toàn cung. Nó chứa hợp âm dominant cùng nhiều tension biến đổi.",
+        summaryEn = "An eight-note symmetrical scale alternating half and whole steps. It contains a dominant chord plus several altered tensions.",
+        usageVi = "Dùng trên dominant 7♭9, 7♯9, 13♭9 và dominant diminished; đặc biệt hiệu quả trước khi giải quyết.",
+        usageEn = "Use it over 7♭9, 7♯9, 13♭9 and dominant-diminished harmony, especially before resolution.",
+        degreeLabels = listOf("1", "♭9", "♯9", "3", "♯11", "5", "13", "♭7"),
+        intervals = listOf(0, 1, 3, 4, 6, 7, 9, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(1, 3),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    DIMINISHED_WHOLE_HALF(
+        key = "DIMINISHED_WHOLE_HALF",
+        titleVi = "Diminished toàn–cung / nửa–cung",
+        titleEn = "Diminished whole–half",
+        formula = "1 · 2 · ♭3 · 4 · ♭5 · ♭6 · 6 · 7",
+        groupKey = "SYMMETRIC",
+        summaryVi = "Âm giai tám nốt đối xứng, luân phiên toàn cung rồi nửa cung. Nó phác họa hợp âm diminished seventh từ nốt gốc.",
+        summaryEn = "An eight-note symmetrical scale alternating whole and half steps. It outlines a diminished-seventh chord from the tonic.",
+        usageVi = "Dùng trên hợp âm °7, các chuỗi diminished và bài tập chuyển dịch theo quãng 3 thứ.",
+        usageEn = "Use it over °7 harmony, diminished sequences and minor-third transposition practice.",
+        degreeLabels = listOf("1", "2", "♭3", "4", "♭5", "♭6", "6", "7"),
+        intervals = listOf(0, 2, 3, 5, 6, 8, 9, 11),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(6, 11),
+        levelKey = "ADVANCED"
+    ),
+    CHROMATIC(
+        key = "CHROMATIC",
+        titleVi = "Chromatic (12 nốt)",
+        titleEn = "Chromatic (12 notes)",
+        formula = "1 · ♭2 · 2 · ♭3 · 3 · 4 · ♭5 · 5 · ♭6 · 6 · ♭7 · 7",
+        groupKey = "SYMMETRIC",
+        summaryVi = "Âm giai chromatic chứa đủ 12 cao độ trong quãng tám. Đây không phải mode của âm giai trưởng mà là tập hợp toàn bộ bán cung.",
+        summaryEn = "The chromatic scale contains all 12 pitch classes in the octave. It is not a major-scale mode but the complete semitone collection.",
+        usageVi = "Dùng luyện ngón, nối hợp âm bằng nốt tiếp cận, luyện nghe bán cung và phát triển câu chromatic.",
+        usageEn = "Use it for technique, chromatic approaches between chord tones, semitone ear training and chromatic line development.",
+        degreeLabels = listOf("1", "♭2", "2", "♭3", "3", "4", "♭5", "5", "♭6", "6", "♭7", "7"),
+        intervals = listOf(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        usesMajorCagedFingering = false,
+        levelKey = "ADVANCED"
+    ),
+    DOMINANT_BEBOP(
+        key = "DOMINANT_BEBOP",
+        titleVi = "Bebop Dominant",
+        titleEn = "Dominant bebop",
+        formula = "1 · 2 · 3 · 4 · 5 · 6 · ♭7 · 7",
+        groupKey = "BEBOP",
+        summaryVi = "Mixolydian cộng thêm bậc 7 trưởng làm nốt chuyển tiếp. Khi chạy móc đơn từ đúng điểm đặt, các nốt hợp âm có thể rơi đều vào phách mạnh.",
+        summaryEn = "Mixolydian plus a major 7th passing tone. With suitable rhythmic placement, chord tones can align consistently with strong beats.",
+        usageVi = "Dùng trên hợp âm dominant 7 trong bebop và jazz; cần luyện cùng nhịp chứ không chỉ chạy lên xuống máy móc.",
+        usageEn = "Use it over dominant-seventh harmony in bebop and jazz; practise it rhythmically rather than only as a mechanical up-and-down scale.",
+        degreeLabels = listOf("1", "2", "3", "4", "5", "6", "♭7", "7"),
+        intervals = listOf(0, 2, 4, 5, 7, 9, 10, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(10, 11),
+        supportsDominantContext = true,
+        levelKey = "ADVANCED"
+    ),
+    HARMONIC_MAJOR(
+        key = "HARMONIC_MAJOR",
+        titleVi = "Trưởng hòa thanh",
+        titleEn = "Harmonic major",
+        formula = "1 · 2 · 3 · 4 · 5 · ♭6 · 7",
+        groupKey = "SPECIAL",
+        summaryVi = "Âm giai trưởng hạ bậc 6. Nó kết hợp hợp âm chủ trưởng với màu ♭6 thường gặp trong hòa âm thứ.",
+        summaryEn = "A major scale with a lowered 6th, combining a major tonic with the ♭6 colour often associated with minor harmony.",
+        usageVi = "Dùng cho hợp âm maj7(♭13), hòa âm vay mượn và các đường giai điệu trưởng có màu tối.",
+        usageEn = "Use it over maj7(♭13), borrowed harmony and major-key lines requiring a darker colour.",
+        degreeLabels = listOf("1", "2", "3", "4", "5", "♭6", "7"),
+        intervals = listOf(0, 2, 4, 5, 7, 8, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(8, 11),
+        levelKey = "ADVANCED"
+    ),
+    DOUBLE_HARMONIC_MAJOR(
+        key = "DOUBLE_HARMONIC_MAJOR",
+        titleVi = "Double Harmonic Major",
+        titleEn = "Double harmonic major",
+        formula = "1 · ♭2 · 3 · 4 · 5 · ♭6 · 7",
+        groupKey = "SPECIAL",
+        summaryVi = "Âm giai trưởng có ♭2 và ♭6, tạo hai khoảng tăng 2 đặc trưng. Nó còn được gọi Byzantine trong một số tài liệu phương Tây.",
+        summaryEn = "A major scale with ♭2 and ♭6, creating two characteristic augmented seconds. Some Western sources also call it Byzantine.",
+        usageVi = "Dùng cho màu Trung Đông/Địa Trung Hải theo cách gọi phương Tây, metal, fusion và sáng tác cần độ căng mạnh.",
+        usageEn = "Use it for Western-labelled Middle Eastern/Mediterranean colours, metal, fusion and composition requiring strong tension.",
+        degreeLabels = listOf("1", "♭2", "3", "4", "5", "♭6", "7"),
+        intervals = listOf(0, 1, 4, 5, 7, 8, 11),
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(1, 8),
+        levelKey = "ADVANCED"
     ),
     RITUSEN(
         key = "RITUSEN",
-        titleVi = "Ritusen ngũ cung",
-        titleEn = "Ritusen pentatonic",
+        // Keep key RITUSEN for saved preferences. This is the pentatonic-mode
+        // convention used in the supplied reference app, NOT dominant 1-3-4-5-b7.
+        titleVi = "Mixolydian ngũ cung (Ritusen / Yo)",
+        titleEn = "Mixolydian pentatonic (Ritusen / Yo)",
         formula = "1 · 2 · 4 · 5 · 6",
-        groupKey = "WORLD_PENTATONIC",
-        summaryVi = "Tập nốt ngũ cung không có bậc 3 và bậc 7. Tuner Tools tách riêng để không gọi nhầm là Mixolydian ngũ cung.",
-        summaryEn = "A pentatonic collection without the 3rd or 7th. Tuner Tools keeps it separate to avoid mislabeling it as Mixolydian pentatonic.",
-        usageVi = "Cho màu âm mở, lơ lửng; phù hợp giai điệu dân gian, sus và luyện nghe quãng.",
-        usageEn = "Creates an open, suspended sound suitable for folk-like melodies, sus harmony and interval training.",
+        groupKey = "MODAL_PENTATONIC",
+        summaryVi = "Dạng ngũ cung thức Ritusen/Yo: 1–2–4–5–6. Khi G là nốt chủ, tập nốt G–A–C–D–E trùng với C ngũ cung trưởng, nên khuôn C mở vẫn hợp lệ; G vẫn là nốt gốc (R). Không đồng nhất với ngũ cung dominant 1–3–4–5–♭7.",
+        summaryEn = "Ritusen/Yo pentatonic mode: 1–2–4–5–6. With G as tonic, G–A–C–D–E shares the pitches of C major pentatonic, so its open C-reference shape is valid while G stays the root (R). This differs from dominant 1–3–4–5–b7.",
+        usageVi = "Dùng màu sus/ngũ cung mở; trong G, chọn Thế C tham chiếu C trưởng sẽ thấy dây buông–ngăn 4, nhưng phải nhấn G làm nốt chủ.",
+        usageEn = "Use for open/suspended pentatonic sounds. In G, the C-major reference shape occupies open strings through fret 4; keep G as the tonal centre.",
         degreeLabels = listOf("1", "2", "4", "5", "6"),
         intervals = listOf(0, 2, 5, 7, 9),
-        usesMajorCagedFingering = true
+        usesMajorCagedFingering = true,
+        characteristicIntervals = listOf(7),
+        levelKey = "BASIC"
+    ),
+    HIRAJOSHI(
+        key = "HIRAJOSHI",
+        titleVi = "Hirajoshi (dạng tham chiếu)",
+        titleEn = "Hirajoshi (reference form)",
+        formula = "1 · 2 · ♭3 · 5 · ♭6",
+        groupKey = "WORLD_PENTATONIC",
+        summaryVi = "Tuner Tools dùng dạng tham chiếu phương Tây 1–2–♭3–5–♭6. Tên và cao độ có thể thay đổi theo cách lên dây, nhạc cụ và truyền thống Nhật Bản.",
+        summaryEn = "Tuner Tools uses the common Western reference form 1–2–♭3–5–♭6. Naming and pitches can vary with tuning, instrument and Japanese tradition.",
+        usageVi = "Phù hợp sáng tác giai điệu ngũ cung có khoảng trống rộng, màu tối và luyện kiểm soát quãng.",
+        usageEn = "Useful for pentatonic melody writing with wide gaps, a dark colour and interval-control practice.",
+        degreeLabels = listOf("1", "2", "♭3", "5", "♭6"),
+        intervals = listOf(0, 2, 3, 7, 8),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(3, 8),
+        levelKey = "TRADITIONAL"
+    ),
+    INSEN(
+        key = "INSEN",
+        titleVi = "Insen (dạng tham chiếu)",
+        titleEn = "Insen (reference form)",
+        formula = "1 · ♭2 · 4 · 5 · ♭7",
+        groupKey = "WORLD_PENTATONIC",
+        summaryVi = "Dạng tham chiếu phương Tây 1–♭2–4–5–♭7 tạo màu sus tối. Thuật ngữ truyền thống có thể khác theo nguồn và cách lên dây.",
+        summaryEn = "The Western reference form 1–♭2–4–5–♭7 creates a dark suspended colour. Traditional terminology can vary by source and tuning.",
+        usageVi = "Phù hợp nền sus, giai điệu tối, ambient, metal và bài tập nhấn ♭2.",
+        usageEn = "Useful over sus harmony, dark melody, ambient, metal and exercises emphasizing the ♭2.",
+        degreeLabels = listOf("1", "♭2", "4", "5", "♭7"),
+        intervals = listOf(0, 1, 5, 7, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(1, 10),
+        levelKey = "TRADITIONAL"
+    ),
+    IWATO(
+        key = "IWATO",
+        titleVi = "Iwato (dạng tham chiếu)",
+        titleEn = "Iwato (reference form)",
+        formula = "1 · ♭2 · 4 · ♭5 · ♭7",
+        groupKey = "WORLD_PENTATONIC",
+        summaryVi = "Dạng tham chiếu phương Tây 1–♭2–4–♭5–♭7 có ♭2 và ♭5 rất căng. Tên gọi lịch sử không nên hiểu như một mode phương Tây cố định tuyệt đối.",
+        summaryEn = "The Western reference form 1–♭2–4–♭5–♭7 has strongly tense ♭2 and ♭5 degrees. Its historical name should not be treated as one absolutely fixed Western mode.",
+        usageVi = "Phù hợp giai điệu tối, sound design, metal và luyện nghe các quãng căng.",
+        usageEn = "Useful for dark melody, sound design, metal and ear training with tense intervals.",
+        degreeLabels = listOf("1", "♭2", "4", "♭5", "♭7"),
+        intervals = listOf(0, 1, 5, 6, 10),
+        usesMajorCagedFingering = false,
+        characteristicIntervals = listOf(1, 6),
+        levelKey = "TRADITIONAL"
     );
 
     fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
@@ -501,6 +1011,135 @@ private enum class HandShapeScaleType(
     fun degreeNumberForInterval(interval: Int): Int =
         degreeLabelForInterval(interval).filter(Char::isDigit).toIntOrNull() ?: 1
 }
+
+private enum class HandShapeVisualMode(
+    val key: String,
+    val titleVi: String,
+    val titleEn: String
+) {
+    SCALE_CHARACTER(
+        key = "SCALE_CHARACTER",
+        titleVi = "Đặc trưng",
+        titleEn = "Scale colour"
+    ),
+    HARMONIC_ROLE(
+        key = "HARMONIC_ROLE",
+        titleVi = "Hòa âm",
+        titleEn = "Harmony role"
+    );
+
+    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
+}
+
+private enum class HandShapeHarmonyRole {
+    CHORD_TONE,
+    PENTATONIC_TONE,
+    TENSION_TONE,
+    HIGH_TENSION
+}
+
+private data class HandShapeHarmonyProfile(
+    val chordIntervals: Set<Int>,
+    val pentatonicIntervals: Set<Int>,
+    val highTensionIntervals: Set<Int>
+)
+
+/**
+ * Builds a practical tonic-harmony profile for the selected scale.
+ *
+ * The colour model follows the teaching approach shown in the user's reference:
+ * - chord tones: the tonic triad (1, 3/♭3, 5/♭5/#5)
+ * - pentatonic tones: the non-triad notes from the matching major/minor pentatonic
+ * - tension tones: remaining scale colours
+ * - high tension: a note one semitone above a chord tone, plus explicit blue notes
+ *
+ * This is intentionally a learning aid relative to the tonic triad, not a claim that
+ * every advanced scale has only one possible chord-scale interpretation.
+ */
+private fun HandShapeScaleType.harmonyProfile(): HandShapeHarmonyProfile {
+    val scaleIntervals = intervals.toSet()
+
+    val third = when {
+        4 in scaleIntervals -> 4
+        3 in scaleIntervals -> 3
+        else -> null
+    }
+    val fifth = when {
+        7 in scaleIntervals -> 7
+        6 in scaleIntervals -> 6
+        8 in scaleIntervals -> 8
+        else -> null
+    }
+
+    val chordIntervals = mutableSetOf(0).apply {
+        if (third != null) add(third)
+        if (fifth != null) add(fifth)
+    }.intersect(scaleIntervals)
+
+    val dominantFamilyKeys = setOf(
+        "MIXOLYDIAN",
+        "MIXOLYDIAN_PENTATONIC",
+        "DOMINANT_PENTATONIC",
+        "LYDIAN_DOMINANT",
+        "PHRYGIAN_DOMINANT",
+        "MIXOLYDIAN_FLAT_6",
+        "ALTERED",
+        "DIMINISHED_HALF_WHOLE",
+        "DOMINANT_BEBOP"
+    )
+
+    val pentatonicTemplate = when {
+        key in dominantFamilyKeys && third == 4 -> setOf(0, 2, 4, 7, 10)
+        third == 4 -> setOf(0, 2, 4, 7, 9)
+        third == 3 -> setOf(0, 3, 5, 7, 10)
+        else -> scaleIntervals
+    }
+
+    val pentatonicIntervals = pentatonicTemplate
+        .intersect(scaleIntervals)
+        .minus(chordIntervals)
+
+    val protectedSharpFourKeys = setOf(
+        "LYDIAN",
+        "LYDIAN_AUGMENTED",
+        "LYDIAN_DOMINANT",
+        "WHOLE_TONE"
+    )
+
+    val highTensionIntervals = scaleIntervals
+        .minus(chordIntervals)
+        .filterTo(linkedSetOf()) { interval ->
+            val semitoneAboveChordTone = chordIntervals.any { chordInterval ->
+                ((interval - chordInterval) % 12 + 12) % 12 == 1
+            }
+            val explicitBlueNote = when (key) {
+                "MAJOR_BLUES" -> interval == 3
+                "MINOR_BLUES" -> interval == 6
+                else -> false
+            }
+            val exposedTritone = interval == 6 &&
+                    interval !in pentatonicIntervals &&
+                    key !in protectedSharpFourKeys
+
+            explicitBlueNote || semitoneAboveChordTone || exposedTritone
+        }
+
+    return HandShapeHarmonyProfile(
+        chordIntervals = chordIntervals,
+        // A nominal pentatonic note can still clash with an altered tonic triad.
+        // In that case the stronger harmonic warning takes priority.
+        pentatonicIntervals = pentatonicIntervals.minus(highTensionIntervals),
+        highTensionIntervals = highTensionIntervals
+    )
+}
+
+private fun HandShapeHarmonyProfile.roleForInterval(interval: Int): HandShapeHarmonyRole =
+    when (interval) {
+        in chordIntervals -> HandShapeHarmonyRole.CHORD_TONE
+        in pentatonicIntervals -> HandShapeHarmonyRole.PENTATONIC_TONE
+        in highTensionIntervals -> HandShapeHarmonyRole.HIGH_TENSION
+        else -> HandShapeHarmonyRole.TENSION_TONE
+    }
 
 private data class HandShapeNote(
     val stringNumber: Int,
@@ -521,217 +1160,10 @@ private data class HandShapePattern(
     val notes: List<HandShapeNote>
 )
 
-private enum class HarmonyPracticeType(
-    val key: String,
-    val titleVi: String,
-    val titleEn: String,
-    val noteCount: Int
-) {
-    TRIAD(
-        key = "TRIAD",
-        titleVi = "Triad 3 nốt",
-        titleEn = "3-note triad",
-        noteCount = 3
-    ),
-    SEVENTH_ARPEGGIO(
-        key = "SEVENTH_ARPEGGIO",
-        titleVi = "Arpeggio 7th · 4 nốt",
-        titleEn = "7th arpeggio · 4 notes",
-        noteCount = 4
-    ),
-    NINTH_ARPEGGIO(
-        key = "NINTH_ARPEGGIO",
-        titleVi = "Arpeggio 9th · 5 nốt",
-        titleEn = "9th arpeggio · 5 notes",
-        noteCount = 5
-    ),
-    ELEVENTH_ARPEGGIO(
-        key = "ELEVENTH_ARPEGGIO",
-        titleVi = "Arpeggio 11th · 6 nốt",
-        titleEn = "11th arpeggio · 6 notes",
-        noteCount = 6
-    ),
-    THIRTEENTH_ARPEGGIO(
-        key = "THIRTEENTH_ARPEGGIO",
-        titleVi = "Arpeggio 13th · 7 nốt",
-        titleEn = "13th arpeggio · 7 notes",
-        noteCount = 7
-    );
 
-    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
-}
+// Harmony models, voicing engines and progression-library UI are implemented in
+// GameHarmonyTrainingScreen.kt. Shared contracts below use internal visibility.
 
-private enum class HarmonyTonality(
-    val titleVi: String,
-    val titleEn: String,
-    val degreeSemitones: List<Int>,
-    val scaleIntervals: Set<Int>
-) {
-    MAJOR(
-        titleVi = "Trưởng",
-        titleEn = "Major",
-        degreeSemitones = listOf(0, 2, 4, 5, 7, 9, 11),
-        scaleIntervals = setOf(0, 2, 4, 5, 7, 9, 11)
-    ),
-    MINOR(
-        titleVi = "Thứ",
-        titleEn = "Minor",
-        degreeSemitones = listOf(0, 2, 3, 5, 7, 8, 10),
-        scaleIntervals = setOf(0, 2, 3, 5, 7, 8, 10)
-    );
-
-    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
-}
-
-private enum class HarmonyChordQuality(
-    val suffix: String,
-    val intervals: List<Int>
-) {
-    MAJOR("", listOf(0, 4, 7)),
-    MINOR("m", listOf(0, 3, 7)),
-    DIMINISHED("dim", listOf(0, 3, 6)),
-    MAJ7("maj7", listOf(0, 4, 7, 11)),
-    MIN7("m7", listOf(0, 3, 7, 10)),
-    DOM7("7", listOf(0, 4, 7, 10)),
-    HALF_DIM("m7♭5", listOf(0, 3, 6, 10)),
-    DIM7("dim7", listOf(0, 3, 6, 9)),
-    MIN_MAJ7("mMaj7", listOf(0, 3, 7, 11))
-}
-
-private data class HarmonyDegreeSpec(
-    val degree: Int,
-    val roman: String,
-    val triadQuality: HarmonyChordQuality,
-    val seventhQuality: HarmonyChordQuality
-)
-
-private data class HarmonyProgression(
-    val key: String,
-    val titleVi: String,
-    val titleEn: String,
-    val descriptionVi: String,
-    val descriptionEn: String,
-    val tonality: HarmonyTonality,
-    val degrees: List<HarmonyDegreeSpec>
-) {
-    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
-    fun description(lang: String): String = fingerUiText(lang, descriptionVi, descriptionEn)
-}
-
-private data class HarmonyStringSet(
-    val key: String,
-    val strings: List<Int>,
-    val titleVi: String,
-    val titleEn: String
-) {
-    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
-}
-
-private enum class HarmonyInversionMode(
-    val key: String,
-    val inversionIndex: Int,
-    val titleVi: String,
-    val titleEn: String
-) {
-    AUTO(
-        key = "AUTO",
-        inversionIndex = -1,
-        titleVi = "Tự động dẫn giọng",
-        titleEn = "Auto voice-leading"
-    ),
-    ALL_TRIAD_INVERSIONS(
-        key = "ALL_TRIAD_INVERSIONS",
-        inversionIndex = -2,
-        titleVi = "Cả 3 thế đảo",
-        titleEn = "All 3 triad inversions"
-    ),
-    ROOT(
-        key = "ROOT",
-        inversionIndex = 0,
-        titleVi = "Thế gốc",
-        titleEn = "Root position"
-    ),
-    FIRST(
-        key = "FIRST",
-        inversionIndex = 1,
-        titleVi = "Đảo 1",
-        titleEn = "1st inversion"
-    ),
-    SECOND(
-        key = "SECOND",
-        inversionIndex = 2,
-        titleVi = "Đảo 2",
-        titleEn = "2nd inversion"
-    ),
-    THIRD(
-        key = "THIRD",
-        inversionIndex = 3,
-        titleVi = "Đảo 3",
-        titleEn = "3rd inversion"
-    ),
-    FOURTH("FOURTH", 4, "Đảo 4", "4th inversion"),
-    FIFTH("FIFTH", 5, "Đảo 5", "5th inversion"),
-    SIXTH("SIXTH", 6, "Đảo 6", "6th inversion");
-
-    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
-}
-
-private enum class HarmonyRunDirection(
-    val key: String,
-    val titleVi: String,
-    val titleEn: String
-) {
-    ASCENDING("ASCENDING", "Đi lên", "Ascending"),
-    DESCENDING("DESCENDING", "Đi xuống", "Descending"),
-    ALTERNATING("ALTERNATING", "Zíc-zắc", "Alternating");
-
-    fun title(lang: String): String = fingerUiText(lang, titleVi, titleEn)
-}
-
-private data class HarmonyChord(
-    val index: Int,
-    val roman: String,
-    val rootName: String,
-    val rootPitchClass: Int,
-    val quality: HarmonyChordQuality,
-    val symbol: String,
-    val intervals: List<Int>
-)
-
-private data class HarmonyFretNote(
-    val stringNumber: Int,
-    val fret: Int,
-    val midi: Int,
-    val pitchClass: Int,
-    val noteName: String,
-    val interval: Int,
-    val roleLabel: String
-) {
-    val isRoot: Boolean get() = interval == 0
-    val isThird: Boolean get() = interval == 3 || interval == 4
-}
-
-private data class HarmonyVoicing(
-    val chord: HarmonyChord,
-    val notes: List<HarmonyFretNote>,
-    val inversionIndex: Int,
-    val fretSpan: Int,
-    val averageFret: Float
-)
-
-private data class HarmonyPlaybackStep(
-    val chordIndex: Int,
-    val noteIndex: Int,
-    val note: HarmonyFretNote,
-    val voicing: HarmonyVoicing,
-    val slotIndex: Int = 0,
-    val beatNumber: Int = 1,
-    val subdivisionIndex: Int = 0,
-    val stepsPerBeat: Int = 1,
-    val pickSymbol: String = "↓"
-)
-
-/** Màn con cần mở khi quay lại khu vực luyện ngón/nhận diện cao độ. */
 enum class FingerTrainingLandingPage { ENTRY, PITCH_MENU }
 
 /** Cấu hình dùng để mở thẳng màn nhận diện cao độ cũ ở đúng chế độ đã chọn. */
@@ -741,9 +1173,97 @@ data class PitchRecognitionLaunchConfig(
     val autoEvaluate: Boolean = false
 )
 
-private fun fingerUiText(lang: String, vi: String, en: String): String {
+/**
+ * Localized strings for all languages supported by assets/translations.json.
+ * The existing Vietnamese/English source strings remain readable fallbacks.
+ * This cache is read-only after initialization and does not change practice logic.
+ */
+private object FingerTrainingTranslations {
+    private data class FormattedEntry(val english: Regex, val translated: String)
+    private val templateSlot = Regex("\\{(\\d+)\\}")
+    @Volatile private var ready = false
+    private var exact: Map<String, Map<String, String>> = emptyMap()
+    private var templates: Map<String, List<FormattedEntry>> = emptyMap()
+
+    @Synchronized fun initialize(context: Context) {
+        if (ready) return
+        try {
+            val source = try {
+                context.assets.open("translations.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } catch (_: Exception) {
+                val id = context.resources.getIdentifier("translations", "raw", context.packageName)
+                if (id == 0) null else context.resources.openRawResource(id)
+                    .bufferedReader(Charsets.UTF_8).use { it.readText() }
+            }
+            if (source != null) {
+                val json = JSONObject(source)
+                val english = json.optJSONObject("en")
+                if (english != null) {
+                    val allKeys = mutableListOf<String>()
+                    val iterator = english.keys()
+                    while (iterator.hasNext()) allKeys.add(iterator.next())
+                    // Finger strings take precedence over generic app keys with the same English wording.
+                    val ordered = allKeys.sortedWith(compareBy<String> { !it.startsWith("finger_") }.thenBy { it })
+                    val localized = mutableMapOf<String, Map<String, String>>()
+                    val formatted = mutableMapOf<String, List<FormattedEntry>>()
+                    for (language in listOf("es", "fr", "de", "ru", "ja", "zh", "th", "lo", "km", "ko", "pt", "sw", "ar")) {
+                        val section = json.optJSONObject(language) ?: continue
+                        val localizedValues = linkedMapOf<String, String>()
+                        val formattedValues = mutableListOf<FormattedEntry>()
+                        for (key in ordered) {
+                            val englishValue = english.optString(key)
+                            val translatedValue = section.optString(key)
+                            if (englishValue.isBlank() || translatedValue.isBlank()) continue
+                            if (englishValue.contains('{') && key.startsWith("finger_")) {
+                                var start = 0
+                                val pattern = StringBuilder("^")
+                                val slots = templateSlot.findAll(englishValue).toList()
+                                if (slots.isNotEmpty()) {
+                                    for (slot in slots) {
+                                        pattern.append(Regex.escape(englishValue.substring(start, slot.range.first)))
+                                        pattern.append("([\\s\\S]+?)")
+                                        start = slot.range.last + 1
+                                    }
+                                    pattern.append(Regex.escape(englishValue.substring(start))).append('$')
+                                    formattedValues.add(FormattedEntry(Regex(pattern.toString()), translatedValue))
+                                }
+                            } else if (englishValue !in localizedValues) {
+                                localizedValues[englishValue] = translatedValue
+                            }
+                        }
+                        localized[language] = localizedValues
+                        formatted[language] = formattedValues
+                    }
+                    exact = localized
+                    templates = formatted
+                }
+            }
+        } catch (_: Exception) {
+            // Keep the existing English fallback if the translation asset is unavailable.
+        }
+        ready = true
+    }
+
+    fun text(language: String, english: String): String? {
+        exact[language]?.get(english)?.let { return it }
+        for (entry in templates[language].orEmpty()) {
+            val found = entry.english.matchEntire(english) ?: continue
+            return templateSlot.replace(entry.translated) { match ->
+                val index = match.groupValues[1].toIntOrNull() ?: return@replace match.value
+                found.groupValues.getOrNull(index + 1) ?: match.value
+            }
+        }
+        return null
+    }
+}
+
+internal fun fingerUiText(lang: String, vi: String, en: String): String {
     val code = lang.lowercase(Locale.ROOT).substringBefore('-').substringBefore('_')
-    return if (code == "vi") vi else en
+    return when (code) {
+        "vi" -> vi
+        "en" -> en
+        else -> FingerTrainingTranslations.text(code, en) ?: en
+    }
 }
 
 private fun guidedPracticeLessons(tunaGreen: Color): List<GuidedPracticeLesson> = listOf(
@@ -1090,724 +1610,6 @@ private fun guidedPracticeLessons(tunaGreen: Color): List<GuidedPracticeLesson> 
     )
 )
 
-private val harmonyNoteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-
-private fun harmonyProgressions(): List<HarmonyProgression> {
-    val majorI = HarmonyDegreeSpec(1, "I", HarmonyChordQuality.MAJOR, HarmonyChordQuality.MAJ7)
-    val majorIi = HarmonyDegreeSpec(2, "ii", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    val majorIv = HarmonyDegreeSpec(4, "IV", HarmonyChordQuality.MAJOR, HarmonyChordQuality.MAJ7)
-    val majorV = HarmonyDegreeSpec(5, "V", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-    val majorVi = HarmonyDegreeSpec(6, "vi", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    // The diatonic circle of fourths additionally uses iii and vii° in major.
-    val majorIii = HarmonyDegreeSpec(3, "iii", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    val majorVii = HarmonyDegreeSpec(7, "vii°", HarmonyChordQuality.DIMINISHED, HarmonyChordQuality.HALF_DIM)
-
-    val minorI = HarmonyDegreeSpec(1, "i", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN_MAJ7)
-    // In the natural-minor / dominant-V7 circle, tonic i7 is m7 (e.g. Am7),
-    // unlike the minor-major-seventh tonic used by the existing minor cadences.
-    val minorCircleI = HarmonyDegreeSpec(1, "i", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    val minorComparisonI = HarmonyDegreeSpec(1, "i7", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    val minorNaturalV = HarmonyDegreeSpec(5, "v7", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    val minorDominantV = HarmonyDegreeSpec(5, "V7", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-    val minorIi = HarmonyDegreeSpec(2, "iiø", HarmonyChordQuality.DIMINISHED, HarmonyChordQuality.HALF_DIM)
-    val minorIii = HarmonyDegreeSpec(3, "III", HarmonyChordQuality.MAJOR, HarmonyChordQuality.MAJ7)
-    val minorIv = HarmonyDegreeSpec(4, "iv", HarmonyChordQuality.MINOR, HarmonyChordQuality.MIN7)
-    val minorV = HarmonyDegreeSpec(5, "V", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-    val minorVi = HarmonyDegreeSpec(6, "VI", HarmonyChordQuality.MAJOR, HarmonyChordQuality.MAJ7)
-    val minorVii = HarmonyDegreeSpec(7, "VII", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-
-    val bluesI = HarmonyDegreeSpec(1, "I7", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-    val bluesIv = HarmonyDegreeSpec(4, "IV7", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-    val bluesV = HarmonyDegreeSpec(5, "V7", HarmonyChordQuality.MAJOR, HarmonyChordQuality.DOM7)
-
-    return listOf(
-        HarmonyProgression(
-            key = "DIATONIC_TRIADS_MAJOR",
-            titleVi = "7 Triad trong giọng Trưởng",
-            titleEn = "Major-key diatonic triads",
-            descriptionVi = "Theo bậc âm giai I-ii-iii-IV-V-vi-vii°: C-Dm-Em-F-G-Am-Bdim trong tông C.",
-            descriptionEn = "Scale order I-ii-iii-IV-V-vi-vii°: C-Dm-Em-F-G-Am-Bdim in C major.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorI, majorIi, majorIii, majorIv, majorV, majorVi, majorVii)
-        ),
-        HarmonyProgression(
-            key = "CIRCLE_FOURTHS_MAJOR",
-            titleVi = "Quãng 4 · Trưởng",
-            titleEn = "Circle of 4ths · Major",
-            descriptionVi = "Vòng 1–4–7–3–6–2–5: C–F–Bdim–Em–Am–Dm–G (tông C). Kết vòng về I.",
-            descriptionEn = "Diatonic 1–4–7–3–6–2–5: C–F–Bdim–Em–Am–Dm–G in C; resolves to I.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorI, majorIv, majorVii, majorIii, majorVi, majorIi, majorV)
-        ),
-        HarmonyProgression(
-            key = "MINOR_DOMINANT_COMPARISON",
-            titleVi = "So sánh Em7 và E7",
-            titleEn = "Compare Em7 and E7",
-            descriptionVi = "A thứ: Em7→Am7 (thứ tự nhiên) so với E7→Am7 (thứ hòa thanh, G# dẫn về A).",
-            descriptionEn = "A minor: compare Em7→Am7 (natural minor) with E7→Am7 (harmonic minor, G# leading to A).",
-            tonality = HarmonyTonality.MINOR,
-            degrees = listOf(minorNaturalV, minorComparisonI, minorDominantV, minorComparisonI)
-        ),
-        HarmonyProgression(
-            key = "CIRCLE_FOURTHS_MINOR",
-            titleVi = "Quãng 4 · Thứ",
-            titleEn = "Circle of 4ths · Minor",
-            descriptionVi = "Tông Am: Triad Am–Dm–G–C–F–Bdim–E; arpeggio 7 Am7–Dm7–G7–Cmaj7–Fmaj7–Bm7♭5–E7.",
-            descriptionEn = "A minor: triads Am–Dm–G–C–F–Bdim–E; 7ths Am7–Dm7–G7–Cmaj7–Fmaj7–Bm7♭5–E7.",
-            tonality = HarmonyTonality.MINOR,
-            degrees = listOf(minorCircleI, minorIv, minorVii, minorIii, minorVi, minorIi, minorV)
-        ),
-        HarmonyProgression(
-            key = "II_V_I_MAJOR",
-            titleVi = "ii – V – I · Trưởng",
-            titleEn = "ii – V – I · Major",
-            descriptionVi = "Vòng jazz kinh điển để luyện nốt mục tiêu và cảm giác giải quyết.",
-            descriptionEn = "The classic jazz cadence for target notes and harmonic resolution.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorIi, majorV, majorI)
-        ),
-        HarmonyProgression(
-            key = "I_IV_V_MAJOR",
-            titleVi = "I – IV – V · Trưởng",
-            titleEn = "I – IV – V · Major",
-            descriptionVi = "Vòng nền tảng của Pop, Rock, Blues và Folk.",
-            descriptionEn = "A foundation of pop, rock, blues and folk.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorI, majorIv, majorV)
-        ),
-        HarmonyProgression(
-            key = "I_V_VI_IV",
-            titleVi = "I – V – vi – IV · Pop",
-            titleEn = "I – V – vi – IV · Pop",
-            descriptionVi = "Vòng Pop/Ballad hiện đại, rất phù hợp để tập nối thế tay.",
-            descriptionEn = "A modern pop/ballad loop ideal for connected positions.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorI, majorV, majorVi, majorIv)
-        ),
-        HarmonyProgression(
-            key = "VI_II_V_I",
-            titleVi = "vi – ii – V – I · Turnaround",
-            titleEn = "vi – ii – V – I · Turnaround",
-            descriptionVi = "Turnaround phổ biến trong Jazz, Ballad và nhạc xưa.",
-            descriptionEn = "A common turnaround in jazz, ballads and standards.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorVi, majorIi, majorV, majorI)
-        ),
-        HarmonyProgression(
-            key = "I_VI_IV_V",
-            titleVi = "I – vi – IV – V · Cổ điển",
-            titleEn = "I – vi – IV – V · Classic",
-            descriptionVi = "Vòng 1-6-4-5 quen thuộc cho đệm hát và luyện chuyển hợp âm.",
-            descriptionEn = "The classic 1-6-4-5 loop for accompaniment and chord changes.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(majorI, majorVi, majorIv, majorV)
-        ),
-        HarmonyProgression(
-            key = "II_V_I_MINOR",
-            titleVi = "iiø – V – i · Thứ",
-            titleEn = "iiø – V – i · Minor",
-            descriptionVi = "Vòng 2-5-1 thứ với iiø và dominant V7 giàu lực hút.",
-            descriptionEn = "A minor 2-5-1 with half-diminished ii and a strong V7 pull.",
-            tonality = HarmonyTonality.MINOR,
-            degrees = listOf(minorIi, minorV, minorI)
-        ),
-        HarmonyProgression(
-            key = "I_VI_III_VII_MINOR",
-            titleVi = "i – VI – III – VII · Thứ",
-            titleEn = "i – VI – III – VII · Minor",
-            descriptionVi = "Vòng thứ quen thuộc trong Rock, Pop và nhạc phim.",
-            descriptionEn = "A familiar minor-key loop in rock, pop and cinematic music.",
-            tonality = HarmonyTonality.MINOR,
-            degrees = listOf(minorI, minorVi, minorIii, minorVii)
-        ),
-        HarmonyProgression(
-            key = "I_IV_V_MINOR",
-            titleVi = "i – iv – V · Thứ",
-            titleEn = "i – iv – V · Minor",
-            descriptionVi = "Vòng chức năng thứ cơ bản với hợp âm V trưởng để trở về i.",
-            descriptionEn = "A basic minor functional cadence with a major V resolving to i.",
-            tonality = HarmonyTonality.MINOR,
-            degrees = listOf(minorI, minorIv, minorV)
-        ),
-        HarmonyProgression(
-            key = "TWELVE_BAR_BLUES",
-            titleVi = "12-bar Blues",
-            titleEn = "12-bar Blues",
-            descriptionVi = "Mười hai ô nhịp I7-IV7-V7 để luyện groove và dominant arpeggio.",
-            descriptionEn = "Twelve bars of I7-IV7-V7 for groove and dominant arpeggios.",
-            tonality = HarmonyTonality.MAJOR,
-            degrees = listOf(
-                bluesI, bluesI, bluesI, bluesI,
-                bluesIv, bluesIv, bluesI, bluesI,
-                bluesV, bluesIv, bluesI, bluesV
-            )
-        )
-    )
-}
-
-private fun harmonyStringSets(type: HarmonyPracticeType): List<HarmonyStringSet> = when (type) {
-    HarmonyPracticeType.TRIAD -> listOf(
-        HarmonyStringSet("STRINGS_123", listOf(3, 2, 1), "Dây 1-2-3", "Strings 1-2-3"),
-        HarmonyStringSet("STRINGS_234", listOf(4, 3, 2), "Dây 2-3-4", "Strings 2-3-4"),
-        HarmonyStringSet("STRINGS_345", listOf(5, 4, 3), "Dây 3-4-5", "Strings 3-4-5"),
-        HarmonyStringSet("STRINGS_456", listOf(6, 5, 4), "Dây 4-5-6", "Strings 4-5-6")
-    )
-    HarmonyPracticeType.SEVENTH_ARPEGGIO -> listOf(
-        HarmonyStringSet("STRINGS_1234", listOf(4, 3, 2, 1), "Dây 1-2-3-4", "Strings 1-2-3-4"),
-        HarmonyStringSet("STRINGS_2345", listOf(5, 4, 3, 2), "Dây 2-3-4-5", "Strings 2-3-4-5"),
-        HarmonyStringSet("STRINGS_3456", listOf(6, 5, 4, 3), "Dây 3-4-5-6", "Strings 3-4-5-6")
-    )
-    HarmonyPracticeType.NINTH_ARPEGGIO -> listOf(
-        HarmonyStringSet("STRINGS_12345", listOf(5, 4, 3, 2, 1), "Dây 1-2-3-4-5", "Strings 1-2-3-4-5"),
-        HarmonyStringSet("STRINGS_23456", listOf(6, 5, 4, 3, 2), "Dây 2-3-4-5-6", "Strings 2-3-4-5-6")
-    )
-    HarmonyPracticeType.ELEVENTH_ARPEGGIO -> listOf(
-        HarmonyStringSet("STRINGS_123456", listOf(6, 5, 4, 3, 2, 1), "6 dây · 6 nốt", "6 strings · 6 notes")
-    )
-    HarmonyPracticeType.THIRTEENTH_ARPEGGIO -> listOf(
-        // Seven successive pitches on six guitar strings: two notes must be played on one string.
-        HarmonyStringSet("STRINGS_123456_7", listOf(6, 5, 4, 3, 2, 1), "6 dây · 7 nốt", "6 strings · 7 notes")
-    )
-}
-
-private fun harmonyInversionModes(type: HarmonyPracticeType): List<HarmonyInversionMode> =
-    HarmonyInversionMode.values().filter { mode ->
-        when {
-            mode == HarmonyInversionMode.AUTO -> true
-            mode == HarmonyInversionMode.ALL_TRIAD_INVERSIONS -> type == HarmonyPracticeType.TRIAD
-            mode.inversionIndex < 0 -> false
-            else -> mode.inversionIndex < type.noteCount
-        }
-    }
-
-private fun harmonyRoleLabel(interval: Int): String = when (interval) {
-    0 -> "R"
-    3 -> "♭3"
-    4 -> "3"
-    6 -> "♭5"
-    7 -> "5"
-    8 -> "♯5"
-    9 -> "𝄫7"
-    10 -> "♭7"
-    11 -> "7"
-    13 -> "♭9"
-    14 -> "9"
-    15 -> "♯9"
-    16 -> "♭11"
-    17 -> "11"
-    18 -> "♯11"
-    20 -> "♭13"
-    21 -> "13"
-    22 -> "♯13"
-    else -> interval.toString()
-}
-
-/**
- * Extensions follow the parent key rather than always assuming natural 9/11/13.
- * Examples: Fmaj7 in C gets #11 (B); Bm7b5 in C gets b9 (C).
- * E7 in A minor gets b9 (F) and b13 (C), as in harmonic-minor dominant usage.
- * The familiar blues dominants use natural 9, 11, and 13.
- */
-private fun harmonyExtensionIntervals(
-    progression: HarmonyProgression,
-    degreeIndex: Int,
-    noteCount: Int
-): List<Int> {
-    if (noteCount <= 4) return emptyList()
-    if (progression.key == "TWELVE_BAR_BLUES") {
-        return listOf(14, 17, 21).take(noteCount - 4)
-    }
-    val rootScaleSemitone = progression.tonality.degreeSemitones[degreeIndex]
-    return listOf(1, 3, 5).take(noteCount - 4).map { diatonicStep ->
-        val nextDegree = (degreeIndex + diatonicStep) % 7
-        val targetScaleSemitone = progression.tonality.degreeSemitones[nextDegree]
-        12 + normalizedPitchClass(targetScaleSemitone - rootScaleSemitone)
-    }
-}
-
-private fun harmonyExtendedChordSuffix(
-    quality: HarmonyChordQuality,
-    extensionIntervals: List<Int>
-): String {
-    if (extensionIntervals.isEmpty()) return quality.suffix
-    val labels = extensionIntervals.map(::harmonyRoleLabel)
-    val allNatural = labels == listOf("9", "11", "13").take(labels.size)
-    if (allNatural) {
-        val suffix = when (quality) {
-            HarmonyChordQuality.MAJ7 -> "maj"
-            HarmonyChordQuality.MIN7 -> "m"
-            HarmonyChordQuality.DOM7 -> ""
-            HarmonyChordQuality.MIN_MAJ7 -> "mMaj"
-            else -> null
-        }
-        if (suffix != null) {
-            val highestExtension = listOf(9, 11, 13)[labels.lastIndex]
-            return "$suffix$highestExtension"
-        }
-    }
-    // An explicit alteration list avoids calling e.g. E7(b9,b13) an E13 chord.
-    return quality.suffix + labels.joinToString(prefix = "(", postfix = ")")
-}
-
-private fun buildHarmonyChords(
-    keyName: String,
-    progression: HarmonyProgression,
-    practiceType: HarmonyPracticeType
-): List<HarmonyChord> {
-    val keyPitchClass = harmonyNoteNames.indexOf(keyName).coerceAtLeast(0)
-    return progression.degrees.mapIndexed { index, degreeSpec ->
-        val degreeIndex = (degreeSpec.degree - 1).coerceIn(0, 6)
-        val rootPitchClass = normalizedPitchClass(
-            keyPitchClass + progression.tonality.degreeSemitones[degreeIndex]
-        )
-        val quality = if (practiceType == HarmonyPracticeType.TRIAD) {
-            degreeSpec.triadQuality
-        } else {
-            degreeSpec.seventhQuality
-        }
-        val extensions = harmonyExtensionIntervals(progression, degreeIndex, practiceType.noteCount)
-        val rootName = harmonyNoteNames[rootPitchClass]
-        HarmonyChord(
-            index = index,
-            roman = degreeSpec.roman,
-            rootName = rootName,
-            rootPitchClass = rootPitchClass,
-            quality = quality,
-            symbol = rootName + harmonyExtendedChordSuffix(quality, extensions),
-            intervals = quality.intervals + extensions
-        )
-    }
-}
-
-private fun harmonyPermutations(values: List<Int>): List<List<Int>> {
-    if (values.size <= 1) return listOf(values)
-    val result = mutableListOf<List<Int>>()
-    values.forEachIndexed { index, value ->
-        val rest = values.toMutableList().apply { removeAt(index) }
-        harmonyPermutations(rest).forEach { tail ->
-            result += listOf(value) + tail
-        }
-    }
-    return result
-}
-
-private fun harmonyFretsForPitchClass(
-    stringNumber: Int,
-    pitchClass: Int,
-    fretRange: IntRange
-): List<Int> {
-    val openMidi = guitarOpenMidiByString.getValue(stringNumber)
-    return fretRange.filter { fret ->
-        normalizedPitchClass(openMidi + fret) == normalizedPitchClass(pitchClass)
-    }
-}
-
-private fun buildHarmonyVoicingCandidates(
-    chord: HarmonyChord,
-    stringSet: HarmonyStringSet,
-    fretRange: IntRange
-): List<HarmonyVoicing> {
-    val strings = stringSet.strings.sortedDescending()
-    if (strings.size != chord.intervals.size) return emptyList()
-
-    val candidates = mutableListOf<HarmonyVoicing>()
-    harmonyPermutations(chord.intervals).forEach { assignedIntervals ->
-        val fretOptions = strings.mapIndexed { index, stringNumber ->
-            val interval = assignedIntervals[index]
-            val targetPitchClass = normalizedPitchClass(chord.rootPitchClass + interval)
-            harmonyFretsForPitchClass(stringNumber, targetPitchClass, fretRange)
-        }
-        if (fretOptions.any { it.isEmpty() }) return@forEach
-
-        fun collect(index: Int, notes: MutableList<HarmonyFretNote>) {
-            if (index >= strings.size) {
-                val orderedNotes = notes.sortedBy { it.midi }
-                val lowest = orderedNotes.firstOrNull() ?: return
-                val inversionIndex = chord.intervals.indexOf(lowest.interval).coerceAtLeast(0)
-                val frets = orderedNotes.map { it.fret }
-                candidates += HarmonyVoicing(
-                    chord = chord,
-                    notes = orderedNotes,
-                    inversionIndex = inversionIndex,
-                    fretSpan = (frets.maxOrNull() ?: 0) - (frets.minOrNull() ?: 0),
-                    averageFret = if (frets.isEmpty()) 0f else frets.average().toFloat()
-                )
-                return
-            }
-
-            val stringNumber = strings[index]
-            val interval = assignedIntervals[index]
-            val targetPitchClass = normalizedPitchClass(chord.rootPitchClass + interval)
-            val openMidi = guitarOpenMidiByString.getValue(stringNumber)
-            fretOptions[index].forEach { fret ->
-                notes += HarmonyFretNote(
-                    stringNumber = stringNumber,
-                    fret = fret,
-                    midi = openMidi + fret,
-                    pitchClass = targetPitchClass,
-                    noteName = harmonyNoteNames[targetPitchClass],
-                    interval = interval,
-                    roleLabel = harmonyRoleLabel(interval)
-                )
-                collect(index + 1, notes)
-                notes.removeAt(notes.lastIndex)
-            }
-        }
-
-        collect(0, mutableListOf())
-    }
-
-    return candidates.distinctBy { voicing ->
-        voicing.notes
-            .sortedByDescending { it.stringNumber }
-            .joinToString("|") { "${it.stringNumber}:${it.fret}:${it.interval}" }
-    }
-}
-
-private fun nearestHarmonyFret(
-    stringNumber: Int,
-    pitchClass: Int,
-    targetFret: Float
-): Int {
-    val openMidi = guitarOpenMidiByString.getValue(stringNumber)
-    return (0..20)
-        .filter { fret -> normalizedPitchClass(openMidi + fret) == normalizedPitchClass(pitchClass) }
-        .minByOrNull { fret -> kotlin.math.abs(fret - targetFret) }
-        ?: 0
-}
-
-/**
- * A 9th/11th/13th is a melodic arpeggio, not a 5/6/7-string simultaneous grip.
- * Notes are sounded in ascending pitch on adjacent strings. A 13th (7 notes)
- * uses two consecutive frets on one of the six strings; no note is discarded.
- * Bounded beam search prevents factorial permutations and keeps changes responsive.
- */
-private fun buildHarmonyExtendedVoicing(
-    chord: HarmonyChord,
-    stringSet: HarmonyStringSet,
-    fretRange: IntRange,
-    inversionMode: HarmonyInversionMode,
-    previous: HarmonyVoicing?
-): HarmonyVoicing? {
-    val strings = stringSet.strings.sortedDescending()
-    val toneCount = chord.intervals.size
-    if (toneCount !in 5..7 || toneCount !in strings.size..(strings.size + 1)) return null
-
-    val stringLayouts: List<List<Int>> = if (toneCount == strings.size) {
-        listOf(strings)
-    } else {
-        strings.indices.map { repeatAt ->
-            strings.flatMapIndexed { index, value ->
-                if (index == repeatAt) listOf(value, value) else listOf(value)
-            }
-        }
-    }
-    val desiredInversions = if (inversionMode == HarmonyInversionMode.AUTO) {
-        chord.intervals.indices.toList()
-    } else {
-        listOf(inversionMode.inversionIndex.coerceIn(0, chord.intervals.lastIndex))
-    }
-    val ranges = listOf(
-        fretRange,
-        maxOf(0, fretRange.first - 2)..minOf(20, fretRange.last + 2),
-        maxOf(0, fretRange.first - 4)..minOf(20, fretRange.last + 4),
-        0..20
-    ).distinct()
-    val centerFret = (fretRange.first + fretRange.last) / 2f
-
-    data class PartialPath(val notes: List<HarmonyFretNote>, val cost: Float)
-
-    for (range in ranges) {
-        val voicings = mutableListOf<HarmonyVoicing>()
-        for (inversionIndex in desiredInversions) {
-            val rotated = chord.intervals.drop(inversionIndex) + chord.intervals.take(inversionIndex)
-            for (layout in stringLayouts) {
-                var paths = listOf(PartialPath(emptyList(), 0f))
-                for (toneIndex in rotated.indices) {
-                    val stringNumber = layout[toneIndex]
-                    val interval = rotated[toneIndex]
-                    val pitchClass = normalizedPitchClass(chord.rootPitchClass + interval)
-                    val fretOptions = harmonyFretsForPitchClass(stringNumber, pitchClass, range)
-                    val openMidi = guitarOpenMidiByString.getValue(stringNumber)
-                    val expanded = mutableListOf<PartialPath>()
-                    for (path in paths) {
-                        for (fret in fretOptions) {
-                            val midi = openMidi + fret
-                            val prior = path.notes.lastOrNull()
-                            if (prior != null && midi <= prior.midi) continue
-                            val note = HarmonyFretNote(
-                                stringNumber = stringNumber,
-                                fret = fret,
-                                midi = midi,
-                                pitchClass = pitchClass,
-                                noteName = harmonyNoteNames[pitchClass],
-                                interval = interval,
-                                roleLabel = harmonyRoleLabel(interval)
-                            )
-                            val leap = if (prior == null) 0 else midi - prior.midi
-                            val newCost = path.cost +
-                                    kotlin.math.abs(fret - centerFret) * 0.75f +
-                                    (if (prior == null) 0f else kotlin.math.abs(leap - 4) * 0.35f) +
-                                    (if (leap > 12) (leap - 12) * 5f else 0f)
-                            expanded += PartialPath(path.notes + note, newCost)
-                        }
-                    }
-                    paths = expanded.sortedBy { it.cost }.take(24)
-                    if (paths.isEmpty()) break
-                }
-                for (path in paths.take(3)) {
-                    if (path.notes.size != toneCount) continue
-                    val frets = path.notes.map { it.fret }
-                    voicings += HarmonyVoicing(
-                        chord = chord,
-                        notes = path.notes,
-                        inversionIndex = inversionIndex,
-                        fretSpan = frets.maxOrNull()!! - frets.minOrNull()!!,
-                        averageFret = frets.average().toFloat()
-                    )
-                }
-            }
-        }
-        if (voicings.isNotEmpty()) {
-            return voicings.minByOrNull { candidate ->
-                harmonyVoicingScore(candidate, previous, fretRange, inversionMode)
-            }
-        }
-    }
-    return null
-}
-
-private fun fallbackHarmonyVoicing(
-    chord: HarmonyChord,
-    stringSet: HarmonyStringSet,
-    fretRange: IntRange,
-    inversionMode: HarmonyInversionMode
-): HarmonyVoicing {
-    val strings = stringSet.strings.sortedDescending()
-    val targetInversion = inversionMode.inversionIndex
-        .takeIf { it in chord.intervals.indices }
-        ?: 0
-    val orderedIntervals = chord.intervals.drop(targetInversion) + chord.intervals.take(targetInversion)
-    val center = (fretRange.first + fretRange.last) / 2f
-    val playingStrings = if (orderedIntervals.size == strings.size + 1) {
-        strings.dropLast(1) + listOf(strings.last(), strings.last())
-    } else strings
-    val notes = playingStrings.mapIndexed { index, stringNumber ->
-        val interval = orderedIntervals[index % orderedIntervals.size]
-        val pitchClass = normalizedPitchClass(chord.rootPitchClass + interval)
-        val fret = nearestHarmonyFret(stringNumber, pitchClass, center)
-        HarmonyFretNote(
-            stringNumber = stringNumber,
-            fret = fret,
-            midi = guitarOpenMidiByString.getValue(stringNumber) + fret,
-            pitchClass = pitchClass,
-            noteName = harmonyNoteNames[pitchClass],
-            interval = interval,
-            roleLabel = harmonyRoleLabel(interval)
-        )
-    }.sortedBy { it.midi }
-    val frets = notes.map { it.fret }
-    return HarmonyVoicing(
-        chord = chord,
-        notes = notes,
-        inversionIndex = chord.intervals.indexOf(notes.first().interval).coerceAtLeast(0),
-        fretSpan = (frets.maxOrNull() ?: 0) - (frets.minOrNull() ?: 0),
-        averageFret = if (frets.isEmpty()) center else frets.average().toFloat()
-    )
-}
-
-private fun harmonyVoicingScore(
-    candidate: HarmonyVoicing,
-    previous: HarmonyVoicing?,
-    fretRange: IntRange,
-    inversionMode: HarmonyInversionMode
-): Float {
-    val rangeCenter = (fretRange.first + fretRange.last) / 2f
-    var score = candidate.fretSpan * 5f + kotlin.math.abs(candidate.averageFret - rangeCenter) * 1.5f
-
-    if (inversionMode != HarmonyInversionMode.AUTO &&
-        candidate.inversionIndex != inversionMode.inversionIndex
-    ) {
-        score += 1_000f
-    }
-
-    if (previous == null) {
-        if (inversionMode == HarmonyInversionMode.AUTO) {
-            score += candidate.inversionIndex * 1.25f
-        }
-    } else {
-        val previousByString = previous.notes.groupBy { it.stringNumber }
-        candidate.notes.forEach { note ->
-            val prior = previousByString[note.stringNumber]
-                ?.minByOrNull { kotlin.math.abs(it.midi - note.midi) }
-            if (prior != null) {
-                score += kotlin.math.abs(note.fret - prior.fret) * 8f
-                score += kotlin.math.abs(note.midi - prior.midi) * 0.22f
-            }
-        }
-        score += kotlin.math.abs(candidate.averageFret - previous.averageFret) * 2f
-    }
-
-    return score
-}
-
-private fun selectHarmonyVoicing(
-    candidates: List<HarmonyVoicing>,
-    previous: HarmonyVoicing?,
-    fretRange: IntRange,
-    inversionMode: HarmonyInversionMode
-): HarmonyVoicing? {
-    if (candidates.isEmpty()) return null
-    val pool = if (inversionMode == HarmonyInversionMode.AUTO) {
-        candidates
-    } else {
-        // For an explicitly requested inversion, keep expanding the search range
-        // until that exact bass note is available. Do not silently substitute a
-        // different inversion merely because it appears in a smaller fret window.
-        candidates.filter { it.inversionIndex == inversionMode.inversionIndex }
-            .ifEmpty { return null }
-    }
-    return pool.minByOrNull { candidate ->
-        harmonyVoicingScore(candidate, previous, fretRange, inversionMode)
-    }
-}
-
-private fun buildHarmonyVoicings(
-    chords: List<HarmonyChord>,
-    stringSet: HarmonyStringSet,
-    fretRange: IntRange,
-    inversionMode: HarmonyInversionMode
-): List<HarmonyVoicing> {
-    val result = mutableListOf<HarmonyVoicing>()
-    var previous: HarmonyVoicing? = null
-
-    fun resolveChord(
-        chord: HarmonyChord,
-        mode: HarmonyInversionMode,
-        prior: HarmonyVoicing?
-    ): HarmonyVoicing {
-        if (chord.intervals.size > 4) {
-            val extended = buildHarmonyExtendedVoicing(
-                chord = chord,
-                stringSet = stringSet,
-                fretRange = fretRange,
-                inversionMode = mode,
-                previous = prior
-            )
-            if (extended != null) return extended
-        }
-
-        val ranges = listOf(
-            fretRange,
-            maxOf(0, fretRange.first - 1)..minOf(20, fretRange.last + 1),
-            maxOf(0, fretRange.first - 2)..minOf(20, fretRange.last + 2),
-            0..15
-        ).distinct()
-
-        var selected: HarmonyVoicing? = null
-        for (candidateRange in ranges) {
-            val candidates = buildHarmonyVoicingCandidates(chord, stringSet, candidateRange)
-            selected = selectHarmonyVoicing(
-                candidates = candidates,
-                previous = prior,
-                fretRange = fretRange,
-                inversionMode = mode
-            )
-            if (selected != null) break
-        }
-
-        return selected ?: fallbackHarmonyVoicing(
-            chord = chord,
-            stringSet = stringSet,
-            fretRange = fretRange,
-            inversionMode = mode
-        )
-    }
-
-    // Educational map used by "7 Triad trong giọng trưởng": each scale-degree
-    // triad is played as root position, first inversion and second inversion.
-    // This mirrors the common conservatory/fretboard chart approach while still
-    // reusing the normal player, rhythm engine and note highlighting.
-    if (inversionMode == HarmonyInversionMode.ALL_TRIAD_INVERSIONS) {
-        val triadModes = listOf(
-            HarmonyInversionMode.ROOT,
-            HarmonyInversionMode.FIRST,
-            HarmonyInversionMode.SECOND
-        )
-        chords.forEach { chord ->
-            triadModes.forEach { mode ->
-                val resolved = resolveChord(chord, mode, previous)
-                result += resolved
-                previous = resolved
-            }
-        }
-        return result
-    }
-
-    chords.forEach { chord ->
-        val resolved = resolveChord(chord, inversionMode, previous)
-        result += resolved
-        previous = resolved
-    }
-
-    return result
-}
-
-private fun buildHarmonyPlaybackSequence(
-    voicings: List<HarmonyVoicing>,
-    direction: HarmonyRunDirection,
-    subdivision: PracticeSubdivision,
-    beatsPerChord: Int,
-    pickingPattern: PracticePickingPattern
-): List<HarmonyPlaybackStep> = voicings.flatMapIndexed { chordIndex, voicing ->
-    val ascending = voicing.notes.sortedBy { it.midi }
-    val ordered = when (direction) {
-        HarmonyRunDirection.ASCENDING -> ascending
-        HarmonyRunDirection.DESCENDING -> ascending.asReversed()
-        HarmonyRunDirection.ALTERNATING -> if (chordIndex % 2 == 0) ascending else ascending.asReversed()
-    }
-    if (ordered.isEmpty()) return@flatMapIndexed emptyList()
-
-    // The harmonic rhythm is measured in beats, not in the number of chord tones.
-    // If a 9th/11th/13th contains more tones than the chosen grid can hold, the
-    // engine automatically increases the density (e.g. 1/4 -> 1/8) so no tone
-    // is silently omitted while every chord still lasts the selected beat count.
-    val safeBeats = beatsPerChord.coerceIn(1, 8)
-    val minimumStepsPerBeat = kotlin.math.ceil(ordered.size / safeBeats.toFloat())
-        .toInt()
-        .coerceAtLeast(1)
-    val effectiveStepsPerBeat = maxOf(subdivision.stepsPerBeat, minimumStepsPerBeat)
-    val totalSlots = safeBeats * effectiveStepsPerBeat
-
-    (0 until totalSlots).map { slotIndex ->
-        val noteIndex = slotIndex % ordered.size
-        val note = ordered[noteIndex]
-        val movingUp = ordered.size < 2 || ordered.last().midi >= ordered.first().midi
-        val pickSymbol = when (pickingPattern) {
-            PracticePickingPattern.ALTERNATE -> if (slotIndex % 2 == 0) "↓" else "↑"
-            PracticePickingPattern.DOWN_ONLY -> "↓"
-            PracticePickingPattern.UP_ONLY -> "↑"
-            PracticePickingPattern.SWEEP -> if (movingUp) "↓" else "↑"
-            PracticePickingPattern.LEGATO -> when {
-                noteIndex == 0 -> "↓"
-                ordered[noteIndex].midi >= ordered[noteIndex - 1].midi -> "H"
-                else -> "P"
-            }
-        }
-        HarmonyPlaybackStep(
-            chordIndex = chordIndex,
-            noteIndex = noteIndex,
-            note = note,
-            voicing = voicing,
-            slotIndex = slotIndex,
-            beatNumber = slotIndex / effectiveStepsPerBeat + 1,
-            subdivisionIndex = slotIndex % effectiveStepsPerBeat,
-            stepsPerBeat = effectiveStepsPerBeat,
-            pickSymbol = pickSymbol
-        )
-    }
-}
-
 private fun fingerPickSymbol(
     index: Int,
     step: FingerTrainingStep?,
@@ -1832,7 +1634,7 @@ private fun fingerPickSymbol(
     }
 }
 
-private fun midiDisplayName(midi: Int): String {
+internal fun midiDisplayName(midi: Int): String {
     val names = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
     val safeMidi = midi.coerceIn(0, 127)
     val octave = safeMidi / 12 - 1
@@ -1847,8 +1649,8 @@ private fun fingerTrainingRoutes(tunaGreen: Color): List<FingerTrainingRoute> = 
         titleEn = "Four-finger basics",
         descriptionVi = "Mẫu 1-2-3-4 trên từng dây · bài nên bắt đầu",
         descriptionEn = "Pattern 1-2-3-4 on each string · recommended first lesson",
-        tipVi = "Bắt đầu ở ngăn 5 để tay ít phải căng; giữ các ngón gần dây.",
-        tipEn = "Start at fret 5 to reduce stretching and keep every finger close to the strings.",
+        tipVi = "Mặc định ngăn 1–4; nếu tay bị căng, chuyển sang ngăn 5–8 và giữ ngón gần dây.",
+        tipEn = "Starts at frets 1–4; choose frets 5–8 if stretching feels uncomfortable.",
         recommendedBpm = 45f,
         accent = tunaGreen
     ),
@@ -1911,6 +1713,31 @@ private fun fingerTrainingRoutes(tunaGreen: Color): List<FingerTrainingRoute> = 
         tipEn = "Pick the first note, then use the fretting hand while keeping steady time.",
         recommendedBpm = 45f,
         accent = Color(0xFFB274F2)
+    ),
+    // Extra free-practice drills; do not change the 13-lesson guided curriculum.
+    FingerTrainingRoute(
+        key = "ANCHOR_STRAIGHT",
+        number = "07",
+        titleVi = "Giữ ngón · chạy thẳng",
+        titleEn = "Anchored fingers · straight",
+        descriptionVi = "Cố định 1 hoặc 2 ngón; luyện các ngón còn lại trên một dây",
+        descriptionEn = "Plant one or two fingers; move the remaining fingers on one string",
+        tipVi = "Ngón giữ không nhấc khỏi dây. Chọn giữ 1 ngón hoặc một cặp ngón; tập chậm, thả lỏng.",
+        tipEn = "Keep the anchored fingers down. Choose one finger or a pair; play slowly and relax.",
+        recommendedBpm = 40f,
+        accent = Color(0xFF20B69E)
+    ),
+    FingerTrainingRoute(
+        key = "ANCHOR_CROSS",
+        number = "08",
+        titleVi = "Giữ ngón · chạy chéo",
+        titleEn = "Anchored fingers · cross-string",
+        descriptionVi = "Cố định 1 hoặc 2 ngón; chạy các ngón còn lại chéo giữa hai dây",
+        descriptionEn = "Anchor one or two fingers; move the others across two adjacent strings",
+        tipVi = "Giữ ngón cố định trên dây riêng, các ngón hoạt động đổi qua lại giữa hai dây cạnh nhau.",
+        tipEn = "Plant the anchors on separate strings while active fingers cross adjacent strings.",
+        recommendedBpm = 40f,
+        accent = Color(0xFFAC83FA)
     )
 )
 
@@ -1919,7 +1746,7 @@ private fun fingerTrainingStages(): List<FingerTrainingStage> = listOf(
         number = "1",
         titleVi = "Làm quen",
         titleEn = "Getting started",
-        routeKeys = listOf("1234")
+        routeKeys = listOf("1234", "ANCHOR_STRAIGHT")
     ),
     FingerTrainingStage(
         number = "2",
@@ -1931,7 +1758,7 @@ private fun fingerTrainingStages(): List<FingerTrainingStage> = listOf(
         number = "3",
         titleVi = "Độc lập ngón",
         titleEn = "Finger independence",
-        routeKeys = listOf("1324", "SPIDER")
+        routeKeys = listOf("1324", "SPIDER", "ANCHOR_CROSS")
     ),
     FingerTrainingStage(
         number = "4",
@@ -2043,7 +1870,7 @@ private fun spellHandShapeScaleNote(
     return "$targetLetter${accidentalText(signedPitchDifference(targetPitch, naturalPitch))}"
 }
 
-private val guitarOpenMidiByString = mapOf(
+internal val guitarOpenMidiByString = mapOf(
     6 to 40,
     5 to 45,
     4 to 50,
@@ -2053,7 +1880,7 @@ private val guitarOpenMidiByString = mapOf(
 )
 
 
-private fun normalizedPitchClass(value: Int): Int = ((value % 12) + 12) % 12
+internal fun normalizedPitchClass(value: Int): Int = ((value % 12) + 12) % 12
 
 private fun handShapeRootFret(tonicName: String, shape: CagedShape): Int {
     val tonicPc = tonicPitchClass(tonicName)
@@ -2061,9 +1888,9 @@ private fun handShapeRootFret(tonicName: String, shape: CagedShape): Int {
     var rootFret = normalizedPitchClass(tonicPc - normalizedPitchClass(openMidi))
 
     /*
-     * A, E và D có dạng mở hợp lệ khi nốt gốc nằm ngay trên dây buông.
-     * C và G không được ép về đầu cần nếu phần thấp của khuôn nằm dưới nut;
-     * khi đó dùng cùng dạng ở quãng tám kế tiếp.
+     * A, E và D cho phép dùng thế mở khi dây gốc là dây buông.
+     * Dạng G có nốt gốc trên dây 6 ngăn 3, vùng ngăn 0-3 là thế G mở hợp lệ.
+     * Chỉ dịch lên một quãng tám khi vùng ngăn thực sự nằm dưới nut.
      */
     val canUseOpenPosition = shape.supportsOpenPosition && rootFret == 0
     if (!canUseOpenPosition && rootFret - shape.lowerFretOffsetFromRoot < 0) {
@@ -2077,6 +1904,163 @@ private fun handShapeFretWindow(tonicName: String, shape: CagedShape): IntRange 
     val startFret = maxOf(0, rootFret - shape.lowerFretOffsetFromRoot)
     val endFret = rootFret + shape.upperFretOffsetFromRoot
     return startFret..endFret
+}
+
+/**
+ * CAGED reference key is NOT always the tonal centre of a pentatonic mode.
+ * Ritusen/Yo = 1-2-4-5-6; it is the fourth-degree rotation of the same
+ * pitch collection as the major pentatonic whose tonic is a fourth above.
+ * Example: G Ritusen = G A C D E = C major pentatonic; its C-shape is open.
+ * Other scales keep their existing tonic-based CAGED behaviour unchanged.
+ */
+private fun handShapeReferenceTonicKey(
+    tonicName: String,
+    scaleType: HandShapeScaleType
+): String {
+    val tonic = normalizeHandShapeTonicKey(tonicName)
+    if (scaleType != HandShapeScaleType.RITUSEN) return tonic
+    val referencePc = normalizedPitchClass(tonicPitchClass(tonic) + 5)
+    return handShapeTonicOptions.first { it.pitchClass == referencePc }.key
+}
+
+/**
+ * Position learning is separate from scale identity. CAGED keeps its original
+ * reference-chord positions; 3NPS uses the seven starting degrees on string 6.
+ * The full-neck view is a reference view, not another audio exercise engine.
+ */
+private enum class HandPositionLearningMode { CAGED, THREE_NPS }
+
+private fun isThreeNotesPerStringScale(scale: HandShapeScaleType): Boolean =
+    scale.intervals.size == 7 &&
+            scale.intervals.distinct().size == 7 &&
+            scale.intervals.all { it in 0..11 } &&
+            scale.intervals.zipWithNext().all { (a, b) -> a < b }
+
+/**
+ * Find 7 valid 3NPS starting positions along the lowest E string (frets 0..11).
+ * Numbered left-to-right on the neck; the first one is not necessarily a root.
+ */
+private fun threeNpsStartingFrets(tonicName: String, scaleType: HandShapeScaleType): List<Int> {
+    if (!isThreeNotesPerStringScale(scaleType)) return emptyList()
+    val rootPc = tonicPitchClass(tonicName)
+    return (0..11).filter { fret ->
+        normalizedPitchClass(guitarOpenMidiByString.getValue(6) + fret - rootPc) in scaleType.intervals
+    }
+}
+
+/**
+ * Each selected position walks UP the scale, three successive pitches per
+ * string, from low E to high E. Fretting follows the standard E A D G B E
+ * tuning; crucially the B/G tuning break is not treated as a perfect fourth.
+ * Open strings count as playable notes and don't require a left-hand finger.
+ */
+private fun buildThreeNotesPerStringPattern(
+    tonicName: String,
+    scaleType: HandShapeScaleType,
+    positionIndex: Int
+): HandShapePattern {
+    require(isThreeNotesPerStringScale(scaleType)) { "3NPS requires seven distinct scale tones" }
+    val startPositions = threeNpsStartingFrets(tonicName, scaleType)
+    require(startPositions.size == 7) { "Expected seven 3NPS starting positions" }
+    val tonicPc = tonicPitchClass(tonicName)
+    val notes = mutableListOf<HandShapeNote>()
+    var previousMidi = guitarOpenMidiByString.getValue(6) + startPositions[positionIndex.coerceIn(0, 6)] - 1
+    for (stringNumber in 6 downTo 1) {
+        val openMidi = guitarOpenMidiByString.getValue(stringNumber)
+        val minFret = maxOf(0, previousMidi - openMidi + 1)
+        val frets = (minFret..24).filter { fret ->
+            normalizedPitchClass(openMidi + fret - tonicPc) in scaleType.intervals
+        }.take(3)
+        require(frets.size == 3) { "3NPS string $stringNumber exceeds fret 24" }
+        val fretted = frets.filter { it > 0 }
+        // Conventional suggested 3NPS fingering. These numbers guide the
+        // learner; players can adapt them to hand size and technique.
+        val recommendedFingers = when {
+            fretted.size == 3 && fretted.last() - fretted.first() <= 2 -> listOf(1, 2, 3)
+            fretted.size == 3 && fretted[1] - fretted[0] == 2 &&
+                    fretted[2] - fretted[1] == 1 -> listOf(1, 3, 4)
+            fretted.size == 3 -> listOf(1, 2, 4)
+            fretted.size == 2 -> listOf(1, if (fretted[1] - fretted[0] == 1) 2 else 3)
+            else -> listOf(1)
+        }
+        for (fret in frets) {
+            val midi = openMidi + fret
+            val interval = normalizedPitchClass(midi - tonicPc)
+            val finger = if (fret == 0) 0 else {
+                recommendedFingers[fretted.indexOf(fret).coerceAtLeast(0)]
+            }
+            notes += HandShapeNote(
+                stringNumber = stringNumber,
+                fret = fret,
+                finger = finger,
+                midi = midi,
+                noteName = spellHandShapeScaleNote(
+                    tonicKey = tonicName,
+                    degreeNumber = scaleType.degreeNumberForInterval(interval),
+                    semitoneInterval = interval
+                ),
+                intervalFromRoot = interval,
+                isRoot = interval == 0
+            )
+        }
+        previousMidi = openMidi + frets.last()
+    }
+    return HandShapePattern(
+        tonicName = tonicName,
+        scaleType = scaleType,
+        shape = CagedShape.C, // Not used to position 3NPS notes.
+        startFret = notes.minOf { it.fret },
+        endFret = notes.maxOf { it.fret },
+        notes = notes
+    )
+}
+
+/** All tones over the complete 24-fret guitar neck, regardless of CAGED shape. */
+private fun buildFullNeckScalePattern(
+    tonicName: String,
+    scaleType: HandShapeScaleType
+): HandShapePattern {
+    val tonicPc = tonicPitchClass(tonicName)
+    val notes = (6 downTo 1).flatMap { stringNumber ->
+        val openMidi = guitarOpenMidiByString.getValue(stringNumber)
+        (0..24).mapNotNull { fret ->
+            val midi = openMidi + fret
+            val interval = normalizedPitchClass(midi - tonicPc)
+            if (interval !in scaleType.intervals) return@mapNotNull null
+            HandShapeNote(
+                stringNumber = stringNumber,
+                fret = fret,
+                finger = if (fret == 0) 0 else 1,
+                midi = midi,
+                noteName = spellHandShapeScaleNote(
+                    tonicKey = tonicName,
+                    degreeNumber = scaleType.degreeNumberForInterval(interval),
+                    semitoneInterval = interval
+                ),
+                intervalFromRoot = interval,
+                isRoot = interval == 0
+            )
+        }
+    }
+    return HandShapePattern(tonicName, scaleType, CagedShape.C, 0, 24, notes)
+}
+
+private fun handShapeScaleFretWindow(
+    tonicName: String,
+    scaleType: HandShapeScaleType,
+    shape: CagedShape
+): IntRange {
+    val referenceKey = handShapeReferenceTonicKey(tonicName, scaleType)
+    val referenceWindow = handShapeFretWindow(referenceKey, shape)
+    // Reference app: G Ritusen + C shape shows open strings through fret 4.
+    // Fret 4 is a convenient final empty column for the open C-shaped pattern.
+    return if (scaleType == HandShapeScaleType.RITUSEN &&
+        shape == CagedShape.C && referenceWindow.first == 0
+    ) {
+        0..maxOf(4, referenceWindow.last)
+    } else {
+        referenceWindow
+    }
 }
 
 private fun handFingerForNote(
@@ -2228,14 +2212,16 @@ private fun buildHandShapePattern(
     shape: CagedShape
 ): HandShapePattern {
     val tonicPc = tonicPitchClass(tonicName)
-    val fretWindow = handShapeFretWindow(tonicName, shape)
+    // Location is determined from the reference major pentatonic when relevant;
+    // note degrees, pitch classes, note names and root colours STILL use tonicName.
+    val fretWindow = handShapeScaleFretWindow(tonicName, scaleType, shape)
     val startFret = fretWindow.first
     val endFret = fretWindow.last
     val notes = mutableListOf<HandShapeNote>()
 
     /*
      * Mỗi dạng CAGED có vùng ngăn riêng, không dùng chung một khung 5 ngăn:
-     * C trưởng làm mốc: C 0-3, A 2-6, G 4-8, E 7-10, D 9-13.
+     * C trưởng làm mốc: C 0-3, A 2-6, G 5-8, E 7-10, D 9-13.
      * Khi đổi tông, toàn bộ vùng được tịnh tiến theo nốt gốc của dạng đó.
      */
     for (stringNumber in 6 downTo 1) {
@@ -2299,11 +2285,42 @@ private fun buildHandShapeSequence(
 private fun handShapeScaleTypes(): List<HandShapeScaleType> = HandShapeScaleType.values().toList()
 
 private fun handShapeScaleGroupTitle(groupKey: String, lang: String): String = when (groupKey) {
-    "SEVEN_NOTE" -> fingerUiText(lang, "Âm giai 7 nốt", "Seven-note scales")
+    "MODES" -> fingerUiText(lang, "7 mode của âm giai trưởng", "Seven modes of the major scale")
+    "MINOR_SCALES" -> fingerUiText(lang, "Âm giai thứ nền tảng", "Core minor scales")
     "BASIC_PENTATONIC" -> fingerUiText(lang, "Ngũ cung cơ bản", "Core pentatonic scales")
     "MODAL_PENTATONIC" -> fingerUiText(lang, "Ngũ cung dominant / điệu thức", "Dominant / modal pentatonics")
-    "WORLD_PENTATONIC" -> fingerUiText(lang, "Ngũ cung truyền thống", "Traditional pentatonics")
+    "BLUES" -> fingerUiText(lang, "Âm giai Blues", "Blues scales")
+    "MELODIC_MINOR_MODES" -> fingerUiText(lang, "Mode của Melodic Minor", "Modes of melodic minor")
+    "HARMONIC_MINOR_MODES" -> fingerUiText(lang, "Mode của Harmonic Minor", "Modes of harmonic minor")
+    "SYMMETRIC" -> fingerUiText(lang, "Đối xứng và chromatic", "Symmetrical and chromatic")
+    "BEBOP" -> fingerUiText(lang, "Âm giai Bebop", "Bebop scales")
+    "SPECIAL" -> fingerUiText(lang, "Âm giai đặc biệt", "Special scales")
+    "WORLD_PENTATONIC" -> fingerUiText(lang, "Ngũ cung truyền thống – dạng tham chiếu", "Traditional pentatonics – reference forms")
     else -> fingerUiText(lang, "Âm giai", "Scales")
+}
+
+private fun handShapeScaleLevelTitle(levelKey: String, lang: String): String = when (levelKey) {
+    "ADVANCED" -> fingerUiText(lang, "Nâng cao", "Advanced")
+    "TRADITIONAL" -> fingerUiText(lang, "Truyền thống", "Traditional")
+    else -> fingerUiText(lang, "Cơ bản", "Core")
+}
+
+private fun handShapeScaleGroupsForLevel(levelKey: String): List<String> = when (levelKey) {
+    "ADVANCED" -> listOf(
+        "MELODIC_MINOR_MODES",
+        "HARMONIC_MINOR_MODES",
+        "SYMMETRIC",
+        "BEBOP",
+        "SPECIAL"
+    )
+    "TRADITIONAL" -> listOf("WORLD_PENTATONIC")
+    else -> listOf(
+        "MODES",
+        "MINOR_SCALES",
+        "BASIC_PENTATONIC",
+        "MODAL_PENTATONIC",
+        "BLUES"
+    )
 }
 
 private fun handShapeScaleNoteNames(
@@ -2333,11 +2350,74 @@ private fun dominantSeventhChordMidi(tonicName: String): List<Int> {
 
 private fun cagedShapes(): List<CagedShape> = CagedShape.values().toList()
 
+// The original 1-2-3-4 and Spider lessons can enable holding without changing
+// their default patterns. The two dedicated extra routes start with finger 1 held.
+private fun fingerRouteSupportsHolding(routeKey: String): Boolean =
+    routeKey == "1234" || routeKey == "SPIDER" || routeKey == "STRING_CROSSING" ||
+            routeKey == "ANCHOR_STRAIGHT" || routeKey == "ANCHOR_CROSS"
+
+private fun isFingerCrossingRoute(routeKey: String): Boolean =
+    routeKey == "SPIDER" || routeKey == "STRING_CROSSING" || routeKey == "ANCHOR_CROSS"
+
+private fun heldFingerNumbers(selection: String): List<Int> {
+    if (selection == "NONE") return emptyList()
+    val fingers = selection.split('+').mapNotNull { it.toIntOrNull() }
+        .filter { it in 1..4 }.distinct().sorted()
+    return fingers.takeIf { it.size in 1..2 } ?: emptyList()
+}
+
+private fun heldFingerChoices(lang: String, allowWithoutHolding: Boolean): List<Pair<String, String>> {
+    val choices = listOf(
+        "1", "2", "3", "4",
+        "1+2", "1+3", "1+4", "2+3", "2+4", "3+4"
+    ).map { key ->
+        val moving = (1..4).filterNot { it in heldFingerNumbers(key) }.joinToString("–")
+        key to fingerUiText(lang, "Giữ $key · chạy $moving", "Hold $key · move $moving")
+    }
+    return if (allowWithoutHolding) {
+        listOf("NONE" to fingerUiText(lang, "Không giữ ngón · mẫu gốc", "No anchors · original drill")) + choices
+    } else choices
+}
+
+// Static finger positions are drawn separately from the notes that are sounded.
+// Anchors occupy DIFFERENT strings so they cannot mute the moving notes.
+private fun fingerHoldPositions(
+    instrument: String,
+    routeKey: String,
+    startFret: Int,
+    heldSelection: String
+): List<FingerTrainingStep> {
+    if (!fingerRouteSupportsHolding(routeKey)) return emptyList()
+    val fingers = heldFingerNumbers(heldSelection)
+    if (fingers.isEmpty()) return emptyList()
+    val ukulele = instrument == "Ukulele"
+    val stringCount = if (ukulele) 4 else 6
+    val anchors = if (isFingerCrossingRoute(routeKey)) {
+        listOf(stringCount - 2, stringCount - 3)
+    } else {
+        listOf(stringCount - 1, stringCount - 2)
+    }
+    val openMidi = if (ukulele) listOf(69, 64, 60, 67) else listOf(64, 59, 55, 50, 45, 40)
+    val firstFret = startFret.coerceIn(1, 12)
+    return fingers.mapIndexed { index, finger ->
+        val stringNumber = anchors[index]
+        val fret = firstFret + finger - 1
+        FingerTrainingStep(
+            stringNumber = stringNumber,
+            fret = fret,
+            finger = finger,
+            midi = openMidi[stringNumber - 1] + fret,
+            technique = "Hold"
+        )
+    }
+}
+
 private fun buildFingerSequence(
     instrument: String,
     routeKey: String,
     directionKey: String,
-    startFret: Int
+    startFret: Int,
+    heldSelection: String = "NONE"
 ): List<FingerTrainingStep> {
     val isUkulele = instrument == "Ukulele"
     val safeStartFret = startFret.coerceIn(1, 12)
@@ -2350,6 +2430,9 @@ private fun buildFingerSequence(
     }
 
     val stringNumbers = if (isUkulele) (4 downTo 1).toList() else (6 downTo 1).toList()
+    val heldFingers = if (fingerRouteSupportsHolding(routeKey)) {
+        heldFingerNumbers(heldSelection)
+    } else emptyList()
 
     fun step(stringNumber: Int, finger: Int, technique: String = ""): FingerTrainingStep {
         val safeFinger = finger.coerceIn(1, 4)
@@ -2365,6 +2448,25 @@ private fun buildFingerSequence(
     }
 
     fun makePass(reverse: Boolean): List<FingerTrainingStep> {
+        if (heldFingers.isNotEmpty()) {
+            val movingFingers = (1..4).filterNot { it in heldFingers }
+                .let { if (reverse) it.asReversed() else it }
+            return if (isFingerCrossingRoute(routeKey)) {
+                // An anchored Spider moves between the two bass-side strings;
+                // the planted fingers stay on other, adjacent strings.
+                // Two passes alternate which string each active finger uses.
+                val crossingStrings = stringNumbers.take(2)
+                (0..1).flatMap { pass ->
+                    movingFingers.mapIndexed { index, finger ->
+                        step(crossingStrings[(index + pass) % 2], finger, "Anchored Spider")
+                    }
+                }
+            } else {
+                movingFingers.map { finger ->
+                    step(stringNumbers.first(), finger, "Anchored straight")
+                }
+            }
+        }
         return when (routeKey) {
             "1324" -> {
                 val fingers = if (reverse) listOf(4, 2, 3, 1) else listOf(1, 3, 2, 4)
@@ -2426,7 +2528,7 @@ private fun buildFingerSequence(
     }
 }
 
-private fun routePatternLabel(routeKey: String, directionKey: String): String {
+private fun routePatternLabel(routeKey: String, directionKey: String, currentLang: String): String {
     fun byDirection(forward: String, reverse: String): String = when (directionKey) {
         "REVERSE" -> reverse
         "BOTH" -> "$forward / $reverse"
@@ -2439,6 +2541,8 @@ private fun routePatternLabel(routeKey: String, directionKey: String): String {
         "HAMMER_PULL" -> byDirection("1H2H3H4", "4P3P2P1")
         "STRING_CROSSING" -> byDirection("1 ↔ 2 ↔ 3 ↔ 4", "4 ↔ 3 ↔ 2 ↔ 1")
         "SCALE_SEQUENCE" -> byDirection("1-2-3 / 2-3-4", "4-3-2 / 3-2-1")
+        "ANCHOR_STRAIGHT" -> byDirection(fingerUiText(currentLang, "Giữ ngón · thẳng", "Held fingers · straight"), fingerUiText(currentLang, "Giữ ngón · thẳng", "Held fingers · straight"))
+        "ANCHOR_CROSS" -> byDirection(fingerUiText(currentLang, "Giữ ngón · chéo", "Held fingers · cross-string"), fingerUiText(currentLang, "Giữ ngón · chéo", "Held fingers · cross-string"))
         else -> byDirection("1 → 2 → 3 → 4", "4 ← 3 ← 2 ← 1")
     }
 }
@@ -2455,11 +2559,14 @@ fun GameFingerTrainingScreen(
     onOpenPitchRecognition: (PitchRecognitionLaunchConfig) -> Unit,
     onClose: () -> Unit
 ) {
+    val i18nContext = LocalContext.current.applicationContext
+    remember(i18nContext) { FingerTrainingTranslations.initialize(i18nContext); true }
     val routes = remember(tunaGreen) { fingerTrainingRoutes(tunaGreen) }
     val guidedLessons = remember(tunaGreen) { guidedPracticeLessons(tunaGreen) }
     var page by rememberSaveable(instrument, initialPage) { mutableStateOf(initialPage.name) }
     var selectedHandShapeKey by rememberSaveable(instrument) { mutableStateOf(CagedShape.C.key) }
     var selectedGuidedLessonId by rememberSaveable(instrument) { mutableStateOf("") }
+    var returnToCurriculum by rememberSaveable(instrument) { mutableStateOf(false) }
 
     val selectedHandShape = cagedShapes().firstOrNull { it.key == selectedHandShapeKey }
         ?: CagedShape.C
@@ -2488,6 +2595,7 @@ fun GameFingerTrainingScreen(
                 },
                 onOpenHarmonyPractice = {
                     if (instrument == "Guitar") {
+                        returnToCurriculum = false
                         page = "HARMONY_PLAYER"
                     }
                 },
@@ -2515,6 +2623,15 @@ fun GameFingerTrainingScreen(
                 textColor = textColor,
                 tunaGreen = tunaGreen,
                 lessons = guidedLessons,
+                onOpenHandShapes = {
+                    returnToCurriculum = true
+                    selectedHandShapeKey = CagedShape.C.key
+                    page = "HAND_SHAPE_PLAYER"
+                },
+                onOpenHarmony = {
+                    returnToCurriculum = true
+                    page = "HARMONY_PLAYER"
+                },
                 onLessonSelected = { lesson ->
                     selectedGuidedLessonId = lesson.id
                     page = if (lesson.kind == GuidedLessonKind.FINGER) {
@@ -2540,6 +2657,7 @@ fun GameFingerTrainingScreen(
                 textColor = textColor,
                 guidedLesson = selectedGuidedLesson,
                 onOpenHandShapes = {},
+                onOpenHarmony = {},
                 onClose = { page = "GUIDED_CURRICULUM" }
             )
         }
@@ -2571,8 +2689,17 @@ fun GameFingerTrainingScreen(
                 textColor = textColor,
                 tunaGreen = tunaGreen,
                 guidedLesson = null,
+                onOpenExercises = {
+                    returnToCurriculum = false
+                    page = "EXERCISE_PLAYER"
+                },
+                onOpenHandShapes = {
+                    selectedHandShapeKey = CagedShape.C.key
+                    page = "HAND_SHAPE_PLAYER"
+                },
                 onClose = {
-                    page = FingerTrainingLandingPage.ENTRY.name
+                    page = if (returnToCurriculum) "GUIDED_CURRICULUM" else FingerTrainingLandingPage.ENTRY.name
+                    returnToCurriculum = false
                 }
             )
         }
@@ -2587,10 +2714,15 @@ fun GameFingerTrainingScreen(
                 textColor = textColor,
                 tunaGreen = tunaGreen,
                 onOpenExercises = {
+                    returnToCurriculum = false
                     page = "EXERCISE_PLAYER"
                 },
+                onOpenHarmony = {
+                    page = "HARMONY_PLAYER"
+                },
                 onClose = {
-                    page = FingerTrainingLandingPage.ENTRY.name
+                    page = if (returnToCurriculum) "GUIDED_CURRICULUM" else FingerTrainingLandingPage.ENTRY.name
+                    returnToCurriculum = false
                 }
             )
         }
@@ -2607,8 +2739,15 @@ fun GameFingerTrainingScreen(
                 guidedLesson = null,
                 onOpenHandShapes = {
                     if (instrument == "Guitar") {
+                        returnToCurriculum = false
                         selectedHandShapeKey = CagedShape.C.key
                         page = "HAND_SHAPE_PLAYER"
+                    }
+                },
+                onOpenHarmony = {
+                    if (instrument == "Guitar") {
+                        returnToCurriculum = false
+                        page = "HARMONY_PLAYER"
                     }
                 },
                 onClose = {
@@ -2658,8 +2797,9 @@ private fun FingerTrainingRouteMenu(
                     .padding(horizontal = 14.dp)
             ) {
                 FingerSectionTopBar(
+                    currentLang = currentLang,
                     title = fingerUiText(currentLang, "Lộ trình luyện ngón", "Finger-training path"),
-                    subtitle = "$effectiveInstrument · ${fingerUiText(currentLang, "5 chặng · 6 bài", "5 stages · 6 lessons")}",
+                    subtitle = "$effectiveInstrument · ${fingerUiText(currentLang, "5 chặng · 8 bài", "5 stages · 8 lessons")}",
                     surfaceColor = surfaceColor,
                     textColor = textColor,
                     onBack = onClose
@@ -2672,6 +2812,7 @@ private fun FingerTrainingRouteMenu(
                     currentLang = currentLang,
                     exerciseAccent = routes.firstOrNull()?.accent ?: Color(0xFF22C58B),
                     handShapeAccent = Color(0xFFE85D86),
+                    harmonyAccent = Color(0xFFF2B94B),
                     surfaceColor = surfaceColor,
                     textColor = textColor,
                     onSelected = { section ->
@@ -2686,8 +2827,8 @@ private fun FingerTrainingRouteMenu(
                 Text(
                     text = fingerUiText(
                         currentLang,
-                        "Học theo thứ tự từ Bài 1 đến Bài 6. Chọn 'Luyện thế tay' phía trên để mở trực tiếp màn CAGED.",
-                        "Follow lessons 1 through 6 in order. Tap 'Hand positions' above to open CAGED practice directly."
+                        "6 bài căn bản và 2 bài giữ ngón (chạy thẳng/chạy chéo). Chọn 'Luyện thế tay' để mở CAGED.",
+                        "Six core drills plus two held-finger variants (straight/cross-string). Open 'Hand positions' for CAGED."
                     ),
                     color = textColor.copy(alpha = 0.62f),
                     fontSize = 11.5.sp,
@@ -2748,11 +2889,12 @@ private fun FingerTrainingRouteMenu(
 }
 
 @Composable
-private fun FingerPracticeSectionSelector(
+internal fun FingerPracticeSectionSelector(
     selectedSection: FingerPracticeSection,
     currentLang: String,
     exerciseAccent: Color,
     handShapeAccent: Color,
+    harmonyAccent: Color,
     surfaceColor: Color,
     textColor: Color,
     compact: Boolean = false,
@@ -2777,8 +2919,13 @@ private fun FingerPracticeSectionSelector(
             ),
             Triple(
                 FingerPracticeSection.HAND_SHAPES,
-                fingerUiText(currentLang, "Luyện thế tay", "Hand positions"),
+                fingerUiText(currentLang, "Thế tay", "Positions"),
                 handShapeAccent
+            ),
+            Triple(
+                FingerPracticeSection.HARMONY,
+                fingerUiText(currentLang, "Hòa âm", "Harmony"),
+                harmonyAccent
             )
         )
 
@@ -2809,7 +2956,12 @@ private fun FingerPracticeSectionSelector(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (section == FingerPracticeSection.EXERCISES) "1" else "2",
+                        text = when (section) {
+                            FingerPracticeSection.EXERCISES -> "1"
+                            FingerPracticeSection.HAND_SHAPES -> "2"
+                            FingerPracticeSection.HARMONY -> "3"
+                            else -> "3"
+                        },
                         color = accent,
                         fontSize = if (compact) 8.sp else 9.sp,
                         fontWeight = FontWeight.Black
@@ -2819,7 +2971,7 @@ private fun FingerPracticeSectionSelector(
                 Text(
                     text = label,
                     color = if (selected) accent else textColor.copy(alpha = 0.68f),
-                    fontSize = if (compact) 9.sp else 12.sp,
+                    fontSize = if (compact) 10.5.sp else 12.sp,
                     fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -3255,6 +3407,11 @@ private fun FingerRoutePreviewCanvas(
                 point((numStrings - 2).coerceAtLeast(0), 3)
             )
             "SCALE_SEQUENCE" -> listOf(1, 2, 3, 2, 3, 4).map { point(numStrings - 1, it) }
+            "ANCHOR_STRAIGHT" -> listOf(2, 3, 4).map { point(numStrings - 1, it) }
+            "ANCHOR_CROSS" -> listOf(
+                point(numStrings - 1, 2), point(numStrings - 2, 3),
+                point(numStrings - 1, 4), point(numStrings - 2, 2)
+            )
             else -> listOf(1, 2, 3, 4).map { point(numStrings - 1, it) }
         }
 
@@ -3300,12 +3457,12 @@ private fun FingerTrainingPlayerScreen(
     textColor: Color,
     guidedLesson: GuidedPracticeLesson? = null,
     onOpenHandShapes: () -> Unit,
+    onOpenHarmony: () -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val activity = LocalActivity.current
     val effectiveInstrument = if (instrument == "Ukulele") "Ukulele" else "Guitar"
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
 
     var selectedRouteKey by rememberSaveable(effectiveInstrument, guidedLesson?.id) {
         mutableStateOf(guidedLesson?.routeKey ?: initialRouteKey)
@@ -3324,10 +3481,20 @@ private fun FingerTrainingPlayerScreen(
     var directionKey by rememberSaveable(route.key, guidedLesson?.id) {
         mutableStateOf(guidedLesson?.fingerDirectionKey ?: "FORWARD")
     }
+    // Open every finger lesson at the lowest selectable fret position.
+    // Keep later positions available through the hand-position selector.
     var startFret by rememberSaveable(route.key, guidedLesson?.id) {
-        mutableIntStateOf(guidedLesson?.fingerStartFret ?: 1)
+        mutableIntStateOf(1)
     }
-    var fretViewKey by rememberSaveable(route.key, guidedLesson?.id) { mutableStateOf("FULL") }
+    var fretViewKey by rememberSaveable(route.key, guidedLesson?.id) { mutableStateOf("EXERCISE") }
+    var heldFingerKey by rememberSaveable(route.key, guidedLesson?.id) {
+        mutableStateOf(if (route.key.startsWith("ANCHOR_")) "1" else "NONE")
+    }
+    val supportsFingerHold = fingerRouteSupportsHolding(route.key)
+    val heldFingerSet = heldFingerNumbers(heldFingerKey)
+    val isAnchorActive = supportsFingerHold && heldFingerSet.isNotEmpty()
+    val anchorAccent = Color(0xFF18C59B)
+    val anchoredDoneAccent = Color(0xFFF2B94B)
     var bpm by rememberSaveable(route.key, guidedLesson?.id) {
         mutableFloatStateOf(guidedLesson?.bpmStart?.toFloat() ?: route.recommendedBpm)
     }
@@ -3358,9 +3525,20 @@ private fun FingerTrainingPlayerScreen(
         ?: PracticeSubdivision.QUARTER
     val targetBpm = guidedLesson?.bpmTarget ?: (route.recommendedBpm + 20f).roundToInt().coerceAtMost(160)
 
-    val sequence = remember(effectiveInstrument, route.key, directionKey, startFret) {
-        buildFingerSequence(effectiveInstrument, route.key, directionKey, startFret)
+    val sequence = remember(effectiveInstrument, route.key, directionKey, startFret, heldFingerKey) {
+        buildFingerSequence(effectiveInstrument, route.key, directionKey, startFret, heldFingerKey)
     }
+    val heldPositions = remember(effectiveInstrument, route.key, startFret, heldFingerKey) {
+        fingerHoldPositions(effectiveInstrument, route.key, startFret, heldFingerKey)
+    }
+    val displayedPattern = if (isAnchorActive) {
+        val movement = fingerUiText(
+            currentLang,
+            if (isFingerCrossingRoute(route.key)) "chạy chéo" else "chạy thẳng",
+            if (isFingerCrossingRoute(route.key)) "cross-string" else "straight"
+        )
+        "${fingerUiText(currentLang, "Giữ", "Hold")} $heldFingerKey · $movement"
+    } else routePatternLabel(route.key, directionKey, currentLang)
 
     val currentStep = sequence.getOrNull(currentIndex)
     val previousStep = sequence.getOrNull(currentIndex - 1)
@@ -3519,8 +3697,12 @@ private fun FingerTrainingPlayerScreen(
         "BOTH" to fingerUiText(currentLang, "Cả hai", "Both")
     )
     val pickingOptions = PracticePickingPattern.values().map { it.key to it.title(currentLang) }
+    val heldOptions = heldFingerChoices(
+        currentLang,
+        allowWithoutHolding = !route.key.startsWith("ANCHOR_")
+    )
     // Danh sách luôn xếp từ ngăn thấp đến ngăn cao; mặc định là Ngăn 1-4.
-    val positionOptions = listOf(1, 3, 5, 7).map { fret ->
+    val positionOptions = listOf(1, 3, 5, 7, 9).map { fret ->
         fret.toString() to fingerUiText(
             currentLang,
             "Ngăn $fret-${fret + 3}",
@@ -3528,7 +3710,7 @@ private fun FingerTrainingPlayerScreen(
         )
     }
     val fretViewOptions = listOf(
-        // Mặc định hiển thị toàn bộ cần đàn để người mới dễ hình dung vị trí bài tập.
+        // The full-neck view is optional; the first visit shows the lowest 4-fret practice area.
         "FULL" to fingerUiText(
             currentLang,
             "Ngăn 1-$fullFretEnd",
@@ -3566,7 +3748,7 @@ private fun FingerTrainingPlayerScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
-                            contentDescription = if (isVietnamese) "Quay lại" else "Back",
+                            contentDescription = fingerUiText(currentLang, "Quay lại", "Back"),
                             tint = textColor,
                             modifier = Modifier.size(if (veryCompactHeight) 18.dp else 21.dp)
                         )
@@ -3589,9 +3771,9 @@ private fun FingerTrainingPlayerScreen(
                         )
                         Text(
                             text = if (guidedLesson != null) {
-                                "${fingerUiText(currentLang, "Lộ trình", "Guided")} · ${routePatternLabel(route.key, directionKey)} · ${subdivision.shortLabel}"
+                                "${fingerUiText(currentLang, "Lộ trình", "Guided")} · ${displayedPattern} · ${subdivision.shortLabel}"
                             } else {
-                                "${fingerUiText(currentLang, "Luyện ngón", "Finger training")} · ${routePatternLabel(route.key, directionKey)} · ${subdivision.shortLabel}"
+                                "${fingerUiText(currentLang, "Luyện ngón", "Finger training")} · ${displayedPattern} · ${subdivision.shortLabel}"
                             },
                             color = muted,
                             fontSize = if (veryCompactHeight) 8.5.sp else 10.5.sp,
@@ -3633,7 +3815,7 @@ private fun FingerTrainingPlayerScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = if (isVietnamese) "Đặt lại" else "Reset",
+                            contentDescription = fingerUiText(currentLang, "Đặt lại", "Reset"),
                             tint = textColor,
                             modifier = Modifier.size(if (veryCompactHeight) 17.dp else 20.dp)
                         )
@@ -3658,14 +3840,23 @@ private fun FingerTrainingPlayerScreen(
                         currentLang = currentLang,
                         exerciseAccent = uiAccent,
                         handShapeAccent = Color(0xFFE85D86),
+                        harmonyAccent = Color(0xFFF2B94B),
                         surfaceColor = surfaceColor,
                         textColor = textColor,
                         compact = veryCompactHeight,
                         onSelected = { section ->
-                            if (section == FingerPracticeSection.HAND_SHAPES) {
-                                isPlaying = false
-                                countdownValue = 0
-                                onOpenHandShapes()
+                            when (section) {
+                                FingerPracticeSection.HAND_SHAPES -> {
+                                    isPlaying = false
+                                    countdownValue = 0
+                                    onOpenHandShapes()
+                                }
+                                FingerPracticeSection.HARMONY -> {
+                                    isPlaying = false
+                                    countdownValue = 0
+                                    onOpenHarmony()
+                                }
+                                FingerPracticeSection.EXERCISES -> Unit
                             }
                         }
                     )
@@ -3702,11 +3893,7 @@ private fun FingerTrainingPlayerScreen(
                             ) {
                                 Text(
                                     text = currentStep?.let { step ->
-                                        if (isVietnamese) {
-                                            "Dây ${step.stringNumber} · Ngăn ${step.fret} · Ngón ${step.finger} · $currentPickSymbol"
-                                        } else {
-                                            "String ${step.stringNumber} · Fret ${step.fret} · Finger ${step.finger} · $currentPickSymbol"
-                                        }
+                                        fingerUiText(currentLang, "Dây ${step.stringNumber} · Ngăn ${step.fret} · Ngón ${step.finger} · $currentPickSymbol", "String ${step.stringNumber} · Fret ${step.fret} · Finger ${step.finger} · $currentPickSymbol")
                                     } ?: route.title(currentLang),
                                     color = textColor,
                                     fontSize = if (veryCompactHeight) 9.5.sp else 11.sp,
@@ -3735,11 +3922,13 @@ private fun FingerTrainingPlayerScreen(
                                 currentIndex = currentIndex,
                                 currentStep = currentStep,
                                 nextStep = nextStep,
+                                heldPositions = heldPositions,
+                                anchorAccent = anchorAccent,
                                 visibleStartFret = visibleStartFret,
                                 visibleEndFret = visibleEndFret,
                                 textColor = textColor,
                                 currentAccent = currentAccent,
-                                completedAccent = uiAccent,
+                                completedAccent = if (isAnchorActive) anchoredDoneAccent else uiAccent,
                                 pendingNoteColor = pendingNoteColor,
                                 highlightCurrent = hasPlaybackStarted,
                                 pulse = if (isPlaying) pulse else 1f,
@@ -3774,113 +3963,160 @@ private fun FingerTrainingPlayerScreen(
                             colors = CardDefaults.cardColors(containerColor = surfaceColor),
                             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(if (veryCompactHeight) 4.dp else 6.dp),
-                                verticalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                if (guidedLesson == null) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                // Keep all settings visible on normal screens; only short
+                                // devices scroll inside this panel, leaving the fretboard
+                                // and playback controls fixed. Avoid unused-constraint lint.
+                                val scrollSettings = configuration.screenHeightDp <
+                                        (if (guidedLesson == null) {
+                                            if (supportsFingerHold) 790 else 670
+                                        } else {
+                                            if (supportsFingerHold) 670 else 620
+                                        })
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(if (veryCompactHeight) 4.dp else 6.dp)
+                                        .then(if (scrollSettings) Modifier.verticalScroll(rememberScrollState()) else Modifier),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    if (guidedLesson == null) {
+                                        HandShapeSideDropdown(
+                                            label = fingerUiText(currentLang, "Bài tập", "Exercise"),
+                                            selectedKey = route.key,
+                                            selectedLabel = exerciseOptions.firstOrNull {
+                                                it.first == route.key
+                                            }?.second.orEmpty(),
+                                            options = exerciseOptions,
+                                            accent = uiAccent,
+                                            surfaceColor = bgColor.copy(alpha = 0.45f),
+                                            textColor = textColor,
+                                            compact = veryCompactHeight,
+                                            modifier = if (scrollSettings) {
+                                                Modifier.fillMaxWidth().height(42.dp)
+                                            } else {
+                                                Modifier.fillMaxWidth().weight(1f)
+                                            },
+                                            onSelected = { key ->
+                                                if (key != selectedRouteKey) {
+                                                    isPlaying = false
+                                                    countdownValue = 0
+                                                    currentIndex = 0
+                                                    completedRounds = 0
+                                                    selectedRouteKey = key
+                                                }
+                                            }
+                                        )
+                                    }
+                                    if (supportsFingerHold) {
+                                        HandShapeSideDropdown(
+                                            label = fingerUiText(currentLang, "Ngón giữ", "Held fingers"),
+                                            selectedKey = heldFingerKey,
+                                            selectedLabel = heldOptions.firstOrNull {
+                                                it.first == heldFingerKey
+                                            }?.second.orEmpty(),
+                                            options = heldOptions,
+                                            accent = anchorAccent,
+                                            surfaceColor = bgColor.copy(alpha = 0.45f),
+                                            textColor = textColor,
+                                            compact = veryCompactHeight,
+                                            modifier = if (scrollSettings) {
+                                                Modifier.fillMaxWidth().height(42.dp)
+                                            } else {
+                                                Modifier.fillMaxWidth().weight(1f)
+                                            },
+                                            onSelected = { key ->
+                                                if (key != heldFingerKey) {
+                                                    resetSession()
+                                                    heldFingerKey = key
+                                                }
+                                            }
+                                        )
+                                    }
                                     HandShapeSideDropdown(
-                                        label = fingerUiText(currentLang, "Bài tập", "Exercise"),
-                                        selectedKey = route.key,
-                                        selectedLabel = exerciseOptions.firstOrNull {
-                                            it.first == route.key
+                                        label = fingerUiText(currentLang, "Hướng luyện", "Direction"),
+                                        selectedKey = directionKey,
+                                        selectedLabel = directionOptions.firstOrNull {
+                                            it.first == directionKey
                                         }?.second.orEmpty(),
-                                        options = exerciseOptions,
+                                        options = directionOptions,
                                         accent = uiAccent,
                                         surfaceColor = bgColor.copy(alpha = 0.45f),
                                         textColor = textColor,
                                         compact = veryCompactHeight,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .weight(1f),
-                                        onSelected = { key ->
-                                            if (key != selectedRouteKey) {
-                                                isPlaying = false
-                                                countdownValue = 0
-                                                currentIndex = 0
-                                                completedRounds = 0
-                                                selectedRouteKey = key
-                                            }
+                                        modifier = if (scrollSettings) {
+                                            Modifier.fillMaxWidth().height(42.dp)
+                                        } else {
+                                            Modifier.fillMaxWidth().weight(1f)
+                                        },
+                                        onSelected = {
+                                            isPlaying = false
+                                            countdownValue = 0
+                                            directionKey = it
                                         }
                                     )
-                                }
-                                HandShapeSideDropdown(
-                                    label = fingerUiText(currentLang, "Hướng luyện", "Direction"),
-                                    selectedKey = directionKey,
-                                    selectedLabel = directionOptions.firstOrNull {
-                                        it.first == directionKey
-                                    }?.second.orEmpty(),
-                                    options = directionOptions,
-                                    accent = uiAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.45f),
-                                    textColor = textColor,
-                                    compact = veryCompactHeight,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    onSelected = {
-                                        isPlaying = false
-                                        countdownValue = 0
-                                        directionKey = it
-                                    }
-                                )
-                                HandShapeSideDropdown(
-                                    label = fingerUiText(currentLang, "Tay gảy", "Picking"),
-                                    selectedKey = pickingPattern.key,
-                                    selectedLabel = pickingPattern.title(currentLang),
-                                    options = pickingOptions,
-                                    accent = playAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.45f),
-                                    textColor = textColor,
-                                    compact = veryCompactHeight,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    onSelected = {
-                                        isPlaying = false
-                                        countdownValue = 0
-                                        pickingPatternKey = it
-                                    }
-                                )
-                                HandShapeSideDropdown(
-                                    label = fingerUiText(currentLang, "Vị trí tay", "Hand position"),
-                                    selectedKey = startFret.toString(),
-                                    selectedLabel = positionOptions.firstOrNull {
-                                        it.first == startFret.toString()
-                                    }?.second.orEmpty(),
-                                    options = positionOptions,
-                                    accent = uiAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.45f),
-                                    textColor = textColor,
-                                    compact = veryCompactHeight,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    onSelected = { key ->
-                                        isPlaying = false
-                                        countdownValue = 0
-                                        startFret = key.toIntOrNull() ?: 1
-                                    }
-                                )
-                                if (guidedLesson == null) {
                                     HandShapeSideDropdown(
-                                        label = fingerUiText(currentLang, "Phạm vi cần đàn", "Fret range"),
-                                        selectedKey = fretViewKey,
-                                        selectedLabel = fretViewOptions.firstOrNull {
-                                            it.first == fretViewKey
+                                        label = fingerUiText(currentLang, "Tay gảy", "Picking"),
+                                        selectedKey = pickingPattern.key,
+                                        selectedLabel = pickingPattern.title(currentLang),
+                                        options = pickingOptions,
+                                        accent = playAccent,
+                                        surfaceColor = bgColor.copy(alpha = 0.45f),
+                                        textColor = textColor,
+                                        compact = veryCompactHeight,
+                                        modifier = if (scrollSettings) {
+                                            Modifier.fillMaxWidth().height(42.dp)
+                                        } else {
+                                            Modifier.fillMaxWidth().weight(1f)
+                                        },
+                                        onSelected = {
+                                            isPlaying = false
+                                            countdownValue = 0
+                                            pickingPatternKey = it
+                                        }
+                                    )
+                                    HandShapeSideDropdown(
+                                        label = fingerUiText(currentLang, "Vị trí tay", "Hand position"),
+                                        selectedKey = startFret.toString(),
+                                        selectedLabel = positionOptions.firstOrNull {
+                                            it.first == startFret.toString()
                                         }?.second.orEmpty(),
-                                        options = fretViewOptions,
+                                        options = positionOptions,
                                         accent = uiAccent,
                                         surfaceColor = bgColor.copy(alpha = 0.45f),
                                         textColor = textColor,
                                         compact = veryCompactHeight,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .weight(1f),
-                                        onSelected = { fretViewKey = it }
+                                        modifier = if (scrollSettings) {
+                                            Modifier.fillMaxWidth().height(42.dp)
+                                        } else {
+                                            Modifier.fillMaxWidth().weight(1f)
+                                        },
+                                        onSelected = { key ->
+                                            isPlaying = false
+                                            countdownValue = 0
+                                            startFret = key.toIntOrNull() ?: 1
+                                        }
                                     )
+                                    if (guidedLesson == null) {
+                                        HandShapeSideDropdown(
+                                            label = fingerUiText(currentLang, "Phạm vi cần đàn", "Fret range"),
+                                            selectedKey = fretViewKey,
+                                            selectedLabel = fretViewOptions.firstOrNull {
+                                                it.first == fretViewKey
+                                            }?.second.orEmpty(),
+                                            options = fretViewOptions,
+                                            accent = uiAccent,
+                                            surfaceColor = bgColor.copy(alpha = 0.45f),
+                                            textColor = textColor,
+                                            compact = veryCompactHeight,
+                                            modifier = if (scrollSettings) {
+                                                Modifier.fillMaxWidth().height(42.dp)
+                                            } else {
+                                                Modifier.fillMaxWidth().weight(1f)
+                                            },
+                                            onSelected = { fretViewKey = it }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3934,11 +4170,7 @@ private fun FingerTrainingPlayerScreen(
                                     )
                                     Text(
                                         text = nextStep?.let { step ->
-                                            if (isVietnamese) {
-                                                "Tiếp: Dây ${step.stringNumber} · Ngón ${step.finger}"
-                                            } else {
-                                                "Next: String ${step.stringNumber} · Finger ${step.finger}"
-                                            }
+                                            fingerUiText(currentLang, "Tiếp: Dây ${step.stringNumber} · Ngón ${step.finger}", "Next: String ${step.stringNumber} · Finger ${step.finger}")
                                         } ?: route.tip(currentLang),
                                         color = muted,
                                         fontSize = if (veryCompactHeight) 7.sp else 8.2.sp,
@@ -3969,13 +4201,13 @@ private fun FingerTrainingPlayerScreen(
                                 ) {
                                     HandShapeLegendEntry(
                                         color = currentAccent,
-                                        label = fingerUiText(currentLang, "Hiện tại", "Current"),
+                                        label = fingerUiText(currentLang, if (isAnchorActive) "Ngón chạy" else "Hiện tại", if (isAnchorActive) "Moving" else "Current"),
                                         textColor = textColor,
                                         modifier = Modifier.weight(1f)
                                     )
                                     HandShapeLegendEntry(
-                                        color = uiAccent,
-                                        label = fingerUiText(currentLang, "Đã tập", "Done"),
+                                        color = if (isAnchorActive) anchorAccent else uiAccent,
+                                        label = fingerUiText(currentLang, if (isAnchorActive) "Ngón giữ" else "Đã tập", if (isAnchorActive) "Held" else "Done"),
                                         textColor = textColor,
                                         modifier = Modifier.weight(1f)
                                     )
@@ -3992,8 +4224,8 @@ private fun FingerTrainingPlayerScreen(
                                         modifier = Modifier.weight(1f)
                                     )
                                     HandShapeLegendEntry(
-                                        color = pendingNoteColor,
-                                        label = fingerUiText(currentLang, "Chưa tập", "Pending"),
+                                        color = if (isAnchorActive) anchoredDoneAccent else pendingNoteColor,
+                                        label = fingerUiText(currentLang, if (isAnchorActive) "Đã tập" else "Chưa tập", if (isAnchorActive) "Done" else "Pending"),
                                         textColor = textColor,
                                         modifier = Modifier.weight(1f)
                                     )
@@ -4067,75 +4299,29 @@ private fun FingerTrainingPlayerScreen(
                             colors = CardDefaults.cardColors(containerColor = surfaceColor),
                             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                IconButton(
-                                    onClick = {
-                                        bpm = (bpm - 5f).coerceAtLeast(40f)
-                                        roundsAtCurrentBpm = 0
-                                    },
-                                    modifier = Modifier
-                                        .size(if (veryCompactHeight) 30.dp else 34.dp)
-                                        .clip(CircleShape)
-                                        .background(uiAccent.copy(alpha = 0.16f))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Remove,
-                                        contentDescription = if (isVietnamese) "Giảm BPM" else "Decrease BPM",
-                                        tint = uiAccent,
-                                        modifier = Modifier.size(17.dp)
-                                    )
+                            PracticeBpmStepper(
+                                bpm = bpm.roundToInt(),
+                                minBpm = 40,
+                                maxBpm = 160,
+                                accent = uiAccent,
+                                textColor = textColor,
+                                subdivisionLabel = subdivision.shortLabel,
+                                onSubdivisionClick = {
+                                    val values = PracticeSubdivision.values()
+                                    val next = (values.indexOf(subdivision) + 1) % values.size
+                                    subdivisionKey = values[next].key
+                                    roundsAtCurrentBpm = 0
+                                    currentIndex = 0
+                                },
+                                onDecrease = {
+                                    bpm = (bpm - 5f).coerceAtLeast(40f)
+                                    roundsAtCurrentBpm = 0
+                                },
+                                onIncrease = {
+                                    bpm = (bpm + 5f).coerceAtMost(160f)
+                                    roundsAtCurrentBpm = 0
                                 }
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clickable {
-                                            val values = PracticeSubdivision.values()
-                                            val next = (values.indexOf(subdivision) + 1) % values.size
-                                            subdivisionKey = values[next].key
-                                            roundsAtCurrentBpm = 0
-                                            currentIndex = 0
-                                        },
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = "${bpm.roundToInt()} BPM",
-                                        color = textColor,
-                                        fontSize = if (veryCompactHeight) 9.5.sp else 11.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        textAlign = TextAlign.Center
-                                    )
-                                    Text(
-                                        text = "${subdivision.shortLabel} · ${fingerUiText(currentLang, "chạm để đổi", "tap to change")}",
-                                        color = uiAccent,
-                                        fontSize = if (veryCompactHeight) 6.7.sp else 7.4.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        bpm = (bpm + 5f).coerceAtMost(160f)
-                                        roundsAtCurrentBpm = 0
-                                    },
-                                    modifier = Modifier
-                                        .size(if (veryCompactHeight) 30.dp else 34.dp)
-                                        .clip(CircleShape)
-                                        .background(uiAccent.copy(alpha = 0.16f))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = if (isVietnamese) "Tăng BPM" else "Increase BPM",
-                                        tint = uiAccent,
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                }
-                            }
+                            )
                         }
                     }
                 }
@@ -4259,19 +4445,23 @@ private fun HandShapeTrainingPlayerScreen(
     textColor: Color,
     tunaGreen: Color,
     onOpenExercises: () -> Unit,
+    onOpenHarmony: () -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val activity = LocalActivity.current
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     val effectiveInstrument = "Guitar"
 
     val uiAccent = tunaGreen
     val rootAccent = Color(0xFFE84D78)
-    val majorThirdAccent = Color(0xFF20C7A5)
-    val flatSeventhAccent = Color(0xFFFFA24C)
+    val characteristicAccentPrimary = Color(0xFF20C7A5)
+    val characteristicAccentSecondary = Color(0xFFFFA24C)
     val currentAccent = Color(0xFF35A7FF)
     val scaleNoteColor = Color(0xFFD0D4D8)
+    val chordToneColor = Color(0xFF2D7CFF)
+    val pentatonicToneColor = Color(0xFF22C58B)
+    val tensionToneColor = Color(0xFFF2B94B)
+    val highTensionToneColor = Color(0xFFEF4D5A)
     val playAccent = Color(0xFFF2B94B)
     val borderColor = textColor.copy(alpha = 0.10f)
     val muted = textColor.copy(alpha = 0.58f)
@@ -4285,6 +4475,24 @@ private fun HandShapeTrainingPlayerScreen(
     val previewScope = rememberCoroutineScope()
     var previewJob by remember { mutableStateOf<Job?>(null) }
     var showScaleInfo by rememberSaveable(initialShape.key) { mutableStateOf(false) }
+    var showHorizontalFretboard by rememberSaveable(initialShape.key) { mutableStateOf(false) }
+    var showFullNeck by rememberSaveable(initialShape.key) { mutableStateOf(false) }
+    var showThreeNpsHelp by rememberSaveable(initialShape.key) { mutableStateOf(false) }
+    var learningModeKey by rememberSaveable(initialShape.key) {
+        mutableStateOf(handShapePrefs.getString("learning_mode", "CAGED") ?: "CAGED")
+    }
+    var threeNpsPosition by rememberSaveable(initialShape.key) {
+        mutableIntStateOf(handShapePrefs.getInt("three_nps_position", 0).coerceIn(0, 6))
+    }
+    var visualModeKey by rememberSaveable(initialShape.key) {
+        mutableStateOf(
+            handShapePrefs.getString(
+                "visual_mode_key",
+                HandShapeVisualMode.SCALE_CHARACTER.key
+            )?.takeIf { saved -> HandShapeVisualMode.values().any { it.key == saved } }
+                ?: HandShapeVisualMode.SCALE_CHARACTER.key
+        )
+    }
 
     var tonicKey by rememberSaveable(initialShape.key) {
         mutableStateOf(
@@ -4308,7 +4516,8 @@ private fun HandShapeTrainingPlayerScreen(
         )
     }
     var directionKey by rememberSaveable(initialShape.key) { mutableStateOf("FORWARD") }
-    var fretViewKey by rememberSaveable(initialShape.key) { mutableStateOf("FULL") }
+    // Show the selected compact CAGED/3NPS shape, not the entire neck, on entry.
+    var fretViewKey by rememberSaveable(initialShape.key) { mutableStateOf("SHAPE") }
     var bpm by rememberSaveable(initialShape.key) { mutableFloatStateOf(60f) }
     var soundEnabled by rememberSaveable(initialShape.key) { mutableStateOf(true) }
     var repeatEnabled by rememberSaveable(initialShape.key) { mutableStateOf(true) }
@@ -4321,13 +4530,42 @@ private fun HandShapeTrainingPlayerScreen(
     val selectedShape = cagedShapes().firstOrNull { it.key == shapeKey } ?: initialShape
     val selectedScaleType = handShapeScaleTypes().firstOrNull { it.key == scaleTypeKey }
         ?: HandShapeScaleType.MAJOR
+    val selectedVisualMode = HandShapeVisualMode.values().firstOrNull {
+        it.key == visualModeKey
+    } ?: HandShapeVisualMode.SCALE_CHARACTER
     val selectedTonicLabel = remember(tonicKey) { handShapeTonicLabel(tonicKey) }
+    val cagedReferenceKey = remember(tonicKey, selectedScaleType) {
+        handShapeReferenceTonicKey(tonicKey, selectedScaleType)
+    }
+    val cagedReferenceLabel = handShapeTonicLabel(cagedReferenceKey)
     val selectedScaleNoteNames = remember(tonicKey, selectedScaleType) {
         handShapeScaleNoteNames(tonicKey, selectedScaleType)
     }
-    val hasDominantColor = selectedScaleType.emphasizesDominantTones
-    val pattern = remember(tonicKey, selectedScaleType, selectedShape) {
-        buildHandShapePattern(tonicKey, selectedScaleType, selectedShape)
+    val characteristicIntervals = selectedScaleType.characteristicIntervals.take(2)
+    val primaryCharacteristicInterval = characteristicIntervals.getOrNull(0)
+    val secondaryCharacteristicInterval = characteristicIntervals.getOrNull(1)
+    val primaryCharacteristicDegree = primaryCharacteristicInterval
+        ?.let(selectedScaleType::degreeLabelForInterval)
+        .orEmpty()
+    val secondaryCharacteristicDegree = secondaryCharacteristicInterval
+        ?.let(selectedScaleType::degreeLabelForInterval)
+        .orEmpty()
+    val characteristicNoteDescriptions = characteristicIntervals.mapNotNull { interval ->
+        val index = selectedScaleType.intervals.indexOf(interval)
+        val degree = selectedScaleType.degreeLabelForInterval(interval)
+        val noteName = selectedScaleNoteNames.getOrNull(index)
+        if (degree.isBlank() || noteName.isNullOrBlank()) null else "$noteName ($degree)"
+    }
+    val hasCharacteristicTones = characteristicIntervals.isNotEmpty()
+    val supportsDominantContext = selectedScaleType.supportsDominantContext
+    val threeNpsAvailable = isThreeNotesPerStringScale(selectedScaleType)
+    val isThreeNps = learningModeKey == HandPositionLearningMode.THREE_NPS.name && threeNpsAvailable
+    val pattern = remember(tonicKey, selectedScaleType, selectedShape, isThreeNps, threeNpsPosition) {
+        if (isThreeNps) {
+            buildThreeNotesPerStringPattern(tonicKey, selectedScaleType, threeNpsPosition)
+        } else {
+            buildHandShapePattern(tonicKey, selectedScaleType, selectedShape)
+        }
     }
     val sequence = remember(pattern, directionKey) {
         buildHandShapeSequence(pattern, directionKey)
@@ -4356,7 +4594,7 @@ private fun HandShapeTrainingPlayerScreen(
         countdownValue = 0
         hasPlaybackStarted = false
         previewJob = previewScope.launch {
-            if (withDominantContext && hasDominantColor) {
+            if (withDominantContext && supportsDominantContext) {
                 runCatching {
                     CoreAudioPlayer.playChord(
                         dominantSeventhChordMidi(tonicKey),
@@ -4373,7 +4611,7 @@ private fun HandShapeTrainingPlayerScreen(
                 delay(330L)
             }
 
-            if (withDominantContext && hasDominantColor) {
+            if (withDominantContext && supportsDominantContext) {
                 delay(180L)
                 runCatching {
                     CoreAudioPlayer.playChord(
@@ -4420,11 +4658,14 @@ private fun HandShapeTrainingPlayerScreen(
         }
     }
 
-    LaunchedEffect(tonicKey, scaleTypeKey, shapeKey) {
+    LaunchedEffect(tonicKey, scaleTypeKey, shapeKey, visualModeKey, learningModeKey, threeNpsPosition) {
         handShapePrefs.edit()
             .putString("tonic_key", tonicKey)
             .putString("scale_type_key", scaleTypeKey)
             .putString("shape_key", shapeKey)
+            .putString("visual_mode_key", visualModeKey)
+            .putString("learning_mode", learningModeKey)
+            .putInt("three_nps_position", threeNpsPosition)
             .apply()
     }
 
@@ -4519,7 +4760,7 @@ private fun HandShapeTrainingPlayerScreen(
         "BOTH" to fingerUiText(currentLang, "Cả hai", "Both")
     )
     val fretViewOptions = listOf(
-        // Các thế tay CAGED cũng mặc định hiển thị toàn cần để thấy vùng liên kết giữa các dạng.
+        // Full-neck display remains an optional choice; compact shape is the initial view.
         "FULL" to fingerUiText(
             currentLang,
             "Ngăn 1-$fullFretEnd",
@@ -4557,7 +4798,7 @@ private fun HandShapeTrainingPlayerScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
-                            contentDescription = if (isVietnamese) "Quay lại" else "Back",
+                            contentDescription = fingerUiText(currentLang, "Quay lại", "Back"),
                             tint = textColor,
                             modifier = Modifier.size(if (veryCompactHeight) 18.dp else 21.dp)
                         )
@@ -4579,7 +4820,15 @@ private fun HandShapeTrainingPlayerScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "CAGED · ${selectedShape.title(currentLang)}",
+                            // A pentatonic-mode reference key may differ from the root.
+                            // G Ritusen + C reference shape = open strings to fret 4.
+                            text = if (isThreeNps) {
+                                "$selectedTonicLabel · 3NPS ${threeNpsPosition + 1}/7 · ${fingerUiText(currentLang, "ngăn", "frets")} ${pattern.startFret}–${pattern.endFret}"
+                            } else {
+                                "$selectedTonicLabel · ${selectedShape.title(currentLang)}" +
+                                        (if (cagedReferenceKey != tonicKey) " ($cagedReferenceLabel)" else "") +
+                                        " · ${fingerUiText(currentLang, "ngăn", "frets")} ${pattern.startFret}–${pattern.endFret}"
+                            },
                             color = muted,
                             fontSize = if (veryCompactHeight) 8.5.sp else 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -4620,7 +4869,7 @@ private fun HandShapeTrainingPlayerScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = if (isVietnamese) "Đặt lại" else "Reset",
+                            contentDescription = fingerUiText(currentLang, "Đặt lại", "Reset"),
                             tint = textColor,
                             modifier = Modifier.size(if (veryCompactHeight) 17.dp else 20.dp)
                         )
@@ -4632,15 +4881,49 @@ private fun HandShapeTrainingPlayerScreen(
                     currentLang = currentLang,
                     exerciseAccent = Color(0xFF22C58B),
                     handShapeAccent = rootAccent,
+                    harmonyAccent = Color(0xFFF2B94B),
                     surfaceColor = surfaceColor,
                     textColor = textColor,
                     compact = veryCompactHeight,
                     onSelected = { section ->
-                        if (section == FingerPracticeSection.EXERCISES) {
-                            resetSession()
-                            onOpenExercises()
+                        when (section) {
+                            FingerPracticeSection.EXERCISES -> {
+                                resetSession()
+                                onOpenExercises()
+                            }
+                            FingerPracticeSection.HARMONY -> {
+                                resetSession()
+                                onOpenHarmony()
+                            }
+                            FingerPracticeSection.HAND_SHAPES -> Unit
                         }
                     }
+                )
+
+                Spacer(Modifier.height(panelGap))
+
+                HandPositionModeSelector(
+                    isThreeNps = isThreeNps,
+                    isThreeNpsAvailable = threeNpsAvailable,
+                    currentLang = currentLang,
+                    accent = uiAccent,
+                    surfaceColor = surfaceColor,
+                    textColor = textColor,
+                    compact = veryCompactHeight,
+                    onCaged = {
+                        resetSession()
+                        learningModeKey = HandPositionLearningMode.CAGED.name
+                    },
+                    onThreeNps = {
+                        if (threeNpsAvailable) {
+                            resetSession()
+                            learningModeKey = HandPositionLearningMode.THREE_NPS.name
+                            fretViewKey = "SHAPE"
+                        } else {
+                            showThreeNpsHelp = true
+                        }
+                    },
+                    onFullNeck = { showFullNeck = true }
                 )
 
                 Spacer(Modifier.height(panelGap))
@@ -4681,6 +4964,17 @@ private fun HandShapeTrainingPlayerScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 IconButton(
+                                    onClick = { showHorizontalFretboard = true },
+                                    modifier = Modifier.size(if (veryCompactHeight) 23.dp else 27.dp)
+                                ) {
+                                    Text(
+                                        text = "↔",
+                                        color = uiAccent,
+                                        fontSize = 19.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                                IconButton(
                                     onClick = { showScaleInfo = true },
                                     modifier = Modifier.size(if (veryCompactHeight) 20.dp else 23.dp)
                                 ) {
@@ -4709,7 +5003,11 @@ private fun HandShapeTrainingPlayerScreen(
 
                             Text(
                                 text = "${selectedScaleType.formula}  •  ${selectedScaleNoteNames.joinToString(" – ")}",
-                                color = if (hasDominantColor) flatSeventhAccent else muted,
+                                color = when {
+                                    secondaryCharacteristicInterval != null -> characteristicAccentSecondary
+                                    primaryCharacteristicInterval != null -> characteristicAccentPrimary
+                                    else -> muted
+                                },
                                 fontSize = if (veryCompactHeight) 7.sp else 8.2.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
@@ -4730,9 +5028,14 @@ private fun HandShapeTrainingPlayerScreen(
                                 currentAccent = currentAccent,
                                 completedAccent = uiAccent,
                                 rootAccent = rootAccent,
-                                majorThirdAccent = majorThirdAccent,
-                                flatSeventhAccent = flatSeventhAccent,
+                                characteristicAccentPrimary = characteristicAccentPrimary,
+                                characteristicAccentSecondary = characteristicAccentSecondary,
                                 scaleNoteColor = scaleNoteColor,
+                                visualMode = selectedVisualMode,
+                                chordToneColor = chordToneColor,
+                                pentatonicToneColor = pentatonicToneColor,
+                                tensionToneColor = tensionToneColor,
+                                highTensionToneColor = highTensionToneColor,
                                 highlightCurrent = hasPlaybackStarted,
                                 pulse = if (isPlaying) pulse else 1f,
                                 modifier = Modifier
@@ -4752,18 +5055,32 @@ private fun HandShapeTrainingPlayerScreen(
 
                             Spacer(Modifier.height(3.dp))
 
-                            HandShapeQuickSelector(
-                                selectedShape = selectedShape,
-                                shapes = cagedShapes(),
-                                accent = uiAccent,
-                                surfaceColor = bgColor.copy(alpha = 0.42f),
-                                textColor = textColor,
-                                compact = veryCompactHeight,
-                                onSelected = { selected ->
-                                    resetSession()
-                                    shapeKey = selected.key
-                                }
-                            )
+                            if (isThreeNps) {
+                                ThreeNpsPositionSelector(
+                                    selectedPosition = threeNpsPosition,
+                                    accent = uiAccent,
+                                    textColor = textColor,
+                                    surfaceColor = bgColor.copy(alpha = 0.42f),
+                                    compact = veryCompactHeight,
+                                    onSelected = { position ->
+                                        resetSession()
+                                        threeNpsPosition = position
+                                    }
+                                )
+                            } else {
+                                HandShapeQuickSelector(
+                                    selectedShape = selectedShape,
+                                    shapes = cagedShapes(),
+                                    accent = uiAccent,
+                                    surfaceColor = bgColor.copy(alpha = 0.42f),
+                                    textColor = textColor,
+                                    compact = veryCompactHeight,
+                                    onSelected = { selected ->
+                                        resetSession()
+                                        shapeKey = selected.key
+                                    }
+                                )
+                            }
                         }
                     }
 
@@ -4819,13 +5136,31 @@ private fun HandShapeTrainingPlayerScreen(
                                     onSelected = {
                                         resetSession()
                                         scaleTypeKey = it.key
+                                        if (!isThreeNotesPerStringScale(it)) {
+                                            learningModeKey = HandPositionLearningMode.CAGED.name
+                                        }
+                                        // Start Ritusen in its compact CAGED region, while
+                                        // retaining the full-fretboard option for other scales.
+                                        fretViewKey = "SHAPE"
                                     }
                                 )
                                 HandShapeSideDropdown(
-                                    label = fingerUiText(currentLang, "Thế tay", "Shape"),
-                                    selectedKey = shapeKey,
-                                    selectedLabel = selectedShape.title(currentLang),
-                                    options = shapeOptions,
+                                    label = if (isThreeNps) {
+                                        fingerUiText(currentLang, "Vị trí 3NPS", "3NPS position")
+                                    } else {
+                                        fingerUiText(currentLang, "Thế tay", "Shape")
+                                    },
+                                    selectedKey = if (isThreeNps) threeNpsPosition.toString() else shapeKey,
+                                    selectedLabel = if (isThreeNps) "${threeNpsPosition + 1} / 7" else selectedShape.title(currentLang),
+                                    options = if (isThreeNps) {
+                                        (0..6).map { position ->
+                                            position.toString() to fingerUiText(
+                                                currentLang,
+                                                "Vị trí ${position + 1} · dây 6 ngăn ${threeNpsStartingFrets(tonicKey, selectedScaleType)[position]}",
+                                                "Position ${position + 1} · low E fret ${threeNpsStartingFrets(tonicKey, selectedScaleType)[position]}"
+                                            )
+                                        }
+                                    } else shapeOptions,
                                     accent = uiAccent,
                                     surfaceColor = bgColor.copy(alpha = 0.45f),
                                     textColor = textColor,
@@ -4835,7 +5170,8 @@ private fun HandShapeTrainingPlayerScreen(
                                         .weight(1f),
                                     onSelected = {
                                         resetSession()
-                                        shapeKey = it
+                                        if (isThreeNps) threeNpsPosition = it.toIntOrNull()?.coerceIn(0, 6) ?: 0
+                                        else shapeKey = it
                                     }
                                 )
                             }
@@ -4844,7 +5180,13 @@ private fun HandShapeTrainingPlayerScreen(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(if (hasDominantColor) 0.96f else 0.72f),
+                                .weight(
+                                    when {
+                                        selectedVisualMode == HandShapeVisualMode.HARMONIC_ROLE -> 1.18f
+                                        hasCharacteristicTones -> 1.12f
+                                        else -> 0.92f
+                                    }
+                                ),
                             shape = panelShape,
                             colors = CardDefaults.cardColors(containerColor = surfaceColor),
                             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
@@ -4855,46 +5197,120 @@ private fun HandShapeTrainingPlayerScreen(
                                     .padding(horizontal = 6.dp, vertical = 4.dp),
                                 verticalArrangement = Arrangement.SpaceEvenly
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    HandShapeLegendEntry(
-                                        color = rootAccent,
-                                        label = fingerUiText(currentLang, "Nốt gốc", "Root"),
-                                        textColor = textColor,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    HandShapeLegendEntry(
-                                        color = if (hasDominantColor) majorThirdAccent else scaleNoteColor,
-                                        label = if (hasDominantColor) {
-                                            fingerUiText(currentLang, "Bậc 3 trưởng", "Major 3rd")
-                                        } else {
-                                            fingerUiText(currentLang, "Âm giai", "Scale")
-                                        },
-                                        textColor = textColor,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                                if (hasDominantColor) {
+                                HandShapeVisualModeSelector(
+                                    selectedMode = selectedVisualMode,
+                                    currentLang = currentLang,
+                                    accent = uiAccent,
+                                    harmonyAccent = chordToneColor,
+                                    surfaceColor = bgColor.copy(alpha = 0.42f),
+                                    textColor = textColor,
+                                    compact = veryCompactHeight,
+                                    onSelected = { visualModeKey = it.key }
+                                )
+
+                                if (selectedVisualMode == HandShapeVisualMode.HARMONIC_ROLE) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         HandShapeLegendEntry(
-                                            color = flatSeventhAccent,
-                                            label = fingerUiText(currentLang, "Bậc ♭7", "Flat 7th"),
+                                            color = chordToneColor,
+                                            label = fingerUiText(currentLang, "Nốt hợp âm", "Chord tones"),
                                             textColor = textColor,
                                             modifier = Modifier.weight(1f)
                                         )
                                         HandShapeLegendEntry(
-                                            color = scaleNoteColor,
-                                            label = fingerUiText(currentLang, "Nốt còn lại", "Other tones"),
+                                            color = pentatonicToneColor,
+                                            label = fingerUiText(currentLang, "Ngũ cung", "Pentatonic"),
                                             textColor = textColor,
                                             modifier = Modifier.weight(1f)
                                         )
                                     }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        HandShapeLegendEntry(
+                                            color = tensionToneColor,
+                                            label = fingerUiText(currentLang, "Tension", "Tension"),
+                                            textColor = textColor,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        HandShapeLegendEntry(
+                                            color = highTensionToneColor,
+                                            label = fingerUiText(currentLang, "Căng mạnh", "High tension"),
+                                            textColor = textColor,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        HandShapeLegendEntry(
+                                            color = rootAccent,
+                                            label = fingerUiText(currentLang, "Nốt gốc", "Root"),
+                                            textColor = textColor,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        HandShapeLegendEntry(
+                                            color = if (primaryCharacteristicInterval != null) {
+                                                characteristicAccentPrimary
+                                            } else {
+                                                scaleNoteColor
+                                            },
+                                            label = if (primaryCharacteristicInterval != null) {
+                                                fingerUiText(
+                                                    currentLang,
+                                                    "Bậc $primaryCharacteristicDegree",
+                                                    "Degree $primaryCharacteristicDegree"
+                                                )
+                                            } else {
+                                                fingerUiText(currentLang, "Âm giai", "Scale")
+                                            },
+                                            textColor = textColor,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (hasCharacteristicTones) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            if (secondaryCharacteristicInterval != null) {
+                                                HandShapeLegendEntry(
+                                                    color = characteristicAccentSecondary,
+                                                    label = fingerUiText(
+                                                        currentLang,
+                                                        "Bậc $secondaryCharacteristicDegree",
+                                                        "Degree $secondaryCharacteristicDegree"
+                                                    ),
+                                                    textColor = textColor,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            } else {
+                                                HandShapeLegendEntry(
+                                                    color = scaleNoteColor,
+                                                    label = fingerUiText(currentLang, "Nốt còn lại", "Other tones"),
+                                                    textColor = textColor,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                            if (secondaryCharacteristicInterval != null) {
+                                                HandShapeLegendEntry(
+                                                    color = scaleNoteColor,
+                                                    label = fingerUiText(currentLang, "Nốt còn lại", "Other tones"),
+                                                    textColor = textColor,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            } else {
+                                                Spacer(modifier = Modifier.weight(1f))
+                                            }
+                                        }
+                                    }
                                 }
+
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -5017,50 +5433,15 @@ private fun HandShapeTrainingPlayerScreen(
                             colors = CardDefaults.cardColors(containerColor = surfaceColor),
                             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                IconButton(
-                                    onClick = { bpm = (bpm - 5f).coerceAtLeast(40f) },
-                                    modifier = Modifier
-                                        .size(if (veryCompactHeight) 30.dp else 34.dp)
-                                        .clip(CircleShape)
-                                        .background(uiAccent.copy(alpha = 0.16f))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Remove,
-                                        contentDescription = if (isVietnamese) "Giảm BPM" else "Decrease BPM",
-                                        tint = uiAccent,
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                }
-                                Text(
-                                    text = "${bpm.roundToInt()} BPM",
-                                    color = textColor,
-                                    fontSize = if (veryCompactHeight) 9.5.sp else 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(
-                                    onClick = { bpm = (bpm + 5f).coerceAtMost(160f) },
-                                    modifier = Modifier
-                                        .size(if (veryCompactHeight) 30.dp else 34.dp)
-                                        .clip(CircleShape)
-                                        .background(uiAccent.copy(alpha = 0.16f))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = if (isVietnamese) "Tăng BPM" else "Increase BPM",
-                                        tint = uiAccent,
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                }
-                            }
+                            PracticeBpmStepper(
+                                bpm = bpm.roundToInt(),
+                                minBpm = 40,
+                                maxBpm = 160,
+                                accent = uiAccent,
+                                textColor = textColor,
+                                onDecrease = { bpm = (bpm - 5f).coerceAtLeast(40f) },
+                                onIncrease = { bpm = (bpm + 5f).coerceAtMost(160f) }
+                            )
                         }
                     }
                 }
@@ -5199,7 +5580,11 @@ private fun HandShapeTrainingPlayerScreen(
                         ) {
                             Text(
                                 text = selectedScaleType.formula,
-                                color = if (hasDominantColor) flatSeventhAccent else uiAccent,
+                                color = when {
+                                    secondaryCharacteristicInterval != null -> characteristicAccentSecondary
+                                    primaryCharacteristicInterval != null -> characteristicAccentPrimary
+                                    else -> uiAccent
+                                },
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
@@ -5209,6 +5594,18 @@ private fun HandShapeTrainingPlayerScreen(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                            if (characteristicNoteDescriptions.isNotEmpty()) {
+                                Text(
+                                    text = fingerUiText(
+                                        currentLang,
+                                        "Nốt đặc trưng: ${characteristicNoteDescriptions.joinToString(" · ")}",
+                                        "Characteristic tones: ${characteristicNoteDescriptions.joinToString(" · ")}"
+                                    ),
+                                    color = textColor.copy(alpha = 0.68f),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
 
@@ -5224,23 +5621,69 @@ private fun HandShapeTrainingPlayerScreen(
                         fontSize = 12.sp,
                         lineHeight = 17.sp
                     )
+                    if (cagedReferenceKey != tonicKey) {
+                        Text(
+                            text = fingerUiText(
+                                currentLang,
+                                "Nốt chủ $selectedTonicLabel · Thế CAGED tham chiếu $cagedReferenceLabel ngũ cung trưởng. Nốt gốc không đổi khi chuyển thế tay.",
+                                "Tonic $selectedTonicLabel · CAGED shapes refer to $cagedReferenceLabel major pentatonic. The tonic does not change when switching shapes."
+                            ),
+                            color = uiAccent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 17.sp
+                        )
+                    }
 
-                    if (hasDominantColor) {
+                    if (hasCharacteristicTones) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             HandShapeLegendEntry(
-                                color = majorThirdAccent,
-                                label = fingerUiText(currentLang, "3 trưởng", "Major 3rd"),
+                                color = characteristicAccentPrimary,
+                                label = fingerUiText(
+                                    currentLang,
+                                    "Bậc $primaryCharacteristicDegree đặc trưng",
+                                    "Characteristic $primaryCharacteristicDegree"
+                                ),
                                 textColor = textColor,
                                 modifier = Modifier.weight(1f)
                             )
-                            HandShapeLegendEntry(
-                                color = flatSeventhAccent,
-                                label = fingerUiText(currentLang, "♭7 dominant", "Dominant ♭7"),
-                                textColor = textColor,
-                                modifier = Modifier.weight(1f)
+                            if (secondaryCharacteristicInterval != null) {
+                                HandShapeLegendEntry(
+                                    color = characteristicAccentSecondary,
+                                    label = fingerUiText(
+                                        currentLang,
+                                        "Bậc $secondaryCharacteristicDegree đặc trưng",
+                                        "Characteristic $secondaryCharacteristicDegree"
+                                    ),
+                                    textColor = textColor,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+
+                    if (selectedVisualMode == HandShapeVisualMode.HARMONIC_ROLE) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = chordToneColor.copy(alpha = 0.08f),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                chordToneColor.copy(alpha = 0.24f)
+                            )
+                        ) {
+                            Text(
+                                text = fingerUiText(
+                                    currentLang,
+                                    "Màu hòa âm được tính theo hợp âm ba nốt trên nốt chủ: xanh dương là nốt hợp âm; xanh lá là phần còn lại của ngũ cung phù hợp; vàng là tension màu sắc; đỏ là nốt căng mạnh, thường nên giải về nốt gần nhất. Trên A Aeolian/Am: A–C–E xanh dương, D–G xanh lá, B vàng và F đỏ.",
+                                    "Harmony colours are calculated against the tonic triad: blue marks chord tones; green marks the remaining matching pentatonic tones; gold marks colour tensions; red marks strong tensions that commonly resolve to a nearby tone. In A Aeolian over Am: A–C–E are blue, D–G green, B gold and F red."
+                                ),
+                                color = textColor.copy(alpha = 0.78f),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp)
                             )
                         }
                     }
@@ -5266,7 +5709,7 @@ private fun HandShapeTrainingPlayerScreen(
                         )
                     }
 
-                    if (hasDominantColor) {
+                    if (supportsDominantContext) {
                         Button(
                             onClick = {
                                 showScaleInfo = false
@@ -5275,7 +5718,7 @@ private fun HandShapeTrainingPlayerScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = flatSeventhAccent,
+                                containerColor = characteristicAccentSecondary,
                                 contentColor = Color(0xFF1C1D1F)
                             )
                         ) {
@@ -5311,6 +5754,82 @@ private fun HandShapeTrainingPlayerScreen(
         )
     }
 
+    if (showThreeNpsHelp) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showThreeNpsHelp = false },
+            title = { Text(fingerUiText(currentLang, "3NPS – ba nốt trên mỗi dây", "3NPS – three notes per string")) },
+            text = {
+                Text(
+                    fingerUiText(
+                        currentLang,
+                        "Chế độ 3NPS dùng cho âm giai có đúng 7 cao độ khác nhau. Hãy chọn một trong 7 mode trưởng, Harmonic Minor hoặc Melodic Minor. Ngũ cung và Blues vẫn luyện với CAGED.",
+                        "3NPS requires a seven-tone scale. Choose a major mode, harmonic minor or melodic minor. Pentatonic and blues scales stay in CAGED."
+                    )
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { showThreeNpsHelp = false }) {
+                    Text(fingerUiText(currentLang, "Đã hiểu", "OK"))
+                }
+            }
+        )
+    }
+
+    if (showFullNeck) {
+        HandShapeFullNeckDialog(
+            tonicKey = tonicKey,
+            scaleType = selectedScaleType,
+            selectedShape = selectedShape,
+            currentLang = currentLang,
+            background = bgColor,
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            accent = uiAccent,
+            onSelectShape = { selected ->
+                resetSession()
+                learningModeKey = HandPositionLearningMode.CAGED.name
+                shapeKey = selected.key
+            },
+            onClose = { showFullNeck = false }
+        )
+    }
+
+    if (showHorizontalFretboard) {
+        if (isThreeNps) {
+            ThreeNpsHorizontalReferenceDialog(
+                tonicKey = tonicKey,
+                scaleType = selectedScaleType,
+                selectedPosition = threeNpsPosition,
+                currentLang = currentLang,
+                background = bgColor,
+                surfaceColor = surfaceColor,
+                textColor = textColor,
+                accent = uiAccent,
+                onSelectPosition = { position ->
+                    resetSession()
+                    threeNpsPosition = position
+                },
+                onClose = { showHorizontalFretboard = false }
+            )
+        } else {
+            HandShapeHorizontalReferenceDialog(
+                tonicKey = tonicKey,
+                scaleType = selectedScaleType,
+                selectedShape = selectedShape,
+                currentLang = currentLang,
+                background = bgColor,
+                surfaceColor = surfaceColor,
+                textColor = textColor,
+                accent = uiAccent,
+                onSelectShape = { newShape ->
+                    resetSession()
+                    shapeKey = newShape.key
+                },
+                onClose = { showHorizontalFretboard = false }
+            )
+        }
+    }
+
     if (countdownValue > 0) {
         PracticeCountdownOverlay(
             value = countdownValue,
@@ -5320,1360 +5839,541 @@ private fun HandShapeTrainingPlayerScreen(
 }
 
 
+/**
+ * Full-width, horizontal reference view. It is deliberately separate from the
+ * existing vertical exercise canvas, so the practice / audio / BPM flow stays
+ * unchanged. Each shape renders notes computed from the SAME pattern builder.
+ */
 @Composable
-private fun HarmonyProgressionPlayerScreen(
+private fun HandShapeHorizontalReferenceDialog(
+    tonicKey: String,
+    scaleType: HandShapeScaleType,
+    selectedShape: CagedShape,
     currentLang: String,
-    bgColor: Color,
+    background: Color,
     surfaceColor: Color,
     textColor: Color,
-    tunaGreen: Color,
-    guidedLesson: GuidedPracticeLesson? = null,
-    chapterLessons: List<GuidedPracticeLesson> = emptyList(),
-    onGuidedLessonSelected: (GuidedPracticeLesson) -> Unit = {},
+    accent: Color,
+    onSelectShape: (CagedShape) -> Unit,
     onClose: () -> Unit
 ) {
-    val context = LocalContext.current
-    val activity = LocalActivity.current
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
-    val progressions = remember { harmonyProgressions() }
-    val activeChapter = guidedPracticeChapter(guidedLesson?.chapterKey)
-    val activeChapterLessons = if (activeChapter != null) {
-        chapterLessons.filter { it.chapterKey == activeChapter.key }
-    } else {
-        emptyList()
+    val referenceKey = remember(tonicKey, scaleType) {
+        handShapeReferenceTonicKey(tonicKey, scaleType)
     }
-
-    var practiceTypeKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.practiceTypeKey ?: HarmonyPracticeType.TRIAD.key)
+    val patterns = remember(tonicKey, scaleType) {
+        cagedShapes().associateWith { shape -> buildHandShapePattern(tonicKey, scaleType, shape) }
     }
-    var keyName by rememberSaveable(guidedLesson?.id) { mutableStateOf(guidedLesson?.keyName ?: "C") }
-    var progressionKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.progressionKey ?: "II_V_I_MAJOR")
+    val pattern = patterns.getValue(selectedShape)
+    val tonicLabel = handShapeTonicLabel(tonicKey)
+    val referenceLabel = handShapeTonicLabel(referenceKey)
+    val scaleNotes = remember(tonicKey, scaleType) {
+        handShapeScaleNoteNames(tonicKey, scaleType).joinToString(" – ")
     }
-    var stringSetKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.stringSetKey ?: "STRINGS_123")
-    }
-    var inversionKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.inversionKey ?: HarmonyInversionMode.AUTO.key)
-    }
-    var directionKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.harmonyDirectionKey ?: HarmonyRunDirection.ASCENDING.key)
-    }
-    var positionStart by rememberSaveable(guidedLesson?.id) {
-        mutableIntStateOf(guidedLesson?.positionStart ?: 5)
-    }
-    var bpm by rememberSaveable(guidedLesson?.id) {
-        mutableFloatStateOf(guidedLesson?.bpmStart?.toFloat() ?: 60f)
-    }
-    var subdivisionKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.subdivisionKey ?: PracticeSubdivision.EIGHTH.key)
-    }
-    var beatsPerChord by rememberSaveable(guidedLesson?.id) {
-        mutableIntStateOf(guidedLesson?.beatsPerChord ?: 4)
-    }
-    var pickingPatternKey by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.pickingPatternKey ?: PracticePickingPattern.ALTERNATE.key)
-    }
-    var speedTrainerEnabled by rememberSaveable(guidedLesson?.id) { mutableStateOf(guidedLesson != null) }
-    var soundEnabled by rememberSaveable { mutableStateOf(true) }
-    var repeatEnabled by rememberSaveable { mutableStateOf(true) }
-    var lookAheadEnabled by rememberSaveable { mutableStateOf(true) }
-    var isPlaying by rememberSaveable { mutableStateOf(false) }
-    var countdownValue by rememberSaveable { mutableIntStateOf(0) }
-    var hasPlaybackStarted by rememberSaveable { mutableStateOf(false) }
-    var currentIndex by rememberSaveable { mutableIntStateOf(0) }
-    var completedRounds by rememberSaveable(guidedLesson?.id) { mutableIntStateOf(0) }
-    var roundsAtCurrentBpm by rememberSaveable(guidedLesson?.id) { mutableIntStateOf(0) }
-    var lessonCompleted by rememberSaveable(guidedLesson?.id) {
-        mutableStateOf(guidedLesson?.let { it.id in GuidedPracticeProgressStore.completedIds(context) } ?: false)
-    }
-
-    val practiceType = HarmonyPracticeType.values().firstOrNull { it.key == practiceTypeKey }
-        ?: HarmonyPracticeType.TRIAD
-    val progression = progressions.firstOrNull { it.key == progressionKey }
-        ?: progressions.first()
-    val stringSetOptions = remember(practiceType) { harmonyStringSets(practiceType) }
-    val stringSet = stringSetOptions.firstOrNull { it.key == stringSetKey }
-        ?: stringSetOptions.first()
-    val inversionOptions = remember(practiceType) { harmonyInversionModes(practiceType) }
-    val inversionMode = inversionOptions.firstOrNull { it.key == inversionKey }
-        ?: HarmonyInversionMode.AUTO
-    val direction = HarmonyRunDirection.values().firstOrNull { it.key == directionKey }
-        ?: HarmonyRunDirection.ASCENDING
-    val subdivision = PracticeSubdivision.values().firstOrNull { it.key == subdivisionKey }
-        ?: PracticeSubdivision.EIGHTH
-    val pickingPattern = PracticePickingPattern.values().firstOrNull { it.key == pickingPatternKey }
-        ?: PracticePickingPattern.ALTERNATE
-    val targetBpm = guidedLesson?.bpmTarget ?: 100
-
-    LaunchedEffect(practiceType.key) {
-        if (stringSetOptions.none { it.key == stringSetKey }) {
-            stringSetKey = stringSetOptions.first().key
-        }
-        if (inversionOptions.none { it.key == inversionKey }) {
-            inversionKey = HarmonyInversionMode.AUTO.key
-        }
-    }
-
-    val fretRange = positionStart..(positionStart + 4)
-    val chords = remember(keyName, progression.key, practiceType.key) {
-        buildHarmonyChords(keyName, progression, practiceType)
-    }
-    val voicings = remember(chords, stringSet.key, fretRange, inversionMode.key) {
-        buildHarmonyVoicings(
-            chords = chords,
-            stringSet = stringSet,
-            fretRange = fretRange,
-            inversionMode = inversionMode
-        )
-    }
-    val sequence = remember(
-        voicings, direction.key, subdivision.key, beatsPerChord, pickingPattern.key
-    ) {
-        buildHarmonyPlaybackSequence(
-            voicings = voicings,
-            direction = direction,
-            subdivision = subdivision,
-            beatsPerChord = beatsPerChord,
-            pickingPattern = pickingPattern
-        )
-    }
-
-    val currentStep = sequence.getOrNull(currentIndex)
-    val currentChordIndex = currentStep?.chordIndex ?: 0
-    val currentVoicing = voicings.getOrNull(currentChordIndex)
-    val nextChordIndex = if (voicings.isEmpty()) 0 else (currentChordIndex + 1) % voicings.size
-    val nextVoicing = if (lookAheadEnabled) voicings.getOrNull(nextChordIndex) else null
-    val currentChord = currentVoicing?.chord ?: chords.firstOrNull()
-    val nextStep = sequence.getOrNull(currentIndex + 1)
-        ?: if (repeatEnabled) sequence.firstOrNull() else null
-    val completedCurrentNotes = remember(sequence, currentIndex, currentChordIndex) {
-        sequence.take(currentIndex)
-            .filter { it.chordIndex == currentChordIndex }
-            .map { it.note.stringNumber to it.note.fret }
-            .toSet()
-    }
-    val allVoicingFrets = voicings.flatMap { voicing -> voicing.notes.map { it.fret } }
-    val focusedVoicingFrets = if (inversionMode == HarmonyInversionMode.ALL_TRIAD_INVERSIONS) {
-        buildList {
-            currentVoicing?.notes?.forEach { add(it.fret) }
-            nextVoicing?.notes?.forEach { add(it.fret) }
-        }
-    } else {
-        allVoicingFrets
-    }
-    val focusMin = focusedVoicingFrets.minOrNull() ?: positionStart
-    val focusMax = focusedVoicingFrets.maxOrNull() ?: (positionStart + 4)
-    val visibleStartFret = if (inversionMode == HarmonyInversionMode.ALL_TRIAD_INVERSIONS) {
-        maxOf(0, focusMin - 1)
-    } else {
-        minOf(positionStart, focusMin).coerceAtLeast(0)
-    }
-    val visibleEndFret = if (inversionMode == HarmonyInversionMode.ALL_TRIAD_INVERSIONS) {
-        minOf(20, maxOf(focusMax + 1, visibleStartFret + 4))
-    } else {
-        maxOf(positionStart + 4, focusMax).coerceAtMost(20)
-    }
-    val keyPitchClass = harmonyNoteNames.indexOf(keyName).coerceAtLeast(0)
-    val progress = if (sequence.isEmpty()) 0f else (currentIndex + 1f) / sequence.size.toFloat()
-
-    val rootAccent = tunaGreen
-    val thirdAccent = Color(0xFFFF8A50)
-    val chordToneAccent = Color(0xFF6D91E8)
-    val seventhAccent = Color(0xFFB274F2)
-    val currentAccent = Color(0xFFF2B94B)
-    val uiAccent = Color(0xFFE85D86)
-    val borderColor = textColor.copy(alpha = 0.10f)
-    val muted = textColor.copy(alpha = 0.58f)
-
-    fun resetSession() {
-        isPlaying = false
-        countdownValue = 0
-        hasPlaybackStarted = false
-        currentIndex = 0
-        completedRounds = 0
-        roundsAtCurrentBpm = 0
-    }
-
-    fun stopAndClose() {
-        isPlaying = false
-        countdownValue = 0
-        onClose()
-    }
-
-    BackHandler {
-        if (countdownValue > 0) {
-            countdownValue = 0
-        } else {
-            stopAndClose()
-        }
-    }
-
-    DisposableEffect(activity) {
-        val previousOrientation = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        onDispose {
-            if (activity != null && !activity.isChangingConfigurations && previousOrientation != null) {
-                activity.requestedOrientation = previousOrientation
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        runCatching { CoreAudioPlayer.loadInstrument(context, "Guitar") }
-    }
-
-    LaunchedEffect(sequence) {
-        resetSession()
-    }
-
-    LaunchedEffect(countdownValue) {
-        if (countdownValue <= 0) return@LaunchedEffect
-        delay(1_000L)
-        if (countdownValue > 1) {
-            countdownValue--
-        } else {
-            countdownValue = 0
-            hasPlaybackStarted = true
-            isPlaying = true
-        }
-    }
-
-    LaunchedEffect(isPlaying, bpm, repeatEnabled, sequence, speedTrainerEnabled) {
-        if (!isPlaying || sequence.isEmpty()) return@LaunchedEffect
-        while (isPlaying) {
-            val activeStep = sequence.getOrNull(currentIndex)
-            val stepsPerBeat = activeStep?.stepsPerBeat?.coerceAtLeast(1) ?: subdivision.stepsPerBeat
-            val intervalMs = (60_000f / bpm.coerceIn(40f, 180f) / stepsPerBeat.toFloat())
-                .toLong()
-                .coerceAtLeast(35L)
-            delay(intervalMs)
-            if (currentIndex < sequence.lastIndex) {
-                currentIndex++
-            } else {
-                val nextRound = completedRounds + 1
-                val nextLevelRound = roundsAtCurrentBpm + 1
-                completedRounds = nextRound
-                roundsAtCurrentBpm = nextLevelRound
-                if (speedTrainerEnabled && nextLevelRound >= 3 && bpm < targetBpm) {
-                    bpm = (bpm + 5f).coerceAtMost(targetBpm.toFloat())
-                    roundsAtCurrentBpm = 0
-                }
-                if (repeatEnabled) {
-                    currentIndex = 0
-                } else {
-                    isPlaying = false
-                    countdownValue = 0
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(isPlaying, currentIndex, soundEnabled, sequence) {
-        if (isPlaying && soundEnabled) {
-            sequence.getOrNull(currentIndex)?.let { step ->
-                runCatching {
-                    CoreAudioPlayer.playChord(listOf(step.note.midi), "Guitar")
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(roundsAtCurrentBpm, bpm, guidedLesson?.id) {
-        val lesson = guidedLesson ?: return@LaunchedEffect
-        if (!lessonCompleted && roundsAtCurrentBpm >= lesson.targetRounds && bpm >= lesson.bpmTarget) {
-            GuidedPracticeProgressStore.markCompleted(context, lesson.id, bpm.roundToInt())
-            lessonCompleted = true
-            isPlaying = false
-            countdownValue = 0
-        }
-    }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "harmonyPulse")
-    val pulse by infiniteTransition.animateFloat(
-        initialValue = 0.94f,
-        targetValue = 1.07f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(560, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "harmonyPulseValue"
-    )
-
     val configuration = LocalConfiguration.current
-    val veryCompactHeight = configuration.screenHeightDp < 620
-    val compactHeight = configuration.screenHeightDp < 720
-    val compactWidth = configuration.screenWidthDp < 380
-    val outerPadding = if (compactWidth) 6.dp else 8.dp
-    val topBarHeight = if (veryCompactHeight) 46.dp else 52.dp
-    val selectorHeight = if (veryCompactHeight) 39.dp else 44.dp
-    // A fixed summary height clipped the chord flow and the current-note title on
-    // phones with larger text/font scales. Treat this as a minimum only; let the
-    // contents determine the actual measured height.
-    val summaryMinHeight = if (veryCompactHeight) 68.dp else 80.dp
-    val bottomControlHeight = if (veryCompactHeight) 49.dp else 56.dp
-    val panelGap = if (veryCompactHeight) 3.dp else 5.dp
-    val panelShape = RoundedCornerShape(if (compactWidth) 13.dp else 16.dp)
+    val maxDialogHeight = (configuration.screenHeightDp * 0.84f).dp
 
-    val practiceTypeOptions = HarmonyPracticeType.values().map { it.key to it.title(currentLang) }
-    val keyOptions = harmonyNoteNames.map { it to it }
-    val progressionOptions = progressions.map { it.key to it.title(currentLang) }
-    val stringOptions = stringSetOptions.map { it.key to it.title(currentLang) }
-    val inversionDropdownOptions = inversionOptions.map { it.key to it.title(currentLang) }
-    val directionOptions = HarmonyRunDirection.values().map { it.key to it.title(currentLang) }
-    val subdivisionOptions = PracticeSubdivision.values().map { it.key to it.title(currentLang) }
-    val pickingOptions = PracticePickingPattern.values().map { it.key to it.title(currentLang) }
-    val beatOptions = listOf(1, 2, 4, 8).map { beats ->
-        beats.toString() to fingerUiText(currentLang, "$beats phách / hợp âm", "$beats beats / chord")
-    }
-    val positionOptions = listOf(1, 3, 5, 7, 9).map { start ->
-        start.toString() to fingerUiText(
-            currentLang,
-            "Ngăn $start-${start + 4}",
-            "Frets $start-${start + 4}"
-        )
-    }
-    val chordFlow = chords.joinToString("  →  ") { chord -> "${chord.roman} ${chord.symbol}" }
-    val inversionText = currentVoicing?.let { voicing ->
-        if (voicing.inversionIndex == 0) {
-            fingerUiText(currentLang, "Thế gốc", "Root")
-        } else {
-            fingerUiText(currentLang, "Đảo ${voicing.inversionIndex}", "Inv. ${voicing.inversionIndex}")
-        }
-    }.orEmpty()
-
-    MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .heightIn(max = maxDialogHeight),
+            shape = RoundedCornerShape(20.dp),
+            color = background,
+            border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.45f))
+        ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = outerPadding, vertical = 3.dp),
-                verticalArrangement = Arrangement.spacedBy(panelGap)
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Header remains fixed, as in the standard Finger Training player.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(topBarHeight),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { stopAndClose() },
-                        modifier = Modifier
-                            .size(if (veryCompactHeight) 34.dp else 40.dp)
-                            .clip(CircleShape)
-                            .background(surfaceColor)
-                            .border(1.dp, borderColor, CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = if (isVietnamese) "Quay lại" else "Back",
-                            tint = textColor,
-                            modifier = Modifier.size(if (veryCompactHeight) 18.dp else 21.dp)
-                        )
-                    }
-
-                    Spacer(Modifier.width(if (compactWidth) 7.dp else 10.dp))
-
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = guidedLesson?.title(currentLang)
-                                ?: fingerUiText(currentLang, "Triad & Arpeggio", "Triads & Arpeggios"),
+                            text = "$tonicLabel ${scaleType.title(currentLang)}",
                             color = textColor,
-                            fontSize = if (veryCompactHeight) 16.sp else 19.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            maxLines = 2
                         )
                         Text(
-                            text = if (guidedLesson != null) {
-                                "${fingerUiText(currentLang, "Lộ trình", "Guided")} · $keyName · ${progression.title(currentLang)}"
-                            } else {
-                                "$keyName ${progression.tonality.title(currentLang)} · ${progression.title(currentLang)}"
-                            },
-                            color = muted,
-                            fontSize = if (veryCompactHeight) 8.5.sp else 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = scaleType.formula,
+                            color = accent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
-
-                    IconButton(
-                        onClick = { resetSession() },
-                        modifier = Modifier
-                            .size(if (veryCompactHeight) 34.dp else 40.dp)
-                            .clip(CircleShape)
-                            .background(surfaceColor)
-                            .border(1.dp, borderColor, CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = if (isVietnamese) "Đặt lại" else "Reset",
-                            tint = textColor,
-                            modifier = Modifier.size(if (veryCompactHeight) 17.dp else 20.dp)
-                        )
+                    IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = fingerUiText(currentLang, "Đóng", "Close"), tint = textColor)
                     }
                 }
-
-                if (guidedLesson != null && activeChapter != null && activeChapterLessons.size > 1) {
-                    GuidedChapterPartSelector(
-                        chapter = activeChapter,
-                        currentLesson = guidedLesson,
-                        lessons = activeChapterLessons,
-                        currentLang = currentLang,
-                        surfaceColor = surfaceColor,
-                        textColor = textColor,
-                        compact = veryCompactHeight,
-                        onLessonSelected = { lesson ->
-                            if (lesson.id != guidedLesson.id) {
-                                resetSession()
-                                onGuidedLessonSelected(lesson)
-                            }
-                        }
+                Text(
+                    text = scaleNotes,
+                    color = textColor.copy(alpha = 0.85f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (referenceKey != tonicKey) {
+                        fingerUiText(
+                            currentLang,
+                            "Tông $tonicLabel · Tham chiếu $referenceLabel ngũ cung trưởng · Thế ${selectedShape.key} · Ngăn ${pattern.startFret}–${pattern.endFret}",
+                            "Tonic $tonicLabel · $referenceLabel major-pentatonic reference · ${selectedShape.key} shape · Frets ${pattern.startFret}–${pattern.endFret}"
+                        )
+                    } else {
+                        fingerUiText(
+                            currentLang,
+                            "Tông $tonicLabel · Thế ${selectedShape.key} · Ngăn ${pattern.startFret}–${pattern.endFret}",
+                            "Tonic $tonicLabel · ${selectedShape.key} shape · Frets ${pattern.startFret}–${pattern.endFret}"
+                        )
+                    },
+                    color = accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 16.sp
+                )
+                Surface(
+                    color = surfaceColor,
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, textColor.copy(alpha = 0.15f)
                     )
-                }
-
-                if (guidedLesson != null) {
-                    GuidedLessonStrip(
-                        lesson = guidedLesson,
-                        currentLang = currentLang,
-                        completedRounds = roundsAtCurrentBpm,
-                        bpm = bpm.roundToInt(),
-                        lessonCompleted = lessonCompleted,
-                        surfaceColor = surfaceColor,
-                        textColor = textColor,
-                        compact = veryCompactHeight
-                    )
-                }
-
-                // Let the summary wrap to its actual content height instead of
-                // cutting the live pitch/degree and the horizontal chord flow.
-                // The fretboard and settings share the remaining weighted area.
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = summaryMinHeight),
-                    shape = panelShape,
-                    colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Column(
+                    HandShapeHorizontalFretboardCanvas(
+                        pattern = pattern,
+                        textColor = textColor,
+                        miniature = false,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 9.dp, vertical = 7.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = currentChord?.let { "${it.roman} · ${it.symbol}" }
-                                        ?: progression.title(currentLang),
-                                    color = textColor,
-                                    fontSize = if (veryCompactHeight) 13.sp else 15.sp,
-                                    lineHeight = if (veryCompactHeight) 18.sp else 20.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = currentStep?.let { step ->
-                                        "${midiDisplayName(step.note.midi)} · ${step.note.roleLabel} · ${step.pickSymbol} · ${fingerUiText(currentLang, "Phách", "Beat")} ${step.beatNumber} · $inversionText"
-                                    } ?: progression.description(currentLang),
-                                    color = currentAccent,
-                                    fontSize = if (veryCompactHeight) 9.sp else 10.5.sp,
-                                    lineHeight = if (veryCompactHeight) 13.sp else 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Text(
-                                text = if (sequence.isEmpty()) "0/0" else "${currentIndex + 1}/${sequence.size}",
-                                color = uiAccent,
-                                fontSize = if (veryCompactHeight) 9.sp else 10.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-                        // Seven-chord circles are longer than the summary width. Let users
-                        // scroll the full progression instead of cutting the final chords.
-                        Text(
-                            text = chordFlow,
-                            color = muted,
-                            fontSize = if (veryCompactHeight) 9.sp else 10.sp,
-                            lineHeight = if (veryCompactHeight) 13.sp else 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Clip,
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                        )
-                        // A weighted spacer inside a hard-height card previously
-                        // made this line fall outside the visible card on some phones.
-                        LinearProgressIndicator(
-                            progress = progress.coerceIn(0f, 1f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(3.dp)
-                                .clip(RoundedCornerShape(50)),
-                            color = uiAccent,
-                            trackColor = textColor.copy(alpha = 0.08f)
-                        )
-                    }
+                            .height(242.dp)
+                            .padding(horizontal = 4.dp, vertical = 5.dp)
+                    )
                 }
-
-                // Side-by-side portrait layout: fretboard LEFT, settings RIGHT.
-                // The settings alone scroll on short displays; the fretboard and
-                // playback buttons never move while parameters are being changed.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("● R", color = Color(0xFFEF5559), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("● 5", color = Color(0xFF2AD8BB), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("● 4", color = Color(0xFF91D778), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        fingerUiText(currentLang, "● Bậc khác", "● Other"),
+                        color = textColor.copy(alpha = 0.75f),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Text(
+                    text = fingerUiText(currentLang, "Chọn thế CAGED", "Choose CAGED shape"),
+                    color = textColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(panelGap)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    Card(
-                        modifier = Modifier
-                            .weight(if (compactWidth) 1.32f else 1.43f)
-                            .fillMaxHeight(),
-                        shape = panelShape,
-                        colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
-                    ) {
-                        Column(
+                    cagedShapes().forEach { shape ->
+                        val isSelected = shape == selectedShape
+                        Surface(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = if (compactWidth) 2.dp else 4.dp, vertical = 4.dp)
+                                .width(98.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .clickable { onSelectShape(shape) },
+                            color = if (isSelected) accent.copy(alpha = 0.16f) else surfaceColor,
+                            shape = RoundedCornerShape(11.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                if (isSelected) 1.5.dp else 1.dp,
+                                if (isSelected) accent else textColor.copy(alpha = 0.16f)
+                            )
                         ) {
-                            Text(
-                                text = fingerUiText(
-                                    currentLang,
-                                    "Ngăn $visibleStartFret-$visibleEndFret · Vòng ${completedRounds + 1}",
-                                    "Frets $visibleStartFret-$visibleEndFret · Round ${completedRounds + 1}"
-                                ),
-                                color = textColor,
-                                fontSize = if (compactWidth) 8.sp else 9.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(start = 2.dp, bottom = 2.dp)
-                            )
-
-                            HarmonyFretboardCanvas(
-                                currentVoicing = currentVoicing,
-                                nextVoicing = nextVoicing,
-                                currentNote = if (hasPlaybackStarted) currentStep?.note else null,
-                                nextNote = if (hasPlaybackStarted) nextStep?.note else null,
-                                completedPositions = completedCurrentNotes,
-                                keyPitchClass = keyPitchClass,
-                                scaleIntervals = progression.tonality.scaleIntervals,
-                                visibleStartFret = visibleStartFret,
-                                visibleEndFret = visibleEndFret,
-                                textColor = textColor,
-                                rootAccent = rootAccent,
-                                thirdAccent = thirdAccent,
-                                chordToneAccent = chordToneAccent,
-                                seventhAccent = seventhAccent,
-                                currentAccent = currentAccent,
-                                showLookAhead = lookAheadEnabled,
-                                pulse = if (isPlaying) pulse else 1f,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
-                            )
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(if (veryCompactHeight) 18.dp else 22.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Column(
+                                modifier = Modifier.padding(4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                // For 13th there are seven color-coded degrees; scroll this
-                                // small legend rather than shrinking the fretboard itself.
-                                Row(
-                                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    HarmonyLegendItem("R", rootAccent, textColor)
-                                    HarmonyLegendItem("3", thirdAccent, textColor)
-                                    HarmonyLegendItem("5", chordToneAccent, textColor)
-                                    if (practiceType.noteCount >= 4) HarmonyLegendItem("7", seventhAccent, textColor)
-                                    if (practiceType.noteCount >= 5) HarmonyLegendItem("9", Color(0xFF48C9D8), textColor)
-                                    if (practiceType.noteCount >= 6) HarmonyLegendItem("11", Color(0xFFA78BFA), textColor)
-                                    if (practiceType.noteCount >= 7) HarmonyLegendItem("13", Color(0xFFF08FB2), textColor)
-                                }
-                                HarmonyLegendItem(
-                                    fingerUiText(currentLang, "Tiếp", "Next"),
-                                    Color.White.copy(alpha = 0.78f),
-                                    textColor,
-                                    outlined = true
-                                )
-                            }
-                        }
-                    }
-
-                    Card(
-                        modifier = Modifier
-                            .weight(if (compactWidth) 1.00f else 0.99f)
-                            .fillMaxHeight(),
-                        shape = panelShape,
-                        colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(horizontal = 4.dp, vertical = 5.dp),
-                            verticalArrangement = Arrangement.spacedBy(panelGap)
-                        ) {
-                            Text(
-                                text = fingerUiText(currentLang, "THIẾT LẬP", "SETTINGS"),
-                                color = muted,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                modifier = Modifier.padding(start = 3.dp, bottom = 1.dp)
-                            )
-
-                            if (guidedLesson == null) {
-                                CompactDropdownSelector(
-                                    label = fingerUiText(currentLang, "Kiểu", "Type"),
-                                    selectedKey = practiceType.key,
-                                    selectedLabel = practiceType.title(currentLang),
-                                    options = practiceTypeOptions,
-                                    accent = uiAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.50f),
+                                HandShapeHorizontalFretboardCanvas(
+                                    pattern = patterns.getValue(shape),
                                     textColor = textColor,
-                                    modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                    onSelected = { practiceTypeKey = it }
-                                )
-                                CompactDropdownSelector(
-                                    label = fingerUiText(currentLang, "Tông", "Key"),
-                                    selectedKey = keyName,
-                                    selectedLabel = keyName,
-                                    options = keyOptions,
-                                    accent = rootAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.50f),
-                                    textColor = textColor,
-                                    modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                    onSelected = { keyName = it }
-                                )
-                                CompactDropdownSelector(
-                                    label = fingerUiText(currentLang, "Vòng", "Progression"),
-                                    selectedKey = progression.key,
-                                    selectedLabel = progression.title(currentLang),
-                                    options = progressionOptions,
-                                    accent = uiAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.50f),
-                                    textColor = textColor,
-                                    modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                    onSelected = { progressionKey = it }
-                                )
-                                CompactDropdownSelector(
-                                    label = fingerUiText(currentLang, "Nhóm dây", "String set"),
-                                    selectedKey = stringSet.key,
-                                    selectedLabel = stringSet.title(currentLang),
-                                    options = stringOptions,
-                                    accent = chordToneAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.50f),
-                                    textColor = textColor,
-                                    modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                    onSelected = { stringSetKey = it }
-                                )
-                                CompactDropdownSelector(
-                                    label = fingerUiText(currentLang, "Thế đảo", "Inversion"),
-                                    selectedKey = inversionMode.key,
-                                    selectedLabel = inversionMode.title(currentLang),
-                                    options = inversionDropdownOptions,
-                                    accent = thirdAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.50f),
-                                    textColor = textColor,
-                                    modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                    onSelected = { inversionKey = it }
-                                )
-                            } else {
-                                Card(
+                                    miniature = true,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(min = selectorHeight),
-                                    shape = RoundedCornerShape(11.dp),
-                                    colors = CardDefaults.cardColors(containerColor = guidedLesson.accent.copy(alpha = 0.09f)),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, guidedLesson.accent.copy(alpha = 0.28f))
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
-                                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
-                                        Text(
-                                            text = fingerUiText(currentLang, "CẤU HÌNH BÀI HỌC", "LESSON SETUP"),
-                                            color = guidedLesson.accent,
-                                            fontSize = 7.5.sp,
-                                            fontWeight = FontWeight.Black
-                                        )
-                                        Text(
-                                            text = "$keyName · ${progression.title(currentLang)} · ${practiceType.title(currentLang)}",
-                                            color = textColor,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = "${stringSet.title(currentLang)} · ${inversionMode.title(currentLang)} · ${fingerUiText(currentLang, "Ngăn", "Frets")} $positionStart-${positionStart + 4}",
-                                            color = textColor.copy(alpha = 0.56f),
-                                            fontSize = 7.8.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                            }
-                            CompactDropdownSelector(
-                                label = fingerUiText(currentLang, "Chiều", "Pattern"),
-                                selectedKey = direction.key,
-                                selectedLabel = direction.title(currentLang),
-                                options = directionOptions,
-                                accent = seventhAccent,
-                                surfaceColor = bgColor.copy(alpha = 0.50f),
-                                textColor = textColor,
-                                modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                onSelected = { directionKey = it }
-                            )
-                            CompactDropdownSelector(
-                                label = fingerUiText(currentLang, "Giá trị nốt", "Subdivision"),
-                                selectedKey = subdivision.key,
-                                selectedLabel = subdivision.title(currentLang),
-                                options = subdivisionOptions,
-                                accent = currentAccent,
-                                surfaceColor = bgColor.copy(alpha = 0.50f),
-                                textColor = textColor,
-                                modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                onSelected = { subdivisionKey = it }
-                            )
-                            CompactDropdownSelector(
-                                label = fingerUiText(currentLang, "Thời lượng", "Chord duration"),
-                                selectedKey = beatsPerChord.toString(),
-                                selectedLabel = beatOptions.firstOrNull { it.first == beatsPerChord.toString() }?.second
-                                    ?: "$beatsPerChord",
-                                options = beatOptions,
-                                accent = rootAccent,
-                                surfaceColor = bgColor.copy(alpha = 0.50f),
-                                textColor = textColor,
-                                modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                onSelected = { beatsPerChord = it.toIntOrNull()?.coerceIn(1, 8) ?: 4 }
-                            )
-                            CompactDropdownSelector(
-                                label = fingerUiText(currentLang, "Tay gảy", "Picking"),
-                                selectedKey = pickingPattern.key,
-                                selectedLabel = pickingPattern.title(currentLang),
-                                options = pickingOptions,
-                                accent = thirdAccent,
-                                surfaceColor = bgColor.copy(alpha = 0.50f),
-                                textColor = textColor,
-                                modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                onSelected = { pickingPatternKey = it }
-                            )
-                            if (guidedLesson == null) {
-                                CompactDropdownSelector(
-                                    label = fingerUiText(currentLang, "Vị trí", "Position"),
-                                    selectedKey = positionStart.toString(),
-                                    selectedLabel = positionOptions.firstOrNull { it.first == positionStart.toString() }?.second
-                                        ?: "${positionStart}-${positionStart + 4}",
-                                    options = positionOptions,
-                                    accent = rootAccent,
-                                    surfaceColor = bgColor.copy(alpha = 0.50f),
-                                    textColor = textColor,
-                                    modifier = Modifier.fillMaxWidth().height(selectorHeight),
-                                    onSelected = { positionStart = it.toIntOrNull() ?: 5 }
+                                        .height(60.dp)
+                                )
+                                Text(
+                                    text = fingerUiText(currentLang, "Thế ${shape.key}", "${shape.key} shape"),
+                                    color = if (isSelected) accent else textColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
-
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(selectorHeight),
-                                shape = RoundedCornerShape(11.dp),
-                                colors = CardDefaults.cardColors(containerColor = bgColor.copy(alpha = 0.50f)),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxSize().padding(horizontal = 1.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    IconButton(
-                                        onClick = {
-                                            bpm = (bpm - 5f).coerceAtLeast(40f)
-                                            roundsAtCurrentBpm = 0
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Remove,
-                                            contentDescription = if (isVietnamese) "Giảm BPM" else "Decrease BPM",
-                                            tint = uiAccent,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                    }
-                                    Text(
-                                        text = "${bpm.roundToInt()} BPM",
-                                        color = textColor,
-                                        fontSize = if (compactWidth) 9.sp else 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        maxLines = 1,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    IconButton(
-                                        onClick = {
-                                            bpm = (bpm + 5f).coerceAtMost(180f)
-                                            roundsAtCurrentBpm = 0
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Add,
-                                            contentDescription = if (isVietnamese) "Tăng BPM" else "Increase BPM",
-                                            tint = uiAccent,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            HarmonySideToggleRow(
-                                icon = if (soundEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                                label = fingerUiText(currentLang, "Âm thanh", "Sound"),
-                                selected = soundEnabled,
-                                accent = uiAccent,
-                                textColor = textColor,
-                                backgroundColor = bgColor.copy(alpha = 0.50f),
-                                onClick = { soundEnabled = !soundEnabled }
-                            )
-                            HarmonySideToggleRow(
-                                icon = Icons.Default.ArrowForward,
-                                label = fingerUiText(currentLang, "Nhìn trước", "Look ahead"),
-                                selected = lookAheadEnabled,
-                                accent = rootAccent,
-                                textColor = textColor,
-                                backgroundColor = bgColor.copy(alpha = 0.50f),
-                                onClick = { lookAheadEnabled = !lookAheadEnabled }
-                            )
-                            HarmonySideToggleRow(
-                                icon = Icons.Default.Refresh,
-                                label = fingerUiText(currentLang, "Lặp lại", "Repeat"),
-                                selected = repeatEnabled,
-                                accent = chordToneAccent,
-                                textColor = textColor,
-                                backgroundColor = bgColor.copy(alpha = 0.50f),
-                                onClick = { repeatEnabled = !repeatEnabled }
-                            )
-                            HarmonySideToggleRow(
-                                icon = Icons.Default.Add,
-                                label = fingerUiText(
-                                    currentLang,
-                                    "Tăng tốc +5/3 vòng → $targetBpm",
-                                    "Speed +5/3 rounds → $targetBpm"
-                                ),
-                                selected = speedTrainerEnabled,
-                                accent = currentAccent,
-                                textColor = textColor,
-                                backgroundColor = bgColor.copy(alpha = 0.50f),
-                                onClick = { speedTrainerEnabled = !speedTrainerEnabled }
-                            )
                         }
                     }
                 }
+                if (referenceKey != tonicKey) {
+                    Text(
+                        text = fingerUiText(
+                            currentLang,
+                            "Giữ $tonicLabel làm nốt chủ (R); $referenceLabel chỉ dùng để xác định vị trí khuôn CAGED. Thay thế tay không làm đổi âm giai.",
+                            "Keep $tonicLabel as tonic (R). $referenceLabel only locates the CAGED shape; changing shapes does not change the scale."
+                        ),
+                        color = textColor.copy(alpha = 0.76f),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+        }
+    }
+}
 
-                // The transport remains fixed at the bottom, like Finger Training.
-                Card(
+/** Horizontal 3NPS chart with all seven ascending scale positions. */
+@Composable
+private fun ThreeNpsHorizontalReferenceDialog(
+    tonicKey: String,
+    scaleType: HandShapeScaleType,
+    selectedPosition: Int,
+    currentLang: String,
+    background: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    accent: Color,
+    onSelectPosition: (Int) -> Unit,
+    onClose: () -> Unit
+) {
+    val pattern = remember(tonicKey, scaleType, selectedPosition) {
+        buildThreeNotesPerStringPattern(tonicKey, scaleType, selectedPosition)
+    }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.84f).dp),
+            color = background,
+            shape = RoundedCornerShape(18.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.43f))
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${handShapeTonicLabel(tonicKey)} ${scaleType.title(currentLang)}",
+                            color = textColor,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 15.sp,
+                            maxLines = 2
+                        )
+                        Text(
+                            fingerUiText(
+                                currentLang,
+                                "3NPS · Vị trí ${selectedPosition + 1}/7 · ngăn ${pattern.startFret}–${pattern.endFret}",
+                                "3NPS · Position ${selectedPosition + 1}/7 · frets ${pattern.startFret}–${pattern.endFret}"
+                            ),
+                            color = accent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, contentDescription = null, tint = textColor)
+                    }
+                }
+                Text(
+                    text = "${scaleType.formula}  ·  ${handShapeScaleNoteNames(tonicKey, scaleType).joinToString(" – ")}",
+                    color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+                )
+                Surface(
+                    color = surfaceColor,
+                    shape = RoundedCornerShape(13.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, textColor.copy(alpha = 0.15f))
+                ) {
+                    HandShapeHorizontalFretboardCanvas(
+                        pattern = pattern,
+                        textColor = textColor,
+                        miniature = false,
+                        modifier = Modifier.fillMaxWidth().height(230.dp).padding(5.dp)
+                    )
+                }
+                Text(
+                    text = fingerUiText(
+                        currentLang,
+                        "Mỗi dây có đúng ba nốt âm giai; đi từ dây E trầm (6) đến E cao (1). Vòng tròn hiển thị bậc âm, không phải số ngón.",
+                        "Each string contains three scale tones; play from low E (6) to high E (1). Circles show scale degrees, not finger numbers."
+                    ),
+                    color = textColor.copy(alpha = 0.75f), fontSize = 11.sp
+                )
+                Text(
+                    fingerUiText(currentLang, "Chọn 7 vị trí 3NPS", "Select one of seven 3NPS positions"),
+                    color = textColor, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp
+                )
+                ThreeNpsPositionSelector(
+                    selectedPosition = selectedPosition,
+                    accent = accent,
+                    textColor = textColor,
+                    surfaceColor = surfaceColor,
+                    compact = false,
+                    onSelected = onSelectPosition
+                )
+            }
+        }
+    }
+}
+
+/** Full 24-fret reference chart with the selected CAGED range highlighted. */
+@Composable
+private fun HandShapeFullNeckDialog(
+    tonicKey: String,
+    scaleType: HandShapeScaleType,
+    selectedShape: CagedShape,
+    currentLang: String,
+    background: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    accent: Color,
+    onSelectShape: (CagedShape) -> Unit,
+    onClose: () -> Unit
+) {
+    val chartPattern = remember(tonicKey, scaleType) { buildFullNeckScalePattern(tonicKey, scaleType) }
+    val selectedWindow = remember(tonicKey, scaleType, selectedShape) {
+        handShapeScaleFretWindow(tonicKey, scaleType, selectedShape)
+    }
+    val scrollState = rememberScrollState()
+    val density = LocalDensity.current
+    LaunchedEffect(tonicKey, scaleType, selectedShape) {
+        val targetPx = with(density) { (maxOf(0, selectedWindow.first - 2) * 40).dp.roundToPx() }
+        scrollState.scrollTo(targetPx.coerceIn(0, scrollState.maxValue))
+    }
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.87f).dp
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.98f).heightIn(max = maxHeight),
+            color = background,
+            shape = RoundedCornerShape(18.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.50f))
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${handShapeTonicLabel(tonicKey)} ${scaleType.title(currentLang)}",
+                            color = textColor, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
+                            maxLines = 2
+                        )
+                        Text(
+                            text = fingerUiText(
+                                currentLang,
+                                "Toàn cần đàn 0–24 · cuộn ngang để xem vị trí",
+                                "Full neck 0–24 · scroll horizontally"
+                            ),
+                            color = textColor.copy(alpha = 0.68f), fontSize = 11.sp
+                        )
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, contentDescription = fingerUiText(currentLang, "Đóng", "Close"), tint = textColor)
+                    }
+                }
+                Text(
+                    text = "${scaleType.formula}  ·  ${handShapeScaleNoteNames(tonicKey, scaleType).joinToString(" – ")}",
+                    color = accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = fingerUiText(
+                        currentLang,
+                        "Thế ${selectedShape.key} đang chọn · ngăn ${selectedWindow.first}–${selectedWindow.last}. Vùng sáng là phần thế tham chiếu, không thay đổi nốt chủ.",
+                        "Selected ${selectedShape.key} shape · frets ${selectedWindow.first}–${selectedWindow.last}. Highlight indicates the reference position; tonic stays unchanged."
+                    ),
+                    color = textColor.copy(alpha = 0.83f),
+                    fontSize = 11.sp
+                )
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(bottomControlHeight),
-                    shape = panelShape,
-                    colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
+                        .clip(RoundedCornerShape(13.dp))
+                        .border(1.dp, textColor.copy(alpha = 0.14f), RoundedCornerShape(13.dp))
+                        .horizontalScroll(scrollState)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        HandShapeBottomStepButton(
-                            icon = Icons.Default.SkipPrevious,
-                            label = fingerUiText(currentLang, "Trước", "Previous"),
-                            textColor = textColor,
-                            surfaceColor = bgColor.copy(alpha = 0.40f),
-                            modifier = Modifier
-                                .weight(0.72f)
-                                .fillMaxHeight(),
-                            onClick = {
-                                isPlaying = false
-                                countdownValue = 0
-                                currentIndex = (currentIndex - 1).coerceAtLeast(0)
-                                hasPlaybackStarted = true
-                            }
-                        )
-
-                        Button(
-                            onClick = {
-                                when {
-                                    isPlaying -> {
-                                        isPlaying = false
-                                        countdownValue = 0
-                                    }
-                                    countdownValue > 0 -> {
-                                        countdownValue = 0
-                                    }
-                                    sequence.isNotEmpty() -> {
-                                        if (currentIndex >= sequence.lastIndex && !repeatEnabled) {
-                                            currentIndex = 0
-                                        }
-                                        countdownValue = 3
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .weight(1.38f)
-                                .fillMaxHeight(),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = currentAccent),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color(0xFF1C1D1F),
-                                modifier = Modifier.size(if (veryCompactHeight) 18.dp else 22.dp)
+                    HandShapeHorizontalFretboardCanvas(
+                        pattern = chartPattern,
+                        textColor = textColor,
+                        miniature = false,
+                        highlightRange = selectedWindow,
+                        highlightColor = accent,
+                        modifier = Modifier.width(1040.dp).height(235.dp).padding(8.dp)
+                    )
+                }
+                Text(
+                    text = fingerUiText(
+                        currentLang,
+                        "● Đỏ: nốt gốc  ·  ● Xanh: bậc 5  ·  ● Các màu khác: bậc âm",
+                        "● Red: tonic  ·  ● Teal: fifth  ·  ● Other colors: scale degrees"
+                    ),
+                    color = textColor.copy(alpha = 0.77f), fontSize = 10.sp
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    cagedShapes().forEach { shape ->
+                        val selected = shape == selectedShape
+                        Surface(
+                            modifier = Modifier.weight(1f).clickable { onSelectShape(shape) },
+                            color = if (selected) accent.copy(alpha = 0.20f) else surfaceColor,
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp, if (selected) accent else textColor.copy(alpha = 0.14f)
                             )
-                            Spacer(Modifier.width(5.dp))
+                        ) {
                             Text(
-                                text = when {
-                                    isPlaying -> fingerUiText(currentLang, "Tạm dừng", "Pause")
-                                    countdownValue > 0 -> fingerUiText(currentLang, "Hủy", "Cancel")
-                                    else -> fingerUiText(currentLang, "Bắt đầu", "Start")
-                                },
-                                color = Color(0xFF1C1D1F),
-                                fontSize = if (veryCompactHeight) 11.sp else 13.5.sp,
+                                text = shape.key,
                                 fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1
+                                fontSize = 13.sp,
+                                color = if (selected) accent else textColor,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 10.dp)
                             )
                         }
-
-                        HandShapeBottomStepButton(
-                            icon = Icons.Default.SkipNext,
-                            label = fingerUiText(currentLang, "Sau", "Next"),
-                            textColor = textColor,
-                            surfaceColor = bgColor.copy(alpha = 0.40f),
-                            modifier = Modifier
-                                .weight(0.72f)
-                                .fillMaxHeight(),
-                            onClick = {
-                                isPlaying = false
-                                countdownValue = 0
-                                if (sequence.isNotEmpty()) {
-                                    currentIndex = (currentIndex + 1).coerceAtMost(sequence.lastIndex)
-                                    hasPlaybackStarted = true
-                                }
-                            }
-                        )
                     }
                 }
             }
         }
     }
-
-    if (countdownValue > 0) {
-        PracticeCountdownOverlay(value = countdownValue, accent = uiAccent)
-    }
 }
 
+/** Standard tuning: string 1 (high E) is displayed at the top, string 6 at the bottom. */
 @Composable
-private fun HarmonySideToggleRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    selected: Boolean,
-    accent: Color,
+private fun HandShapeHorizontalFretboardCanvas(
+    pattern: HandShapePattern,
     textColor: Color,
-    backgroundColor: Color,
-    onClick: () -> Unit
-) {
-    val shape = RoundedCornerShape(10.dp)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(36.dp)
-            .clip(shape)
-            .background(if (selected) accent.copy(alpha = 0.13f) else backgroundColor)
-            .border(
-                1.dp,
-                if (selected) accent.copy(alpha = 0.40f) else textColor.copy(alpha = 0.10f),
-                shape
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (selected) accent else textColor.copy(alpha = 0.50f),
-            modifier = Modifier.size(15.dp)
-        )
-        Spacer(Modifier.width(5.dp))
-        Text(
-            text = label,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (selected) accent else textColor.copy(alpha = 0.68f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Box(
-            modifier = Modifier
-                .size(9.dp)
-                .clip(CircleShape)
-                .background(if (selected) accent else Color.Transparent)
-                .border(
-                    1.dp,
-                    if (selected) accent else textColor.copy(alpha = 0.50f),
-                    CircleShape
-                )
-        )
-    }
-}
-
-@Composable
-private fun HarmonyLegendItem(
-    label: String,
-    color: Color,
-    textColor: Color,
-    outlined: Boolean = false
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(9.dp)
-                .clip(CircleShape)
-                .background(if (outlined) Color.Transparent else color)
-                .border(1.dp, color, CircleShape)
-        )
-        Spacer(Modifier.width(3.dp))
-        Text(
-            text = label,
-            color = textColor.copy(alpha = 0.64f),
-            fontSize = 7.5.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
-    }
-}
-
-@Composable
-private fun HarmonyFretboardCanvas(
-    currentVoicing: HarmonyVoicing?,
-    nextVoicing: HarmonyVoicing?,
-    currentNote: HarmonyFretNote?,
-    nextNote: HarmonyFretNote?,
-    completedPositions: Set<Pair<Int, Int>>,
-    keyPitchClass: Int,
-    scaleIntervals: Set<Int>,
-    visibleStartFret: Int,
-    visibleEndFret: Int,
-    textColor: Color,
-    rootAccent: Color,
-    thirdAccent: Color,
-    chordToneAccent: Color,
-    seventhAccent: Color,
-    currentAccent: Color,
-    showLookAhead: Boolean,
-    pulse: Float,
-    modifier: Modifier = Modifier
+    miniature: Boolean,
+    modifier: Modifier = Modifier,
+    highlightRange: IntRange? = null,
+    highlightColor: Color = Color(0xFF22C58B)
 ) {
     val density = LocalDensity.current
-    val stringNames = mapOf(6 to "E", 5 to "A", 4 to "D", 3 to "G", 2 to "B", 1 to "e")
-    val sideLabelPx = with(density) { 22.dp.toPx() }
-    val rightPaddingPx = with(density) { 6.dp.toPx() }
-    val stringLabelHeightPx = with(density) { 21.dp.toPx() }
-    val openRowHeightPx = with(density) { 18.dp.toPx() }
-    val bottomPaddingPx = with(density) { 4.dp.toPx() }
-    val stringTextSizePx = with(density) { 8.sp.toPx() }
-    val fretTextSizePx = with(density) { 8.sp.toPx() }
-    val noteTextSizePx = with(density) { 8.2.sp.toPx() }
-
     Canvas(modifier = modifier) {
-        if (size.width <= 0f || size.height <= 0f) return@Canvas
-
-        val stringNumbers = (6 downTo 1).toList()
-        val left = sideLabelPx
-        val right = (size.width - rightPaddingPx).coerceAtLeast(left + 1f)
-        val labelY = stringLabelHeightPx * 0.55f
-        val showOpenRow = visibleStartFret <= 0
-        val boardStartFret = maxOf(1, visibleStartFret)
-        val boardEndFret = maxOf(boardStartFret, visibleEndFret)
-        val fretCells = boardEndFret - boardStartFret + 1
-        val nutY = stringLabelHeightPx + if (showOpenRow) {
-            openRowHeightPx
+        if (size.width <= 1f || size.height <= 1f) return@Canvas
+        val isOpen = pattern.startFret == 0
+        val left = with(density) { (if (miniature) 13 else 39).dp.toPx() }
+        val right = size.width - with(density) { (if (miniature) 4 else 10).dp.toPx() }
+        val top = with(density) { (if (miniature) 7 else 36).dp.toPx() }
+        val bottom = size.height - with(density) { (if (miniature) 5 else 19).dp.toPx() }
+        val usableWidth = (right - left).coerceAtLeast(1f)
+        val usableHeight = (bottom - top).coerceAtLeast(1f)
+        val stringGap = usableHeight / 5f
+        val firstFret = maxOf(1, pattern.startFret)
+        val fretCount = maxOf(1, pattern.endFret - firstFret + 1)
+        val fretGap = usableWidth / fretCount.toFloat()
+        val radius = minOf(
+            stringGap * 0.40f,
+            fretGap * 0.32f,
+            with(density) { (if (miniature) 3.7f else 13f).dp.toPx() }
+        ).coerceAtLeast(with(density) { (if (miniature) 1.8f else 5f).dp.toPx() })
+        fun yForString(stringNumber: Int): Float = top + (stringNumber - 1) * stringGap
+        fun xForFret(fret: Int): Float = if (isOpen && fret == 0) {
+            left - with(density) { (if (miniature) 6 else 19).dp.toPx() }
         } else {
-            with(density) { 3.dp.toPx() }
-        }
-        val bottom = (size.height - bottomPaddingPx).coerceAtLeast(nutY + 1f)
-        val stringSpacing = (right - left) / 5f
-        val fretSpacing = (bottom - nutY) / fretCells.toFloat()
-
-        fun xForString(stringNumber: Int): Float = left + (6 - stringNumber) * stringSpacing
-        fun yForFret(fret: Int): Float {
-            if (fret == 0 && showOpenRow) {
-                return nutY - openRowHeightPx * 0.52f
-            }
-            val safeFret = fret.coerceIn(boardStartFret, boardEndFret)
-            return nutY + (safeFret - boardStartFret + 0.5f) * fretSpacing
-        }
-        fun isVisibleFret(fret: Int): Boolean =
-            fret == 0 && showOpenRow || fret in boardStartFret..boardEndFret
-
-        fun roleColor(note: HarmonyFretNote): Color = when {
-            note.isRoot -> rootAccent
-            note.isThird -> thirdAccent
-            note.interval in 9..11 -> seventhAccent
-            note.interval in 12..15 -> Color(0xFF48C9D8) // ninth, flat ninth or sharp ninth
-            note.interval in 16..19 -> Color(0xFFA78BFA) // eleventh / sharp eleventh
-            note.interval >= 20 -> Color(0xFFF08FB2)    // thirteenth / flat thirteenth
-            else -> chordToneAccent
+            left + (fret - firstFret + 0.5f) * fretGap
         }
 
-        val neckLeft = left - stringSpacing * 0.30f
-        val neckRight = right + stringSpacing * 0.30f
-        drawRoundRect(
-            color = Color(0xFF1A1716),
-            topLeft = Offset(neckLeft, nutY),
-            size = androidx.compose.ui.geometry.Size(neckRight - neckLeft, bottom - nutY),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
-                with(density) { 9.dp.toPx() },
-                with(density) { 9.dp.toPx() }
-            )
-        )
-
-        for (cell in 0 until fretCells) {
-            val cellTop = nutY + cell * fretSpacing
-            drawRect(
-                color = if (cell % 2 == 0) Color(0xFF241D1A) else Color(0xFF1D1918),
-                topLeft = Offset(neckLeft, cellTop),
-                size = androidx.compose.ui.geometry.Size(neckRight - neckLeft, fretSpacing)
-            )
-        }
-
-        val markerFrets = setOf(3, 5, 7, 9, 12, 15, 17, 19)
-        for (fret in boardStartFret..boardEndFret) {
-            if (fret in markerFrets) {
-                val markerY = yForFret(fret)
-                val radius = minOf(with(density) { 2.8.dp.toPx() }, fretSpacing * 0.15f)
-                if (fret % 12 == 0) {
-                    drawCircle(textColor.copy(alpha = 0.28f), radius, Offset((xForString(5) + xForString(4)) / 2f, markerY))
-                    drawCircle(textColor.copy(alpha = 0.28f), radius, Offset((xForString(3) + xForString(2)) / 2f, markerY))
-                } else {
-                    drawCircle(textColor.copy(alpha = 0.24f), radius, Offset((left + right) / 2f, markerY))
-                }
+        if (highlightRange != null && !miniature) {
+            val clipStart = maxOf(firstFret, highlightRange.first)
+            val clipEnd = minOf(pattern.endFret, highlightRange.last)
+            if (clipStart <= clipEnd) {
+                drawRect(
+                    color = highlightColor.copy(alpha = 0.13f),
+                    topLeft = Offset(left + (clipStart - firstFret) * fretGap, top),
+                    size = androidx.compose.ui.geometry.Size(
+                        (clipEnd - clipStart + 1) * fretGap,
+                        usableHeight
+                    )
+                )
             }
         }
-
-        for (line in 0..fretCells) {
-            val y = nutY + line * fretSpacing
-            val isNut = showOpenRow && line == 0
+        for (stringNumber in 1..6) {
             drawLine(
-                color = if (isNut) Color(0xFFE6C785) else Color(0xFFB8BEC4).copy(alpha = 0.72f),
-                start = Offset(neckLeft, y),
-                end = Offset(neckRight, y),
-                strokeWidth = if (isNut) {
-                    with(density) { 3.5.dp.toPx() }
-                } else {
-                    with(density) { 1.dp.toPx() }
-                },
-                cap = StrokeCap.Round
+                color = textColor.copy(alpha = 0.33f),
+                start = Offset(left, yForString(stringNumber)),
+                end = Offset(right, yForString(stringNumber)),
+                strokeWidth = with(density) { (if (miniature) 0.5f else 1f).dp.toPx() }
             )
         }
-
-        stringNumbers.forEach { stringNumber ->
-            val x = xForString(stringNumber)
-            val baseWidth = when (stringNumber) {
-                6 -> 2.35f
-                5 -> 2.05f
-                4 -> 1.75f
-                3 -> 1.35f
-                2 -> 1.05f
-                else -> 0.85f
-            }
+        for (index in 0..fretCount) {
+            val x = left + index * fretGap
             drawLine(
-                color = if (stringNumber >= 4) Color(0xFFC78A4D) else Color(0xFFD5D9DE),
-                start = Offset(x, nutY),
+                color = if (index == 0 && isOpen) Color(0xFFE6E6E6) else textColor.copy(alpha = 0.26f),
+                start = Offset(x, top),
                 end = Offset(x, bottom),
-                strokeWidth = with(density) { baseWidth.dp.toPx() },
-                cap = StrokeCap.Round
+                strokeWidth = with(density) {
+                    (if (index == 0 && isOpen && !miniature) 3f else if (miniature) 0.7f else 1f).dp.toPx()
+                }
             )
         }
-
-        val stringPaint = android.graphics.Paint().apply {
+        if (!miniature) {
+            val fretPaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                textAlign = android.graphics.Paint.Align.CENTER
+                textSize = with(density) { 11.sp.toPx() }
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                color = textColor.copy(alpha = 0.70f).toArgb()
+            }
+            for (fret in firstFret..pattern.endFret) {
+                drawContext.canvas.nativeCanvas.drawText(
+                    fret.toString(),
+                    xForFret(fret),
+                    top - with(density) { 11.dp.toPx() },
+                    fretPaint
+                )
+            }
+        }
+        val labelPaint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
             textAlign = android.graphics.Paint.Align.CENTER
-            isAntiAlias = true
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            textSize = stringTextSizePx
-            color = textColor.toArgb()
+            textSize = with(density) { 11.sp.toPx() }
         }
-        val labelRadius = minOf(stringSpacing * 0.36f, with(density) { 10.5.dp.toPx() })
-        stringNumbers.forEach { stringNumber ->
-            val center = Offset(xForString(stringNumber), labelY)
-            drawCircle(textColor.copy(alpha = 0.06f), labelRadius, center)
-            drawCircle(
-                textColor.copy(alpha = 0.25f),
-                labelRadius,
-                center,
-                style = Stroke(width = with(density) { 0.8.dp.toPx() })
-            )
-            val label = "$stringNumber${stringNames[stringNumber].orEmpty()}"
-            val textY = center.y - (stringPaint.descent() + stringPaint.ascent()) / 2f
-            drawContext.canvas.nativeCanvas.drawText(label, center.x, textY, stringPaint)
-        }
-
-        val fretPaint = android.graphics.Paint().apply {
-            textAlign = android.graphics.Paint.Align.RIGHT
-            isAntiAlias = true
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            textSize = fretTextSizePx
-            color = textColor.copy(alpha = 0.62f).toArgb()
-        }
-        for (fret in boardStartFret..boardEndFret) {
-            val y = yForFret(fret) - (fretPaint.descent() + fretPaint.ascent()) / 2f
-            drawContext.canvas.nativeCanvas.drawText(
-                fret.toString(),
-                neckLeft - with(density) { 5.dp.toPx() },
-                y,
-                fretPaint
-            )
-        }
-
-        val backgroundRadius = minOf(
-            stringSpacing * 0.12f,
-            fretSpacing * 0.12f,
-            with(density) { 3.4.dp.toPx() }
-        ).coerceAtLeast(with(density) { 1.8.dp.toPx() })
-        stringNumbers.forEach { stringNumber ->
-            val openMidi = guitarOpenMidiByString.getValue(stringNumber)
-            val visibleFrets = if (showOpenRow) {
-                listOf(0) + (boardStartFret..boardEndFret).toList()
-            } else {
-                (boardStartFret..boardEndFret).toList()
+        pattern.notes.forEach { note ->
+            val cx = xForFret(note.fret)
+            val cy = yForString(note.stringNumber)
+            val degree = pattern.scaleType.degreeLabelForInterval(note.intervalFromRoot)
+            val colour = when {
+                note.isRoot -> Color(0xFFEF5559)
+                degree == "5" -> Color(0xFF2AD8BB)
+                degree == "4" -> Color(0xFF91D778)
+                else -> Color(0xFF7388A4)
             }
-            visibleFrets.forEach { fret ->
-                val interval = normalizedPitchClass(openMidi + fret - keyPitchClass)
-                if (interval in scaleIntervals) {
-                    drawCircle(
-                        color = textColor.copy(alpha = 0.10f),
-                        radius = backgroundRadius,
-                        center = Offset(xForString(stringNumber), yForFret(fret))
-                    )
-                }
+            drawCircle(colour, radius, Offset(cx, cy))
+            if (!miniature) {
+                labelPaint.color = Color(0xFF0B1423).toArgb()
+                val label = if (note.isRoot) "R" else degree
+                val centeredY = cy - (labelPaint.ascent() + labelPaint.descent()) / 2f
+                drawContext.canvas.nativeCanvas.drawText(label, cx, centeredY, labelPaint)
             }
         }
-
-        val normalRadius = minOf(
-            stringSpacing * 0.34f,
-            fretSpacing * 0.34f,
-            with(density) { 12.dp.toPx() }
-        ).coerceAtLeast(with(density) { 4.6.dp.toPx() })
-
-        if (showLookAhead && nextVoicing != null) {
-            nextVoicing.notes
-                .filter { isVisibleFret(it.fret) }
-                .forEach { note ->
-                    val center = Offset(xForString(note.stringNumber), yForFret(note.fret))
-                    drawCircle(
-                        color = Color.White.copy(alpha = 0.58f),
-                        radius = normalRadius * 0.93f,
-                        center = center,
-                        style = Stroke(width = with(density) { 1.2.dp.toPx() })
-                    )
-                }
-        }
-
-        currentVoicing?.notes
-            ?.sortedBy { it.midi }
-            ?.zipWithNext()
-            ?.forEach { (from, to) ->
-                if (isVisibleFret(from.fret) && isVisibleFret(to.fret)) {
-                    drawLine(
-                        color = roleColor(from).copy(alpha = 0.22f),
-                        start = Offset(xForString(from.stringNumber), yForFret(from.fret)),
-                        end = Offset(xForString(to.stringNumber), yForFret(to.fret)),
-                        strokeWidth = with(density) { 1.1.dp.toPx() },
-                        cap = StrokeCap.Round
-                    )
-                }
-            }
-
-        currentVoicing?.notes
-            ?.filter { isVisibleFret(it.fret) }
-            ?.forEach { note ->
-                val position = note.stringNumber to note.fret
-                val center = Offset(xForString(note.stringNumber), yForFret(note.fret))
-                val isCurrent = currentNote?.let {
-                    it.stringNumber == note.stringNumber && it.fret == note.fret
-                } == true
-                val isNextNote = nextNote?.let {
-                    it.stringNumber == note.stringNumber && it.fret == note.fret
-                } == true
-                val isCompleted = position in completedPositions
-                val baseColor = roleColor(note)
-                val radius = if (isCurrent) normalRadius * 1.12f * pulse else normalRadius
-
-                if (isCurrent) {
-                    drawCircle(currentAccent.copy(alpha = 0.18f), radius * 1.48f, center)
-                    drawCircle(currentAccent, radius, center)
-                    drawCircle(
-                        baseColor,
-                        radius,
-                        center,
-                        style = Stroke(width = with(density) { 1.7.dp.toPx() })
-                    )
-                } else {
-                    drawCircle(
-                        color = if (isCompleted) baseColor.copy(alpha = 0.52f) else baseColor.copy(alpha = 0.90f),
-                        radius = if (isCompleted) radius * 0.90f else radius,
-                        center = center
-                    )
-                    if (isNextNote) {
-                        drawCircle(
-                            Color.White.copy(alpha = 0.92f),
-                            radius * 1.08f,
-                            center,
-                            style = Stroke(width = with(density) { 1.3.dp.toPx() })
-                        )
-                    }
-                }
-
-                val paint = android.graphics.Paint().apply {
-                    textAlign = android.graphics.Paint.Align.CENTER
-                    isAntiAlias = true
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    textSize = if (isCurrent) noteTextSizePx * pulse else noteTextSizePx
-                    color = android.graphics.Color.WHITE
-                }
-                val textY = center.y - (paint.descent() + paint.ascent()) / 2f
-                drawContext.canvas.nativeCanvas.drawText(note.roleLabel, center.x, textY, paint)
-            }
     }
 }
 
 
 @Composable
-private fun PracticeCountdownOverlay(
+internal fun PracticeCountdownOverlay(
     value: Int,
     accent: Color
 ) {
@@ -6717,8 +6417,22 @@ private fun HandShapeScaleDropdown(
     onSelected: (HandShapeScaleType) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var levelKey by remember(selectedScale.key) { mutableStateOf(selectedScale.levelKey) }
     val shape = RoundedCornerShape(if (compact) 8.dp else 10.dp)
-    val groupOrder = listOf("SEVEN_NOTE", "BASIC_PENTATONIC", "MODAL_PENTATONIC", "WORLD_PENTATONIC")
+    val levelOrder = listOf("BASIC", "ADVANCED", "TRADITIONAL")
+    val configuration = LocalConfiguration.current
+    val dialogMaxHeight = (configuration.screenHeightDp * 0.82f).dp
+    val scaleListState = rememberLazyListState()
+
+    // textColor sáng nghĩa là màn hình đang ở dark mode và ngược lại.
+    // Dùng bảng màu riêng cho modal để không còn bị Material DropdownMenu
+    // tự phủ nền xám, đồng thời vẫn bảo đảm độ tương phản ở cả hai theme.
+    val isDarkUi = (textColor.red + textColor.green + textColor.blue) > 1.5f
+    val pickerBackground = if (isDarkUi) Color(0xFF101317) else Color(0xFFF8FAFC)
+    val pickerRaised = if (isDarkUi) Color(0xFF181D23) else Color(0xFFFFFFFF)
+    val pickerText = if (isDarkUi) Color(0xFFF5F7FA) else Color(0xFF17202A)
+    val pickerMuted = if (isDarkUi) Color(0xFFAEB7C2) else Color(0xFF647180)
+    val pickerBorder = if (isDarkUi) Color(0xFF2A323C) else Color(0xFFDCE2E8)
 
     Box(modifier = modifier) {
         Row(
@@ -6727,98 +6441,370 @@ private fun HandShapeScaleDropdown(
                 .clip(shape)
                 .background(surfaceColor)
                 .border(1.dp, textColor.copy(alpha = 0.10f), shape)
-                .clickable { expanded = true }
-                .padding(horizontal = if (compact) 6.dp else 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .clickable {
+                    levelKey = selectedScale.levelKey
+                    expanded = true
+                }
+                .padding(start = if (compact) 3.dp else 4.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = label,
-                    color = textColor.copy(alpha = 0.58f),
-                    fontSize = if (compact) 7.sp else 8.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            Icon(
+                imageVector = Icons.Default.ArrowDropDown,
+                contentDescription = label,
+                tint = accent,
+                modifier = Modifier.size(if (compact) 15.dp else 16.dp)
+            )
+            Text(
+                text = practiceSettingKeyword(label),
+                color = textColor.copy(alpha = 0.90f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = selectedScale.title(currentLang),
+                color = textColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End
+            )
+        }
+    }
+
+    LaunchedEffect(expanded, levelKey, selectedScale.key) {
+        if (expanded) {
+            var targetIndex = 0
+            if (levelKey == selectedScale.levelKey) {
+                var runningIndex = 0
+                handShapeScaleGroupsForLevel(levelKey).forEach { groupKey ->
+                    val groupItems = options.filter {
+                        it.levelKey == levelKey && it.groupKey == groupKey
+                    }
+                    if (groupItems.isNotEmpty()) {
+                        runningIndex += 1 // group header
+                        val selectedIndex = groupItems.indexOf(selectedScale)
+                        if (selectedIndex >= 0) {
+                            targetIndex = (runningIndex + selectedIndex - 1).coerceAtLeast(0)
+                            return@forEach
+                        }
+                        runningIndex += groupItems.size
+                    }
+                }
+            }
+            scaleListState.scrollToItem(targetIndex)
+        }
+    }
+
+    if (expanded) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { expanded = false },
+            properties = androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = true
+            )
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.93f)
+                    .heightIn(max = dialogMaxHeight)
+                    .navigationBarsPadding(),
+                shape = RoundedCornerShape(22.dp),
+                color = pickerBackground,
+                tonalElevation = 0.dp,
+                shadowElevation = 18.dp,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    accent.copy(alpha = if (isDarkUi) 0.42f else 0.30f)
                 )
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 18.dp, top = 15.dp, end = 10.dp, bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = fingerUiText(currentLang, "Chọn âm giai", "Select scale"),
+                                color = pickerText,
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "${selectedScale.title(currentLang)}  •  ${selectedScale.formula}",
+                                color = pickerMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = { expanded = false }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = fingerUiText(currentLang, "Đóng", "Close"),
+                                tint = pickerMuted,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        levelOrder.forEach { optionLevel ->
+                            val selectedLevel = optionLevel == levelKey
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(42.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { levelKey = optionLevel },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selectedLevel) accent.copy(alpha = 0.18f) else pickerRaised,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    if (selectedLevel) 1.4.dp else 1.dp,
+                                    if (selectedLevel) accent else pickerBorder
+                                ),
+                                tonalElevation = 0.dp
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = handShapeScaleLevelTitle(optionLevel, currentLang),
+                                        color = if (selectedLevel) accent else pickerMuted,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selectedLevel) FontWeight.ExtraBold else FontWeight.Bold,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = pickerBorder,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+
+                    LazyColumn(
+                        state = scaleListState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false),
+                        contentPadding = PaddingValues(
+                            start = 12.dp,
+                            end = 12.dp,
+                            top = 10.dp,
+                            bottom = 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        handShapeScaleGroupsForLevel(levelKey).forEach { groupKey ->
+                            val groupItems = options.filter {
+                                it.levelKey == levelKey && it.groupKey == groupKey
+                            }
+                            if (groupItems.isNotEmpty()) {
+                                item(key = "header_${levelKey}_$groupKey") {
+                                    Surface(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = accent.copy(alpha = if (isDarkUi) 0.10f else 0.08f),
+                                        tonalElevation = 0.dp
+                                    ) {
+                                        Text(
+                                            text = handShapeScaleGroupTitle(groupKey, currentLang),
+                                            color = accent,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                }
+
+                                items(
+                                    items = groupItems,
+                                    key = { option -> "${levelKey}_${groupKey}_${option.key}" }
+                                ) { option ->
+                                    val selected = option == selectedScale
+                                    Surface(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(13.dp))
+                                            .clickable {
+                                                expanded = false
+                                                onSelected(option)
+                                            },
+                                        shape = RoundedCornerShape(13.dp),
+                                        color = if (selected) accent.copy(alpha = 0.15f) else pickerRaised,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            if (selected) 1.3.dp else 1.dp,
+                                            if (selected) accent.copy(alpha = 0.82f) else pickerBorder
+                                        ),
+                                        tonalElevation = 0.dp
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 13.dp, vertical = 11.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(if (selected) accent else pickerMuted.copy(alpha = 0.34f))
+                                            )
+                                            Spacer(Modifier.width(11.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = option.title(currentLang),
+                                                    color = if (selected) accent else pickerText,
+                                                    fontSize = 13.5.sp,
+                                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(
+                                                    text = option.formula,
+                                                    color = if (selected) accent.copy(alpha = 0.82f) else pickerMuted,
+                                                    fontSize = 10.5.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            if (selected) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = accent,
+                                                    tonalElevation = 0.dp
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = if (isDarkUi) Color(0xFF06130F) else Color.White,
+                                                        modifier = Modifier
+                                                            .padding(5.dp)
+                                                            .size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun HandPositionModeSelector(
+    isThreeNps: Boolean,
+    isThreeNpsAvailable: Boolean,
+    currentLang: String,
+    accent: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    compact: Boolean,
+    onCaged: () -> Unit,
+    onThreeNps: () -> Unit,
+    onFullNeck: () -> Unit
+) {
+    val items = listOf(
+        Triple("CAGED", !isThreeNps, onCaged),
+        Triple("3NPS", isThreeNps, onThreeNps),
+        Triple(fingerUiText(currentLang, "Toàn cần đàn", "Full neck"), false, onFullNeck)
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth().height(if (compact) 28.dp else 33.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        items.forEachIndexed { index, (title, selected, action) ->
+            val isUnavailable = index == 1 && !isThreeNpsAvailable
+            Box(
+                modifier = Modifier
+                    .weight(if (index == 2) 1.35f else 1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (selected) accent.copy(alpha = 0.19f) else surfaceColor)
+                    .border(
+                        1.dp,
+                        if (selected) accent.copy(alpha = 0.75f) else textColor.copy(alpha = 0.15f),
+                        RoundedCornerShape(10.dp)
+                    )
+                    .clickable { action() },
+                contentAlignment = Alignment.Center
+            ) {
                 Text(
-                    text = selectedScale.title(currentLang),
-                    color = textColor,
-                    fontSize = if (compact) 8.6.sp else 10.sp,
+                    text = if (isUnavailable) "$title ·" else title,
+                    fontSize = if (compact) 9.sp else 11.sp,
+                    color = when {
+                        selected -> accent
+                        isUnavailable -> textColor.copy(alpha = 0.43f)
+                        else -> textColor.copy(alpha = 0.87f)
+                    },
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    text = selectedScale.formula,
-                    color = accent.copy(alpha = 0.88f),
-                    fontSize = if (compact) 6.3.sp else 7.2.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
-            Icon(
-                imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(if (compact) 15.dp else 18.dp)
-            )
         }
+    }
+}
 
-        androidx.compose.material3.DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(surfaceColor)
-        ) {
-            groupOrder.forEach { groupKey ->
-                val groupItems = options.filter { it.groupKey == groupKey }
-                if (groupItems.isNotEmpty()) {
-                    Text(
-                        text = handShapeScaleGroupTitle(groupKey, currentLang),
-                        color = accent,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(
-                            start = 12.dp,
-                            end = 12.dp,
-                            top = 8.dp,
-                            bottom = 3.dp
-                        )
-                    )
-                    groupItems.forEach { option ->
-                        val selected = option == selectedScale
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        text = option.title(currentLang),
-                                        color = if (selected) accent else textColor,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = option.formula,
-                                        color = if (selected) {
-                                            accent.copy(alpha = 0.78f)
-                                        } else {
-                                            textColor.copy(alpha = 0.54f)
-                                        },
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            },
-                            onClick = {
-                                expanded = false
-                                onSelected(option)
-                            }
-                        )
-                    }
-                }
+@Composable
+private fun ThreeNpsPositionSelector(
+    selectedPosition: Int,
+    accent: Color,
+    textColor: Color,
+    surfaceColor: Color,
+    compact: Boolean,
+    onSelected: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(if (compact) 25.dp else 29.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        (0..6).forEach { position ->
+            val selected = selectedPosition == position
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (selected) accent.copy(alpha = 0.19f) else surfaceColor)
+                    .border(1.dp, if (selected) accent else textColor.copy(alpha = 0.12f), RoundedCornerShape(7.dp))
+                    .clickable { onSelected(position) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "${position + 1}",
+                    color = if (selected) accent else textColor.copy(alpha = 0.74f),
+                    fontSize = if (compact) 10.sp else 12.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
             }
         }
     }
@@ -6861,10 +6847,203 @@ private fun HandShapeQuickSelector(
                 Text(
                     text = shape.key,
                     color = if (selected) accent else textColor.copy(alpha = 0.72f),
-                    fontSize = if (compact) 8.sp else 9.5.sp,
+                    fontSize = if (compact) 11.sp else 12.sp,
                     fontWeight = if (selected) FontWeight.Black else FontWeight.Bold
                 )
             }
+        }
+    }
+}
+
+// Compact player controls: show readable keywords in the narrow side panel.
+// The complete labels/options remain available in each selector's popup.
+private fun practiceSettingKeyword(label: String): String {
+    val low = label.lowercase(Locale.ROOT)
+    return when {
+        low.startsWith("bài tập") -> "Bài"
+        low.startsWith("exercise") -> "Lesson"
+        low.startsWith("hướng luyện") -> "Hướng"
+        low == "direction" -> "Way"
+        low.startsWith("tay gảy") -> "Gảy"
+        low == "picking" -> "Pick"
+        low.startsWith("ngón giữ") -> "Giữ"
+        low.startsWith("held fingers") -> "Hold"
+        low.startsWith("vị trí tay") -> "Tay"
+        low.startsWith("hand position") -> "Hand"
+        low.startsWith("vị trí cần đàn") || low.startsWith("phạm vi cần đàn") -> "Ngăn"
+        low == "fret range" -> "Frets"
+        low.startsWith("thế tay") -> "Thế"
+        low == "shape" -> "Shape"
+        low.startsWith("tông") -> "Tông"
+        low == "key" -> "Key"
+        low == "âm giai" -> "Âm giai"
+        low == "scale" -> "Scale"
+        low.startsWith("vòng mẫu") -> "Vòng"
+        low.startsWith("preset progression") -> "Preset"
+        low.startsWith("nội dung") -> "Bài"
+        low == "lesson" -> "Lesson"
+        low.startsWith("dạng kiểm tra") -> "Dạng"
+        low.startsWith("quiz type") -> "Quiz"
+        low.startsWith("chất hợp âm") -> "Loại"
+        low == "quality" -> "Type"
+        low.startsWith("thế bấm") -> "Thế"
+        low.startsWith("chord shape") -> "Shape"
+        low.startsWith("ngăn neo") -> "Ngăn"
+        low.startsWith("anchor fret") -> "Fret"
+        low.startsWith("kiểu phát") -> "Phát"
+        low.startsWith("play mode") -> "Play"
+        low.startsWith("kiểu hợp âm") -> "Kiểu"
+        low.startsWith("chord type") -> "Type"
+        low.startsWith("hợp âm ") -> "Hợp âm"
+        low.startsWith("chord ") -> "Chord"
+        low.startsWith("nốt melody") -> "Melody"
+        low.startsWith("melody note") -> "Melody"
+        low.startsWith("nhóm dây") -> "Dây"
+        low.startsWith("string set") -> "Strings"
+        low.startsWith("đảo hợp âm") -> "Đảo"
+        low.startsWith("inversion") -> "Inv."
+        low.startsWith("thời lượng") -> "Phách"
+        low.startsWith("chord duration") -> "Beats"
+        low.startsWith("vị trí") -> "Ngăn"
+        low.startsWith("position") -> "Frets"
+        else -> label
+    }
+}
+
+private fun practiceSettingValue(label: String, key: String, fullValue: String): String {
+    val low = label.lowercase(Locale.ROOT)
+    return when {
+        low.startsWith("bài tập") || low == "exercise" ->
+            fullValue.trim().takeWhile { it.isDigit() }.ifBlank { fullValue }
+        low.startsWith("hướng luyện") || low == "direction" -> when (key) {
+            "FORWARD", "ASCENDING" -> "↑"
+            "REVERSE", "DESCENDING" -> "↓"
+            "BOTH", "UP_DOWN" -> "↕"
+            else -> fullValue
+        }
+        low.startsWith("ngón giữ") || low.startsWith("held fingers") ->
+            if (key == "NONE") "–" else key
+        low.startsWith("tay gảy") || low == "picking" -> when (key) {
+            "ALTERNATE" -> "↓↑"
+            "DOWN_ONLY" -> "↓"
+            "UP_ONLY" -> "↑"
+            "SWEEP" -> "Sweep"
+            "LEGATO" -> "Legato"
+            else -> fullValue
+        }
+        low.startsWith("vị trí tay") || low.startsWith("hand position") ||
+                low.startsWith("vị trí cần đàn") || low.startsWith("phạm vi cần đàn") ||
+                low == "fret range" || low == "position" ->
+            fullValue.replace(Regex("^(Ngăn|Frets|Fret)\\s+", RegexOption.IGNORE_CASE), "")
+        low.startsWith("thế tay") || low == "shape" ->
+            fullValue.replace(Regex("^(Dạng|Shape)\\s+", RegexOption.IGNORE_CASE), "")
+        else -> fullValue
+    }
+}
+
+@Composable
+internal fun PracticeCompactToggle(
+    checked: Boolean,
+    accent: Color,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(width = 37.dp, height = 21.dp)
+            .clip(CircleShape)
+            .background(if (checked) accent else textColor.copy(alpha = 0.24f))
+            .border(1.dp, if (checked) accent else textColor.copy(alpha = 0.30f), CircleShape)
+            .padding(3.dp),
+        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .size(15.dp)
+                .clip(CircleShape)
+                .background(Color.White)
+        )
+    }
+}
+
+@Composable
+internal fun PracticeBpmStepper(
+    bpm: Int,
+    minBpm: Int,
+    maxBpm: Int,
+    accent: Color,
+    textColor: Color,
+    modifier: Modifier = Modifier,
+    subdivisionLabel: String? = null,
+    onSubdivisionClick: (() -> Unit)? = null,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit
+) {
+    Row(
+        modifier = modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        val decreaseEnabled = bpm > minBpm
+        val increaseEnabled = bpm < maxBpm
+        Box(
+            modifier = Modifier
+                .width(34.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(10.dp))
+                .background(accent.copy(alpha = if (decreaseEnabled) 0.17f else 0.07f))
+                .clickable(enabled = decreaseEnabled, onClick = onDecrease),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Remove,
+                contentDescription = "−5 BPM",
+                tint = accent.copy(alpha = if (decreaseEnabled) 1f else 0.35f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .then(if (onSubdivisionClick != null) Modifier.clickable(onClick = onSubdivisionClick) else Modifier),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "$bpm BPM",
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = textColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            if (subdivisionLabel != null) {
+                Text(
+                    text = "▾ $subdivisionLabel",
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = accent,
+                    maxLines = 1,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .width(34.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(10.dp))
+                .background(accent.copy(alpha = if (increaseEnabled) 0.17f else 0.07f))
+                .clickable(enabled = increaseEnabled, onClick = onIncrease),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "+5 BPM",
+                tint = accent.copy(alpha = if (increaseEnabled) 1f else 0.35f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }
@@ -6883,64 +7062,133 @@ private fun HandShapeSideDropdown(
     onSelected: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(if (compact) 8.dp else 10.dp)
-
+    val shape = RoundedCornerShape(10.dp)
+    val keyword = practiceSettingKeyword(label)
+    val value = practiceSettingValue(label, selectedKey, selectedLabel)
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(shape)
                 .background(surfaceColor)
-                .border(1.dp, textColor.copy(alpha = 0.10f), shape)
+                .border(1.dp, textColor.copy(alpha = 0.17f), shape)
                 .clickable { expanded = true }
-                .padding(horizontal = if (compact) 6.dp else 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                // The arrow is a leading affordance, not a trailing occupant
+                // of the value column.  Keeping it at the left frees space
+                // for a complete keyword (especially "Hướng").
+                .padding(start = 4.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = label,
-                    color = textColor.copy(alpha = 0.58f),
-                    fontSize = if (compact) 7.sp else 8.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = selectedLabel,
-                    color = textColor,
-                    fontSize = if (compact) 9.sp else 10.5.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
             Icon(
                 imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = null,
+                contentDescription = label,
                 tint = accent,
-                modifier = Modifier.size(if (compact) 15.dp else 18.dp)
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = keyword,
+                color = textColor.copy(alpha = 0.90f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = value,
+                color = textColor,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f)
             )
         }
-
         androidx.compose.material3.DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier.background(surfaceColor)
         ) {
+            Text(
+                text = label,
+                color = accent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            )
             options.forEach { (key, optionLabel) ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = {
                         Text(
                             text = optionLabel,
                             color = if (key == selectedKey) accent else textColor,
-                            fontSize = 12.sp,
-                            fontWeight = if (key == selectedKey) FontWeight.Bold else FontWeight.Medium
+                            fontSize = 14.sp,
+                            fontWeight = if (key == selectedKey) FontWeight.Bold else FontWeight.Medium,
                         )
                     },
+                    trailingIcon = if (key == selectedKey) {
+                        { Icon(Icons.Default.Check, null, tint = accent, modifier = Modifier.size(18.dp)) }
+                    } else null,
                     onClick = {
                         expanded = false
                         onSelected(key)
                     }
+                )
+            }
+        }
+    }
+}
+@Composable
+private fun HandShapeVisualModeSelector(
+    selectedMode: HandShapeVisualMode,
+    currentLang: String,
+    accent: Color,
+    harmonyAccent: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    compact: Boolean,
+    onSelected: (HandShapeVisualMode) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(if (compact) 22.dp else 25.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(surfaceColor)
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        HandShapeVisualMode.values().forEach { mode ->
+            val selected = mode == selectedMode
+            val modeAccent = if (mode == HandShapeVisualMode.HARMONIC_ROLE) {
+                harmonyAccent
+            } else {
+                accent
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(
+                        if (selected) modeAccent.copy(alpha = 0.20f) else Color.Transparent
+                    )
+                    .border(
+                        width = if (selected) 1.dp else 0.dp,
+                        color = if (selected) modeAccent.copy(alpha = 0.72f) else Color.Transparent,
+                        shape = RoundedCornerShape(7.dp)
+                    )
+                    .clickable { onSelected(mode) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = mode.title(currentLang),
+                    color = if (selected) modeAccent else textColor.copy(alpha = 0.58f),
+                    fontSize = if (compact) 9.5.sp else 10.5.sp,
+                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -6974,7 +7222,7 @@ private fun HandShapeLegendEntry(
         Text(
             text = label,
             color = textColor.copy(alpha = 0.66f),
-            fontSize = 7.8.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -6983,7 +7231,7 @@ private fun HandShapeLegendEntry(
 }
 
 @Composable
-private fun HandShapeSwitchRow(
+internal fun HandShapeSwitchRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     checked: Boolean,
@@ -6993,46 +7241,42 @@ private fun HandShapeSwitchRow(
     modifier: Modifier = Modifier,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val shortLabel = when {
+        label.startsWith("Tăng tốc") -> "Tăng tốc"
+        label.startsWith("Speed") -> "Speed"
+        else -> label
+    }
     Row(
         modifier = modifier
             .clickable { onCheckedChange(!checked) }
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
-            tint = textColor.copy(alpha = 0.72f),
-            modifier = Modifier.size(if (compact) 15.dp else 18.dp)
+            contentDescription = label,
+            tint = if (checked) accent else textColor.copy(alpha = 0.70f),
+            modifier = Modifier.size(16.dp)
         )
-        Spacer(Modifier.width(5.dp))
         Text(
-            text = label,
-            color = textColor.copy(alpha = 0.82f),
-            fontSize = if (compact) 8.5.sp else 10.sp,
+            text = shortLabel,
+            color = textColor.copy(alpha = 0.91f),
+            fontSize = 11.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        Switch(
+        PracticeCompactToggle(
             checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.size(
-                width = if (compact) 34.dp else 39.dp,
-                height = if (compact) 20.dp else 23.dp
-            ),
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = accent,
-                uncheckedThumbColor = textColor.copy(alpha = 0.62f),
-                uncheckedTrackColor = textColor.copy(alpha = 0.14f)
-            )
+            accent = accent,
+            textColor = textColor
         )
     }
 }
-
 @Composable
-private fun HandShapeBottomStepButton(
+internal fun HandShapeBottomStepButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     textColor: Color,
@@ -7077,9 +7321,14 @@ private fun HandShapeFretboardCanvas(
     currentAccent: Color,
     completedAccent: Color,
     rootAccent: Color,
-    majorThirdAccent: Color,
-    flatSeventhAccent: Color,
+    characteristicAccentPrimary: Color,
+    characteristicAccentSecondary: Color,
     scaleNoteColor: Color,
+    visualMode: HandShapeVisualMode,
+    chordToneColor: Color,
+    pentatonicToneColor: Color,
+    tensionToneColor: Color,
+    highTensionToneColor: Color,
     highlightCurrent: Boolean,
     pulse: Float,
     modifier: Modifier = Modifier
@@ -7090,6 +7339,13 @@ private fun HandShapeFretboardCanvas(
             sequence.take(currentIndex).map { it.stringNumber to it.fret }.toSet()
         } else {
             emptySet()
+        }
+    }
+    val harmonyProfile = remember(pattern.scaleType, visualMode) {
+        if (visualMode == HandShapeVisualMode.HARMONIC_ROLE) {
+            pattern.scaleType.harmonyProfile()
+        } else {
+            null
         }
     }
     val stringNames = mapOf(6 to "E", 5 to "A", 4 to "D", 3 to "G", 2 to "B", 1 to "e")
@@ -7298,15 +7554,27 @@ private fun HandShapeFretboardCanvas(
                 } == true
                 val isCompleted = position in completedPositions
 
-                val baseColor = when {
-                    note.isRoot -> rootAccent
-                    pattern.scaleType.emphasizesDominantTones &&
-                            note.intervalFromRoot == 4 -> majorThirdAccent
-                    pattern.scaleType.emphasizesDominantTones &&
-                            note.intervalFromRoot == 10 -> flatSeventhAccent
-                    else -> scaleNoteColor
+                val characteristicIndex = pattern.scaleType.characteristicIntervals
+                    .take(2)
+                    .indexOf(note.intervalFromRoot)
+                val harmonyRole = harmonyProfile?.roleForInterval(note.intervalFromRoot)
+                val baseColor = when (visualMode) {
+                    HandShapeVisualMode.HARMONIC_ROLE -> when (harmonyRole) {
+                        HandShapeHarmonyRole.CHORD_TONE -> chordToneColor
+                        HandShapeHarmonyRole.PENTATONIC_TONE -> pentatonicToneColor
+                        HandShapeHarmonyRole.TENSION_TONE -> tensionToneColor
+                        HandShapeHarmonyRole.HIGH_TENSION -> highTensionToneColor
+                        null -> scaleNoteColor
+                    }
+                    HandShapeVisualMode.SCALE_CHARACTER -> when {
+                        note.isRoot -> rootAccent
+                        characteristicIndex == 0 -> characteristicAccentPrimary
+                        characteristicIndex == 1 -> characteristicAccentSecondary
+                        else -> scaleNoteColor
+                    }
                 }
-                val isHighlightedScaleRole = baseColor != scaleNoteColor
+                val isHighlightedScaleRole = visualMode == HandShapeVisualMode.HARMONIC_ROLE ||
+                        baseColor != scaleNoteColor
 
                 when {
                     isCurrent -> {
@@ -7332,7 +7600,11 @@ private fun HandShapeFretboardCanvas(
 
                     isNext -> {
                         drawCircle(
-                            color = Color.Transparent,
+                            color = if (visualMode == HandShapeVisualMode.HARMONIC_ROLE) {
+                                baseColor.copy(alpha = 0.30f)
+                            } else {
+                                Color.Transparent
+                            },
                             radius = nextRadius,
                             center = center
                         )
@@ -7369,18 +7641,46 @@ private fun HandShapeFretboardCanvas(
                     }
                 }
 
+                if (
+                    visualMode == HandShapeVisualMode.HARMONIC_ROLE &&
+                    note.isRoot &&
+                    !isCurrent &&
+                    !isNext
+                ) {
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.82f),
+                        radius = if (isCompleted) normalRadius * 0.90f else normalRadius * 0.86f,
+                        center = center,
+                        style = Stroke(width = with(density) { 1.1.dp.toPx() })
+                    )
+                }
+
+                val label = if (visualMode == HandShapeVisualMode.HARMONIC_ROLE) {
+                    pattern.scaleType.degreeLabelForInterval(note.intervalFromRoot)
+                        .ifBlank { note.noteName }
+                } else {
+                    if (note.finger == 0) "O" else note.finger.toString()
+                }
+                val compactLabelScale = when {
+                    label.length >= 3 -> 0.72f
+                    label.length == 2 -> 0.84f
+                    else -> 1f
+                }
                 val notePaint = android.graphics.Paint().apply {
                     textAlign = android.graphics.Paint.Align.CENTER
                     isAntiAlias = true
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    textSize = if (isCurrent) noteTextSizePx * pulse else noteTextSizePx
+                    textSize = (if (isCurrent) noteTextSizePx * pulse else noteTextSizePx) * compactLabelScale
                     color = when {
                         isNext -> android.graphics.Color.WHITE
-                        isCurrent || isHighlightedScaleRole || isCompleted -> android.graphics.Color.WHITE
+                        isCurrent || isCompleted -> android.graphics.Color.WHITE
+                        visualMode == HandShapeVisualMode.HARMONIC_ROLE &&
+                                harmonyRole == HandShapeHarmonyRole.TENSION_TONE ->
+                            android.graphics.Color.rgb(45, 40, 28)
+                        isHighlightedScaleRole -> android.graphics.Color.WHITE
                         else -> android.graphics.Color.rgb(38, 40, 43)
                     }
                 }
-                val label = if (note.finger == 0) "O" else note.finger.toString()
                 val textY = center.y - (notePaint.descent() + notePaint.ascent()) / 2f
                 drawContext.canvas.nativeCanvas.drawText(label, center.x, textY, notePaint)
             }
@@ -7410,7 +7710,7 @@ private fun directionLabel(directionKey: String, lang: String): String = when (d
 }
 
 @Composable
-private fun CompactDropdownSelector(
+internal fun CompactDropdownSelector(
     label: String,
     selectedKey: String,
     selectedLabel: String,
@@ -7423,58 +7723,68 @@ private fun CompactDropdownSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(11.dp)
-
-    Box(modifier = modifier.fillMaxHeight()) {
+    Box(modifier = modifier) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(shape)
                 .background(surfaceColor)
-                .border(1.dp, textColor.copy(alpha = 0.10f), shape)
+                .border(1.dp, textColor.copy(alpha = 0.16f), shape)
                 .clickable { expanded = true }
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(start = 4.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = label.uppercase(Locale.getDefault()),
-                    color = textColor.copy(alpha = 0.45f),
-                    fontSize = 7.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-                Text(
-                    text = selectedLabel,
-                    color = accent,
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
             Icon(
                 imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = null,
+                contentDescription = label,
                 tint = accent,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = practiceSettingKeyword(label),
+                color = textColor.copy(alpha = 0.90f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = practiceSettingValue(label, selectedKey, selectedLabel),
+                color = textColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f)
             )
         }
-
         androidx.compose.material3.DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier.background(surfaceColor)
         ) {
+            Text(
+                text = label,
+                color = accent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            )
             options.forEach { (key, optionLabel) ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = {
                         Text(
                             text = optionLabel,
                             color = if (key == selectedKey) accent else textColor,
-                            fontSize = 13.sp,
-                            fontWeight = if (key == selectedKey) FontWeight.Bold else FontWeight.Medium
+                            fontSize = 13.5.sp,
+                            fontWeight = if (key == selectedKey) FontWeight.ExtraBold else FontWeight.Medium,
                         )
                     },
+                    trailingIcon = if (key == selectedKey) {
+                        { Icon(Icons.Default.Check, null, tint = accent, modifier = Modifier.size(17.dp)) }
+                    } else null,
                     onClick = {
                         expanded = false
                         onSelected(key)
@@ -7484,7 +7794,6 @@ private fun CompactDropdownSelector(
         }
     }
 }
-
 @Composable
 private fun CompactToggleButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -7562,6 +7871,8 @@ private fun FingerTrainingFretboardCanvas(
     currentIndex: Int,
     currentStep: FingerTrainingStep?,
     nextStep: FingerTrainingStep?,
+    heldPositions: List<FingerTrainingStep>,
+    anchorAccent: Color,
     visibleStartFret: Int,
     visibleEndFret: Int,
     textColor: Color,
@@ -7894,6 +8205,36 @@ private fun FingerTrainingFretboardCanvas(
             val textY = center.y - (notePaint.descent() + notePaint.ascent()) / 2f
             drawContext.canvas.nativeCanvas.drawText(finger.toString(), center.x, textY, notePaint)
         }
+
+        // Always show the planted fingers, even before Play and while paused.
+        // Their positions are separate from the played notes and do not sound.
+        heldPositions.forEach { held ->
+            if (held.fret !in safeStartFret..safeEndFret || held.stringNumber !in stringNumbers) {
+                return@forEach
+            }
+            val center = Offset(xForString(held.stringNumber), yForFret(held.fret))
+            drawCircle(
+                color = anchorAccent.copy(alpha = 0.20f),
+                radius = normalRadius * 1.40f,
+                center = center
+            )
+            drawCircle(color = anchorAccent, radius = normalRadius, center = center)
+            drawCircle(
+                color = Color.White.copy(alpha = 0.82f),
+                radius = normalRadius,
+                center = center,
+                style = Stroke(width = with(density) { 1.dp.toPx() })
+            )
+            val holdText = android.graphics.Paint().apply {
+                textAlign = android.graphics.Paint.Align.CENTER
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                textSize = noteTextSizePx
+                color = android.graphics.Color.WHITE
+            }
+            val textY = center.y - (holdText.ascent() + holdText.descent()) / 2f
+            drawContext.canvas.nativeCanvas.drawText(held.finger.toString(), center.x, textY, holdText)
+        }
     }
 }
 
@@ -7906,18 +8247,24 @@ private fun GuidedCurriculumScreen(
     textColor: Color,
     tunaGreen: Color,
     lessons: List<GuidedPracticeLesson>,
+    onOpenHandShapes: () -> Unit,
+    onOpenHarmony: () -> Unit,
     onLessonSelected: (GuidedPracticeLesson) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val activity = LocalActivity.current
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
-    var completedIds by remember { mutableStateOf(GuidedPracticeProgressStore.completedIds(context)) }
-
-    LaunchedEffect(lessons) {
-        completedIds = GuidedPracticeProgressStore.completedIds(context)
+    val roadmapPrefs = remember(context) {
+        context.getSharedPreferences("tuner_tools_guided_practice_v1", android.content.Context.MODE_PRIVATE)
     }
-
+    var selectedStage by rememberSaveable {
+        mutableIntStateOf(roadmapPrefs.getInt("selected_stage", 0).coerceIn(0, 4))
+    }
+    var showOptional by rememberSaveable { mutableStateOf(false) }
+    var completedIds by remember { mutableStateOf(GuidedPracticeProgressStore.completedIds(context)) }
+    LaunchedEffect(lessons) { completedIds = GuidedPracticeProgressStore.completedIds(context) }
+    // When switching stages, always show the core lessons first.
+    LaunchedEffect(selectedStage) { showOptional = false }
     DisposableEffect(activity) {
         val previousOrientation = activity?.requestedOrientation
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -7937,135 +8284,506 @@ private fun GuidedCurriculumScreen(
     }
     val totalUnitCount = guidedCurriculumUnitCount(enabledLessons)
     val completedCount = guidedCurriculumCompletedCount(enabledLessons, completedIds)
-    val progress = if (totalUnitCount <= 0) 0f else completedCount.toFloat() / totalUnitCount.toFloat()
+    val progress = if (totalUnitCount == 0) 0f else completedCount.toFloat() / totalUnitCount
     val harmonyAccent = Color(0xFFE85D86)
-    val borderColor = textColor.copy(alpha = 0.10f)
+    val borderColor = textColor.copy(alpha = 0.12f)
+
+    // Preserve 01-04 / 05-06 / 07-08 / 09-11 / 12-13; part 13A/B/C is one unit.
+    val stageLabels = listOf(
+        fingerUiText(currentLang, "Kỹ thuật", "Technique"),
+        fingerUiText(currentLang, "Câu chạy", "Phrasing"),
+        fingerUiText(currentLang, "Triad", "Triads"),
+        fingerUiText(currentLang, "Hòa âm", "Harmony"),
+        fingerUiText(currentLang, "Ứng dụng", "Apply")
+    )
+    val stageLessonRanges = listOf("01–04", "05–06", "07–08", "09–11", "12–13")
+    val stageTitles = listOf(
+        fingerUiText(currentLang, "Kỹ thuật ngón căn bản", "Foundational finger technique"),
+        fingerUiText(currentLang, "Phát triển câu chạy và legato", "Note sequences and legato"),
+        fingerUiText(currentLang, "Cấu tạo Triad và thế đảo", "Triads and chord inversions"),
+        fingerUiText(currentLang, "Vòng hợp âm và dẫn giọng", "Chord progressions and voice leading"),
+        fingerUiText(currentLang, "Hợp âm 7, Arpeggio và ứng dụng", "Seventh chords, arpeggios and application")
+    )
+    val stageDescriptions = listOf(
+        fingerUiText(currentLang, "Bài 01–04: Phối hợp bốn ngón, chuyển dây, độc lập ngón và Spider.", "Lessons 01–04: Four fingers, string crossing, independence and Spider."),
+        fingerUiText(currentLang, "Bài 05–06: Chuỗi ba nốt, hammer-on và pull-off; khám phá thêm ngũ cung.", "Lessons 05–06: Three-note sequences and legato; optional pentatonic practice."),
+        fingerUiText(currentLang, "Bài 07–08: Nhận biết nốt hợp âm 1–3–5 và ba thế đảo của Triad.", "Lessons 07–08: Chord tones 1–3–5 and three triad inversions."),
+        fingerUiText(currentLang, "Bài 09–11: Hợp âm trong giọng, ii–V–I và voice-leading vòng Pop.", "Lessons 09–11: Diatonic chords, ii–V–I and pop voice leading."),
+        fingerUiText(currentLang, "Bài 12–13: Hợp âm 7, guide tones và vòng quãng 4; thực hành hòa âm mở rộng.", "Lessons 12–13: Seventh chords, guide tones and the circle of fourths.")
+    )
+    val stageLessons = lessons.filter { guidedRoadmapStageForLesson(it) == selectedStage }
+    // One compact card for chapter 13; tapping it still opens its next unfinished part.
+    val visibleCoreLessons = stageLessons.filterIndexed { index, lesson ->
+        lesson.chapterKey == null || stageLessons.take(index).none { it.chapterKey == lesson.chapterKey }
+    }
+    val stageUnitTotal = guidedCurriculumUnitCount(stageLessons)
+    val stageUnitCompleted = guidedCurriculumCompletedCount(stageLessons, completedIds)
+    val stageProgress = if (stageUnitTotal == 0) 0f else stageUnitCompleted.toFloat() / stageUnitTotal
+    val stageEnabled = stageLessons.any { lesson ->
+        when (lesson.kind) {
+            GuidedLessonKind.FINGER -> instrument != "Piano"
+            GuidedLessonKind.HARMONY -> instrument == "Guitar"
+        }
+    }
+    val nextLesson = stageLessons.firstOrNull { it.id !in completedIds } ?: stageLessons.firstOrNull()
+    val stageAccent = if (selectedStage >= 2) harmonyAccent else tunaGreen
+
+    // Extras are intentionally a SEPARATE view: they must not make the core page scroll.
+    val optionalTopics: List<Pair<String, String>> = when (selectedStage) {
+        1 -> listOf(
+            fingerUiText(currentLang, "Nhận diện nốt chủ", "Find root notes") to fingerUiText(currentLang, "Chọn một tông, tìm các nốt gốc trên sáu dây.", "Choose a key and locate its roots on six strings."),
+            fingerUiText(currentLang, "Ngũ cung trưởng và thứ", "Major and minor pentatonic") to fingerUiText(currentLang, "So sánh bậc âm, nghe và chạy các nốt.", "Compare scale degrees and practise the notes."),
+            fingerUiText(currentLang, "Năm thế CAGED", "Five CAGED shapes") to fingerUiText(currentLang, "Chuyển qua C – A – G – E – D trên cùng bộ nốt.", "Move through C – A – G – E – D with the same note set.")
+        )
+        2 -> listOf(
+            fingerUiText(currentLang, "CAGED và vị trí thế tay", "CAGED and hand positions") to fingerUiText(currentLang, "Xem các khuôn nốt và vị trí trên từng vùng cần đàn.", "Explore chord shapes and fretboard positions."),
+            fingerUiText(currentLang, "3NPS và 7 mode", "3NPS and seven modes") to fingerUiText(currentLang, "Luyện ba nốt trên mỗi dây với âm giai 7 nốt.", "Practise three notes per string with seven-note scales."),
+            fingerUiText(currentLang, "Toàn cần đàn", "Full neck") to fingerUiText(currentLang, "Quan sát nốt và các vùng thế nối tiếp nhau.", "Explore connected positions along the fretboard.")
+        )
+        4 -> listOf(
+            fingerUiText(currentLang, "Passing Chord", "Passing chords") to fingerUiText(currentLang, "Trong Vòng hợp âm, nhấn + giữa hai hợp âm để nghe và chọn hợp âm chuyển.", "In Progressions, tap + between chords to preview and insert a passing chord."),
+            fingerUiText(currentLang, "Chord Melody", "Chord melody") to fingerUiText(currentLang, "Trong Hòa âm, chọn Chord Melody để ghép giai điệu vào thế hợp âm.", "In Harmony, select Chord Melody to combine melody with a chord voicing.")
+        )
+        else -> emptyList()
+    }
+    val optionalEnabled = instrument == "Guitar"
+    val optionalClick = if (selectedStage == 4) onOpenHarmony else onOpenHandShapes
+    val showingExtras = showOptional && optionalTopics.isNotEmpty()
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
+                modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
                     .padding(horizontal = 12.dp)
             ) {
                 FingerSectionTopBar(
-                    title = if (isVietnamese) "Lộ trình học có hướng dẫn" else "Guided learning path",
-                    subtitle = if (isVietnamese) "Nghe · Hiểu · Chơi · Áp dụng" else "Listen · Understand · Play · Apply",
+                    currentLang = currentLang,
+                    title = fingerUiText(currentLang, "Lộ trình học có hướng dẫn", "Guided learning path"),
+                    subtitle = fingerUiText(currentLang, "13 bài theo thứ tự · Chia thành 5 giai đoạn", "13 core lessons · 5 ordered stages"),
                     surfaceColor = surfaceColor,
                     textColor = textColor,
                     onBack = onClose
                 )
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = surfaceColor),
+                // Single-line global progress replaces the old tall progress panel.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().height(39.dp),
+                    color = surfaceColor,
+                    shape = RoundedCornerShape(12.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (isVietnamese) "Tiến độ của bạn" else "Your progress",
-                                    color = textColor,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                                Text(
-                                    text = if (isVietnamese) {
-                                        "$completedCount/$totalUnitCount bài hoàn thành · ${enabledLessons.size} phần luyện · BPM tốt nhất được lưu theo từng phần"
-                                    } else {
-                                        "$completedCount/$totalUnitCount lessons completed · ${enabledLessons.size} practice parts · best BPM saved per part"
-                                    },
-                                    color = textColor.copy(alpha = 0.58f),
-                                    fontSize = 9.5.sp,
-                                    maxLines = 2
-                                )
-                            }
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = tunaGreen.copy(alpha = 0.13f),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, tunaGreen.copy(alpha = 0.30f))
+                    Row(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        Text(
+                            fingerUiText(currentLang, "Tiến độ 13 bài chính", "13 core lessons: progress"),
+                            color = textColor,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("$completedCount/$totalUnitCount", color = textColor.copy(alpha = 0.82f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        LinearProgressIndicator(
+                            progress = progress.coerceIn(0f, 1f),
+                            modifier = Modifier.width(48.dp).height(4.dp).clip(RoundedCornerShape(50)),
+                            color = tunaGreen,
+                            trackColor = textColor.copy(alpha = 0.12f)
+                        )
+                        Text("${(progress * 100).roundToInt()}%", color = tunaGreen, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+                Spacer(Modifier.height(7.dp))
+
+                // All five stage selectors remain visible and directly tappable.
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    stageLabels.forEachIndexed { index, label ->
+                        val chosen = selectedStage == index
+                        val stageColor = if (index >= 2) harmonyAccent else tunaGreen
+                        val stagePartLessons = lessons.filter { guidedRoadmapStageForLesson(it) == index }
+                        val stageDone = stagePartLessons.isNotEmpty() &&
+                                guidedCurriculumCompletedCount(stagePartLessons, completedIds) == guidedCurriculumUnitCount(stagePartLessons)
+                        Surface(
+                            modifier = Modifier.weight(1f).height(54.dp)
+                                .clip(RoundedCornerShape(10.dp)).clickable {
+                                    selectedStage = index
+                                    showOptional = false
+                                    roadmapPrefs.edit().putInt("selected_stage", index).apply()
+                                },
+                            color = if (chosen) stageColor.copy(alpha = 0.16f) else surfaceColor,
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(if (chosen) 1.5.dp else 1.dp, if (chosen) stageColor else borderColor)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp, vertical = 4.dp),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
-                                    text = "${(progress * 100f).roundToInt()}%",
-                                    color = tunaGreen,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    stageLessonRanges[index], color = if (chosen || stageDone) stageColor else textColor.copy(alpha = 0.78f),
+                                    fontSize = 12.sp, fontWeight = FontWeight.Black,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    label, color = textColor.copy(alpha = if (chosen) 1f else 0.70f),
+                                    fontSize = 9.sp, fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
                                 )
                             }
                         }
-                        Spacer(Modifier.height(7.dp))
-                        LinearProgressIndicator(
-                            progress = progress.coerceIn(0f, 1f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(50)),
-                            color = tunaGreen,
-                            trackColor = textColor.copy(alpha = 0.08f)
-                        )
                     }
                 }
+                Spacer(Modifier.height(7.dp))
 
-                Spacer(Modifier.height(8.dp))
-
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 12.dp)
+                // A short stage summary retains the description, progress and quick-start action.
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = surfaceColor,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, stageAccent.copy(alpha = 0.42f))
                 ) {
-                    lessons.forEachIndexed { index, lesson ->
-                        val chapter = guidedPracticeChapter(lesson.chapterKey)
-                        val previousChapterKey = lessons.getOrNull(index - 1)?.chapterKey
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                fingerUiText(currentLang, "GIAI ĐOẠN ${selectedStage + 1}/5  ·  BÀI ${stageLessonRanges[selectedStage]}", "STAGE ${selectedStage + 1}/5  ·  LESSONS ${stageLessonRanges[selectedStage]}"),
+                                modifier = Modifier.weight(1f), color = stageAccent, fontSize = 9.sp,
+                                fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                            Text("$stageUnitCompleted/$stageUnitTotal", color = stageAccent, fontSize = 9.sp, fontWeight = FontWeight.Black)
+                        }
+                        Text(stageTitles[selectedStage], color = textColor, fontSize = 13.5.sp,
+                            fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(stageDescriptions[selectedStage], color = textColor.copy(alpha = 0.62f),
+                            fontSize = 9.3.sp, lineHeight = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(5.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                            LinearProgressIndicator(
+                                progress = stageProgress.coerceIn(0f, 1f),
+                                modifier = Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(50)),
+                                color = stageAccent,
+                                trackColor = textColor.copy(alpha = 0.10f)
+                            )
+                            if (stageEnabled && nextLesson != null) {
+                                Surface(
+                                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onLessonSelected(nextLesson) },
+                                    shape = RoundedCornerShape(8.dp), color = stageAccent.copy(alpha = 0.16f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            if (stageUnitCompleted == stageUnitTotal) {
+                                                fingerUiText(currentLang, "Ôn lại · Bài ${nextLesson.number}", "Review · Lesson ${nextLesson.number}")
+                                            } else {
+                                                fingerUiText(currentLang, "Tiếp tục · Bài ${nextLesson.number}", "Continue · Lesson ${nextLesson.number}")
+                                            },
+                                            color = stageAccent, fontSize = 9.5.sp, fontWeight = FontWeight.Bold,
+                                            maxLines = 1
+                                        )
+                                        Icon(Icons.Default.ArrowForward, contentDescription = null,
+                                            tint = stageAccent, modifier = Modifier.size(15.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(5.dp))
 
-                        if (chapter != null) {
-                            // Ngoài lộ trình chỉ hiển thị một thẻ Chương 13.
-                            // Danh sách 13A/13B/13C được chuyển vào bên trong màn luyện.
-                            if (chapter.key != previousChapterKey) {
-                                val chapterLessons = lessons.filter { it.chapterKey == chapter.key }
-                                item(key = "chapter_${chapter.key}") {
-                                    GuidedCurriculumChapterCard(
-                                        chapter = chapter,
-                                        lessons = chapterLessons,
-                                        currentLang = currentLang,
-                                        completedIds = completedIds,
-                                        surfaceColor = surfaceColor,
-                                        textColor = textColor,
-                                        enabled = instrument == "Guitar",
-                                        onLessonSelected = onLessonSelected
+                // No LazyColumn / verticalScroll here. The remaining height is measured and
+                // the visible stage's cards are sized to fit it. Optional topics replace the
+                // core cards instead of extending the page beyond the screen.
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    // Read the BoxWithConstraints receiver explicitly. This keeps the
+                    // responsive card sizing and prevents the IDE/lint false-positive
+                    // "BoxWithConstraints scope is not used" after splitting the file.
+                    val availableHeight = this.maxHeight
+                    val displayCount = (
+                        if (showingExtras) optionalTopics.size else visibleCoreLessons.size
+                    ).coerceAtLeast(1)
+                    val useTwoColumns = availableHeight < 270.dp && displayCount >= 3
+                    val displayRows = if (useTwoColumns) (displayCount + 1) / 2 else displayCount
+                    val rowGap = 5.dp
+                    val availableCardsHeight = (
+                        availableHeight - 32.dp - rowGap * displayRows.toFloat()
+                    ).coerceAtLeast(0.dp)
+                    val cardHeight = minOf(
+                        if (useTwoColumns) 100.dp else 79.dp,
+                        availableCardsHeight / displayRows.toFloat()
+                    )
+                    val showCardDescription = cardHeight >= 53.dp
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().height(29.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            Text(
+                                if (showingExtras) {
+                                    fingerUiText(currentLang, "THỰC HÀNH MỞ RỘNG · KHÔNG TÍNH TRONG 13 BÀI", "OPTIONAL PRACTICE · OUTSIDE THE 13 CORE LESSONS")
+                                } else {
+                                    fingerUiText(currentLang, "Bài học trong giai đoạn này", "Lessons in this stage")
+                                },
+                                color = textColor.copy(alpha = 0.85f), fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (optionalTopics.isNotEmpty()) {
+                                Surface(
+                                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showOptional = !showOptional },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = stageAccent.copy(alpha = 0.14f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, stageAccent.copy(alpha = 0.48f))
+                                ) {
+                                    Text(
+                                        if (showingExtras) fingerUiText(currentLang, "Quay lại", "Back")
+                                        else fingerUiText(currentLang, "Mở rộng", "Expand"),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        color = stageAccent, fontSize = 9.5.sp, fontWeight = FontWeight.Bold,
+                                        maxLines = 1
                                     )
                                 }
                             }
-                        } else {
-                            item(key = lesson.id) {
-                                val enabled = when (lesson.kind) {
-                                    GuidedLessonKind.FINGER -> instrument != "Piano"
-                                    GuidedLessonKind.HARMONY -> instrument == "Guitar"
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        if (useTwoColumns) {
+                            if (showingExtras) {
+                                optionalTopics.chunked(2).forEach { topicRow ->
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(rowGap)) {
+                                        topicRow.forEach { topic ->
+                                            GuidedRoadmapCompactTopicCard(
+                                                modifier = Modifier.weight(1f).height(cardHeight),
+                                                title = topic.first, description = topic.second,
+                                                surfaceColor = surfaceColor, textColor = textColor,
+                                                accent = stageAccent, enabled = optionalEnabled,
+                                                showDescription = showCardDescription, onClick = optionalClick
+                                            )
+                                        }
+                                        if (topicRow.size == 1) Spacer(Modifier.weight(1f))
+                                    }
+                                    Spacer(Modifier.height(rowGap))
                                 }
-                                GuidedCurriculumLessonCard(
-                                    lesson = lesson,
-                                    currentLang = currentLang,
-                                    surfaceColor = surfaceColor,
-                                    textColor = textColor,
-                                    accent = if (lesson.kind == GuidedLessonKind.HARMONY) {
-                                        harmonyAccent
-                                    } else {
-                                        lesson.accent
-                                    },
-                                    completed = lesson.id in completedIds,
-                                    bestBpm = GuidedPracticeProgressStore.bestBpm(context, lesson.id),
-                                    enabled = enabled,
-                                    onClick = { onLessonSelected(lesson) }
-                                )
+                            } else {
+                                visibleCoreLessons.chunked(2).forEach { lessonRow ->
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(rowGap)) {
+                                        lessonRow.forEach { lesson ->
+                                            GuidedRoadmapCompactLessonCard(
+                                                modifier = Modifier.weight(1f).height(cardHeight),
+                                                lesson = lesson, stageLessons = stageLessons, currentLang = currentLang,
+                                                surfaceColor = surfaceColor, textColor = textColor,
+                                                completedIds = completedIds, instrument = instrument,
+                                                showDescription = showCardDescription, onLessonSelected = onLessonSelected
+                                            )
+                                        }
+                                        if (lessonRow.size == 1) Spacer(Modifier.weight(1f))
+                                    }
+                                    Spacer(Modifier.height(rowGap))
+                                }
+                            }
+                        } else {
+                            if (showingExtras) {
+                                optionalTopics.forEach { topic ->
+                                    GuidedRoadmapCompactTopicCard(
+                                        modifier = Modifier.fillMaxWidth().height(cardHeight),
+                                        title = topic.first, description = topic.second,
+                                        surfaceColor = surfaceColor, textColor = textColor,
+                                        accent = stageAccent, enabled = optionalEnabled,
+                                        showDescription = showCardDescription, onClick = optionalClick
+                                    )
+                                    Spacer(Modifier.height(rowGap))
+                                }
+                            } else {
+                                visibleCoreLessons.forEach { lesson ->
+                                    GuidedRoadmapCompactLessonCard(
+                                        modifier = Modifier.fillMaxWidth().height(cardHeight),
+                                        lesson = lesson, stageLessons = stageLessons, currentLang = currentLang,
+                                        surfaceColor = surfaceColor, textColor = textColor,
+                                        completedIds = completedIds, instrument = instrument,
+                                        showDescription = showCardDescription, onLessonSelected = onLessonSelected
+                                    )
+                                    Spacer(Modifier.height(rowGap))
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun GuidedRoadmapCompactLessonCard(
+    modifier: Modifier,
+    lesson: GuidedPracticeLesson,
+    stageLessons: List<GuidedPracticeLesson>,
+    currentLang: String,
+    surfaceColor: Color,
+    textColor: Color,
+    completedIds: Set<String>,
+    instrument: String,
+    showDescription: Boolean,
+    onLessonSelected: (GuidedPracticeLesson) -> Unit
+) {
+    val chapter = guidedPracticeChapter(lesson.chapterKey)
+    val parts = if (chapter == null) listOf(lesson) else stageLessons.filter { it.chapterKey == chapter.key }
+    val selectedPart = parts.firstOrNull { it.id !in completedIds } ?: parts.first()
+    val completed = parts.all { it.id in completedIds }
+    val enabled = if (lesson.kind == GuidedLessonKind.FINGER) instrument != "Piano" else instrument == "Guitar"
+    val accent = chapter?.accent ?: lesson.accent
+    val context = LocalContext.current
+    val bestBpm = GuidedPracticeProgressStore.bestBpm(context, selectedPart.id)
+    val subtitle = if (chapter == null) {
+        if (enabled) lesson.objective(currentLang) else fingerUiText(currentLang,
+            "Nội dung này hiện chỉ hỗ trợ đúng nhạc cụ phù hợp.", "This lesson requires the supported instrument.")
+    } else chapter.description(currentLang)
+    val meta = if (chapter != null) {
+        if (completed) fingerUiText(currentLang, "Đã hoàn thành 3/3 · Nhấn để luyện lại", "Completed 3/3 · Tap to practise again")
+        else fingerUiText(currentLang,
+            "Tiếp tục ${selectedPart.number} · ${parts.count { it.id in completedIds }}/${parts.size} phần hoàn thành",
+            "Continue ${selectedPart.number} · ${parts.count { it.id in completedIds }}/${parts.size} parts completed")
+    } else {
+        buildString {
+            append(fingerUiText(currentLang, "${lesson.targetRounds} vòng · ${lesson.bpmStart}→${lesson.bpmTarget} BPM", "${lesson.targetRounds} rounds · ${lesson.bpmStart}→${lesson.bpmTarget} BPM"))
+            if (bestBpm > 0) {
+                append(" · ")
+                append(fingerUiText(currentLang, "Tốt nhất $bestBpm", "Best $bestBpm"))
+            }
+        }
+    }
+    Surface(
+        modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable(enabled = enabled) { onLessonSelected(selectedPart) },
+        shape = RoundedCornerShape(12.dp),
+        color = surfaceColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = if (completed) 0.66f else 0.30f))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize()
+                .background(Brush.horizontalGradient(listOf(accent.copy(alpha = if (enabled) 0.14f else 0.03f), Color.Transparent)))
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(31.dp), shape = RoundedCornerShape(8.dp),
+                color = accent.copy(alpha = if (enabled) 0.19f else 0.07f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(if (completed) "✓" else chapter?.number ?: lesson.number,
+                        color = accent.copy(alpha = if (enabled) 1f else 0.4f),
+                        fontSize = 11.sp, fontWeight = FontWeight.Black)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(chapter?.title(currentLang) ?: lesson.title(currentLang),
+                    color = textColor.copy(alpha = if (enabled) 1f else 0.4f),
+                    fontSize = 12.2.sp, fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (showDescription) {
+                    Text(subtitle, color = textColor.copy(alpha = if (enabled) 0.66f else 0.3f),
+                        fontSize = 9.2.sp, lineHeight = 11.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
+                Text(meta, color = accent.copy(alpha = if (enabled) 0.91f else 0.35f),
+                    fontSize = 8.6.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.width(5.dp))
+            Icon(if (enabled) Icons.Default.ArrowForward else Icons.Default.Lock,
+                contentDescription = null, tint = accent.copy(alpha = if (enabled) 0.94f else 0.35f),
+                modifier = Modifier.size(17.dp))
+        }
+    }
+}
+
+@Composable
+private fun GuidedRoadmapCompactTopicCard(
+    modifier: Modifier,
+    title: String,
+    description: String,
+    accent: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    enabled: Boolean,
+    showDescription: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(12.dp), color = surfaceColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.30f))
+    ) {
+        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 9.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = RoundedCornerShape(8.dp), color = accent.copy(alpha = 0.14f)) {
+                Text("↗", modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                    color = accent, fontSize = 15.sp, fontWeight = FontWeight.Black)
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(title, color = textColor.copy(alpha = if (enabled) 1f else 0.43f),
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (showDescription) {
+                    Text(description, color = textColor.copy(alpha = if (enabled) 0.68f else 0.32f),
+                        fontSize = 9.3.sp, lineHeight = 11.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            Icon(if (enabled) Icons.Default.ArrowForward else Icons.Default.Lock,
+                contentDescription = null, tint = accent.copy(alpha = if (enabled) 1f else 0.35f),
+                modifier = Modifier.size(17.dp))
+        }
+    }
+}
+
+@Composable
+private fun GuidedRoadmapTopicCard(
+    number: String,
+    title: String,
+    description: String,
+    accent: Color,
+    surfaceColor: Color,
+    textColor: Color,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(13.dp),
+        color = surfaceColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.30f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(shape = RoundedCornerShape(9.dp), color = accent.copy(alpha = 0.13f)) {
+                Text(number, color = accent, fontSize = 12.sp, fontWeight = FontWeight.Black,
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, color = textColor.copy(alpha = if (enabled) 1f else 0.45f),
+                    fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(3.dp))
+                Text(description, color = textColor.copy(alpha = if (enabled) 0.70f else 0.35f),
+                    fontSize = 10.5.sp, lineHeight = 14.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(if (enabled) Icons.Default.ArrowForward else Icons.Default.Lock,
+                contentDescription = null, tint = accent.copy(alpha = if (enabled) 1f else 0.35f),
+                modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -8083,7 +8801,6 @@ private fun GuidedCurriculumChapterCard(
 ) {
     if (lessons.isEmpty()) return
 
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     val completedParts = lessons.count { it.id in completedIds }
     val allCompleted = completedParts == lessons.size
     val progress = completedParts.toFloat() / lessons.size.toFloat()
@@ -8164,13 +8881,9 @@ private fun GuidedCurriculumChapterCard(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = if (allCompleted) {
-                        if (isVietnamese) "Đã hoàn thành 3/3 · Nhấn để luyện lại" else "Completed 3/3 · Tap to practise again"
+                        fingerUiText(currentLang, "Đã hoàn thành 3/3 · Nhấn để luyện lại", "Completed 3/3 · Tap to practise again")
                     } else {
-                        if (isVietnamese) {
-                            "Tiếp tục ${nextLesson.number} · $completedParts/${lessons.size} phần hoàn thành"
-                        } else {
-                            "Continue ${nextLesson.number} · $completedParts/${lessons.size} parts completed"
-                        }
+                        fingerUiText(currentLang, "Tiếp tục ${nextLesson.number} · $completedParts/${lessons.size} phần hoàn thành", "Continue ${nextLesson.number} · $completedParts/${lessons.size} parts completed")
                     },
                     color = chapter.accent.copy(alpha = if (enabled) 0.92f else 0.32f),
                     fontSize = 8.2.sp,
@@ -8223,7 +8936,6 @@ private fun GuidedCurriculumLessonCard(
     enabled: Boolean,
     onClick: () -> Unit
 ) {
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     val shape = RoundedCornerShape(15.dp)
     Card(
         modifier = Modifier
@@ -8275,9 +8987,9 @@ private fun GuidedCurriculumLessonCard(
                     )
                     Text(
                         text = if (lesson.kind == GuidedLessonKind.FINGER) {
-                            if (isVietnamese) "KỸ THUẬT" else "TECHNIQUE"
+                            fingerUiText(currentLang, "KỸ THUẬT", "TECHNIQUE")
                         } else {
-                            if (isVietnamese) "HÒA ÂM" else "HARMONY"
+                            fingerUiText(currentLang, "HÒA ÂM", "HARMONY")
                         },
                         color = accent,
                         fontSize = 7.5.sp,
@@ -8287,7 +8999,7 @@ private fun GuidedCurriculumLessonCard(
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = if (enabled) lesson.objective(currentLang) else {
-                        if (isVietnamese) "Nội dung này hiện chỉ hỗ trợ đúng nhạc cụ phù hợp." else "This lesson requires the supported instrument."
+                        fingerUiText(currentLang, "Nội dung này hiện chỉ hỗ trợ đúng nhạc cụ phù hợp.", "This lesson requires the supported instrument.")
                     },
                     color = textColor.copy(alpha = if (enabled) 0.58f else 0.30f),
                     fontSize = 9.4.sp,
@@ -8298,11 +9010,7 @@ private fun GuidedCurriculumLessonCard(
                 Spacer(Modifier.height(5.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (isVietnamese) {
-                            "${lesson.targetRounds} vòng · ${lesson.bpmStart}→${lesson.bpmTarget} BPM"
-                        } else {
-                            "${lesson.targetRounds} rounds · ${lesson.bpmStart}→${lesson.bpmTarget} BPM"
-                        },
+                        text = fingerUiText(currentLang, "${lesson.targetRounds} vòng · ${lesson.bpmStart}→${lesson.bpmTarget} BPM", "${lesson.targetRounds} rounds · ${lesson.bpmStart}→${lesson.bpmTarget} BPM"),
                         color = accent.copy(alpha = if (enabled) 0.90f else 0.35f),
                         fontSize = 8.5.sp,
                         fontWeight = FontWeight.Bold
@@ -8310,7 +9018,7 @@ private fun GuidedCurriculumLessonCard(
                     if (bestBpm > 0) {
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (isVietnamese) "Tốt nhất $bestBpm" else "Best $bestBpm",
+                            text = fingerUiText(currentLang, "Tốt nhất $bestBpm", "Best $bestBpm"),
                             color = textColor.copy(alpha = 0.50f),
                             fontSize = 8.2.sp
                         )
@@ -8329,7 +9037,7 @@ private fun GuidedCurriculumLessonCard(
 }
 
 @Composable
-private fun GuidedChapterPartSelector(
+internal fun GuidedChapterPartSelector(
     chapter: GuidedPracticeChapter,
     currentLesson: GuidedPracticeLesson,
     lessons: List<GuidedPracticeLesson>,
@@ -8342,7 +9050,6 @@ private fun GuidedChapterPartSelector(
     if (lessons.size <= 1) return
 
     val context = LocalContext.current
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     val completedIds = GuidedPracticeProgressStore.completedIds(context)
     val completedParts = lessons.count { it.id in completedIds }
     var expanded by rememberSaveable(currentLesson.id) { mutableStateOf(false) }
@@ -8366,9 +9073,16 @@ private fun GuidedChapterPartSelector(
             )
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                modifier = Modifier.padding(start = 4.dp, end = 9.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = fingerUiText(currentLang, "Chọn phần học", "Choose chapter part"),
+                    tint = currentLesson.accent,
+                    modifier = Modifier.size(if (compact) 17.dp else 20.dp)
+                )
+                Spacer(Modifier.width(3.dp))
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = currentLesson.accent.copy(alpha = 0.17f),
@@ -8391,11 +9105,7 @@ private fun GuidedChapterPartSelector(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = if (isVietnamese) {
-                            "Chương ${chapter.number} · Chọn phần học"
-                        } else {
-                            "Chapter ${chapter.number} · Choose a part"
-                        },
+                        text = fingerUiText(currentLang, "Chương ${chapter.number} · Chọn phần học", "Chapter ${chapter.number} · Choose a part"),
                         color = textColor.copy(alpha = 0.48f),
                         fontSize = if (compact) 8.sp else 9.sp,
                         lineHeight = if (compact) 11.sp else 12.sp,
@@ -8418,13 +9128,6 @@ private fun GuidedChapterPartSelector(
                     color = chapter.secondaryAccent,
                     fontSize = if (compact) 8.sp else 9.sp,
                     fontWeight = FontWeight.Black
-                )
-                Spacer(Modifier.width(5.dp))
-                Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
-                    contentDescription = if (isVietnamese) "Chọn phần học" else "Choose chapter part",
-                    tint = currentLesson.accent,
-                    modifier = Modifier.size(if (compact) 17.dp else 20.dp)
                 )
             }
         }
@@ -8457,11 +9160,11 @@ private fun GuidedChapterPartSelector(
                             Text(
                                 text = buildString {
                                     append("${lesson.targetRounds} ")
-                                    append(if (isVietnamese) "vòng" else "rounds")
+                                    append(fingerUiText(currentLang, "vòng", "rounds"))
                                     append(" · ${lesson.bpmStart}→${lesson.bpmTarget} BPM")
                                     if (bestBpm > 0) {
                                         append(" · ")
-                                        append(if (isVietnamese) "Tốt nhất" else "Best")
+                                        append(fingerUiText(currentLang, "Tốt nhất", "Best"))
                                         append(" $bestBpm")
                                     }
                                 },
@@ -8497,7 +9200,7 @@ private fun GuidedChapterPartSelector(
 }
 
 @Composable
-private fun GuidedLessonStrip(
+internal fun GuidedLessonStrip(
     lesson: GuidedPracticeLesson,
     currentLang: String,
     completedRounds: Int,
@@ -8507,7 +9210,6 @@ private fun GuidedLessonStrip(
     textColor: Color,
     compact: Boolean
 ) {
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     val target = lesson.targetRounds.coerceAtLeast(1)
     val progress = if (lessonCompleted) 1f else {
         (completedRounds.toFloat() / target.toFloat()).coerceIn(0f, 1f)
@@ -8516,15 +9218,15 @@ private fun GuidedLessonStrip(
     val detail: String
     when {
         lessonCompleted -> {
-            stageTitle = if (isVietnamese) "3 · ÁP DỤNG" else "3 · APPLY"
+            stageTitle = fingerUiText(currentLang, "3 · ÁP DỤNG", "3 · APPLY")
             detail = lesson.application(currentLang)
         }
         completedRounds <= 0 -> {
-            stageTitle = if (isVietnamese) "1 · NGHE & HIỂU" else "1 · LISTEN & UNDERSTAND"
+            stageTitle = fingerUiText(currentLang, "1 · NGHE & HIỂU", "1 · LISTEN & UNDERSTAND")
             detail = lesson.theory(currentLang)
         }
         else -> {
-            stageTitle = if (isVietnamese) "2 · CHƠI THEO NHỊP" else "2 · PLAY IN TIME"
+            stageTitle = fingerUiText(currentLang, "2 · CHƠI THEO NHỊP", "2 · PLAY IN TIME")
             detail = lesson.objective(currentLang)
         }
     }
@@ -8580,7 +9282,7 @@ private fun GuidedLessonStrip(
                 Spacer(Modifier.width(7.dp))
                 Text(
                     text = if (lessonCompleted) {
-                        if (isVietnamese) "Hoàn thành" else "Completed"
+                        fingerUiText(currentLang, "Hoàn thành", "Completed")
                     } else {
                         "$completedRounds/$target · $bpm/${lesson.bpmTarget} BPM"
                     },
@@ -8722,7 +9424,6 @@ private fun GuidedLearningEntryCard(
     compact: Boolean,
     onClick: () -> Unit
 ) {
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     val secondaryAccent = Color(0xFFFF8A50)
     val progress = if (totalCount <= 0) 0f else completedCount.toFloat() / totalCount.toFloat()
     val shape = RoundedCornerShape(if (compact) 16.dp else 19.dp)
@@ -8786,7 +9487,7 @@ private fun GuidedLearningEntryCard(
                         )
                     ) {
                         Text(
-                            text = if (isVietnamese) "LỘ TRÌNH $totalCount BÀI" else "$totalCount-LESSON PATH",
+                            text = fingerUiText(currentLang, "LỘ TRÌNH $totalCount BÀI", "$totalCount-LESSON PATH"),
                             color = accent,
                             fontSize = if (compact) 7.2.sp else 7.8.sp,
                             fontWeight = FontWeight.Black,
@@ -8796,9 +9497,9 @@ private fun GuidedLearningEntryCard(
                     Spacer(Modifier.width(6.dp))
                     Text(
                         text = if (completedCount > 0) {
-                            if (isVietnamese) "Tiếp tục" else "Continue"
+                            fingerUiText(currentLang, "Tiếp tục", "Continue")
                         } else {
-                            if (isVietnamese) "Bắt đầu" else "Start"
+                            fingerUiText(currentLang, "Bắt đầu", "Start")
                         },
                         color = secondaryAccent,
                         fontSize = if (compact) 7.5.sp else 8.2.sp,
@@ -8809,11 +9510,7 @@ private fun GuidedLearningEntryCard(
                 Spacer(Modifier.height(3.dp))
 
                 Text(
-                    text = if (isVietnamese) {
-                        "Học từng bước, có mục tiêu"
-                    } else {
-                        "Learn step by step with clear goals"
-                    },
+                    text = fingerUiText(currentLang, "Học từng bước, có mục tiêu", "Learn step by step with clear goals"),
                     color = textColor,
                     fontSize = if (compact) 13.2.sp else 14.7.sp,
                     fontWeight = FontWeight.ExtraBold,
@@ -8822,11 +9519,7 @@ private fun GuidedLearningEntryCard(
                 )
 
                 Text(
-                    text = if (isVietnamese) {
-                        "Kỹ thuật ngón  →  Hòa âm  →  Ứng dụng"
-                    } else {
-                        "Finger technique  →  Harmony  →  Application"
-                    },
+                    text = fingerUiText(currentLang, "Kỹ thuật ngón  →  Hòa âm  →  Ứng dụng", "Finger technique  →  Harmony  →  Application"),
                     color = textColor.copy(alpha = 0.60f),
                     fontSize = if (compact) 8.1.sp else 9.sp,
                     maxLines = 1,
@@ -8837,11 +9530,7 @@ private fun GuidedLearningEntryCard(
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (isVietnamese) {
-                            "Nghe  •  Hiểu  •  Chơi  •  Áp dụng"
-                        } else {
-                            "Listen  •  Understand  •  Play  •  Apply"
-                        },
+                        text = fingerUiText(currentLang, "Nghe  •  Hiểu  •  Chơi  •  Áp dụng", "Listen  •  Understand  •  Play  •  Apply"),
                         color = accent,
                         fontSize = if (compact) 7.4.sp else 8.2.sp,
                         fontWeight = FontWeight.Bold,
@@ -8879,7 +9568,6 @@ private fun FreePracticeSectionHeader(
     accent: Color,
     compact: Boolean
 ) {
-    val isVietnamese = currentLang.lowercase(Locale.ROOT).startsWith("vi")
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -8895,17 +9583,13 @@ private fun FreePracticeSectionHeader(
         Spacer(Modifier.width(6.dp))
         Column {
             Text(
-                text = if (isVietnamese) "LUYỆN TỰ DO" else "FREE PRACTICE",
+                text = fingerUiText(currentLang, "LUYỆN TỰ DO", "FREE PRACTICE"),
                 color = textColor.copy(alpha = 0.72f),
                 fontSize = if (compact) 8.3.sp else 9.sp,
                 fontWeight = FontWeight.Black
             )
             Text(
-                text = if (isVietnamese) {
-                    "Tự chọn nội dung, tông, vị trí và tốc độ"
-                } else {
-                    "Choose content, key, position and tempo"
-                },
+                text = fingerUiText(currentLang, "Tự chọn nội dung, tông, vị trí và tốc độ", "Choose content, key, position and tempo"),
                 color = textColor.copy(alpha = 0.42f),
                 fontSize = if (compact) 7.2.sp else 7.8.sp,
                 maxLines = 1,
@@ -8942,9 +9626,6 @@ private fun FingerTrainingEntryContent(
     val activity = LocalActivity.current
     val configuration = LocalConfiguration.current
     val compactHeight = configuration.screenHeightDp < 660
-    val isVietnamese = currentLang.lowercase(Locale.ROOT)
-        .substringBefore('-')
-        .substringBefore('_') == "vi"
 
     DisposableEffect(activity) {
         val previousOrientation = activity?.requestedOrientation
@@ -8959,7 +9640,7 @@ private fun FingerTrainingEntryContent(
 
     val fingerEnabled = instrument != "Piano"
     val harmonyEnabled = instrument == "Guitar"
-    val harmonyProgressionCount = remember { harmonyProgressions().size }
+    val harmonyProgressionCount = remember { harmonyProgressionCatalogSize() }
     val curriculumAccent = Color(0xFFF2B94B)
     val harmonyAccent = Color(0xFFE85D86)
     val pitchAccent = Color(0xFF6D91E8)
@@ -8988,7 +9669,8 @@ private fun FingerTrainingEntryContent(
                     .verticalScroll(rememberScrollState())
             ) {
                 FingerSectionTopBar(
-                    title = if (isVietnamese) "Luyện ngón, Hòa âm & Cao độ" else "Finger, Harmony & Pitch",
+                    currentLang = currentLang,
+                    title = fingerUiText(currentLang, "Luyện ngón, Hòa âm & Cao độ", "Finger, Harmony & Pitch"),
                     subtitle = instrument,
                     surfaceColor = surfaceColor,
                     textColor = textColor,
@@ -9011,7 +9693,7 @@ private fun FingerTrainingEntryContent(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isVietnamese) "Chọn cách học phù hợp" else "Choose how you want to learn",
+                            text = fingerUiText(currentLang, "Chọn cách học phù hợp", "Choose how you want to learn"),
                             color = textColor,
                             fontSize = if (compactHeight) 13.sp else 14.sp,
                             fontWeight = FontWeight.ExtraBold,
@@ -9020,11 +9702,7 @@ private fun FingerTrainingEntryContent(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = if (isVietnamese) {
-                                "Đi theo $guidedUnitCount bài có mục tiêu hoặc tự thiết lập buổi luyện."
-                            } else {
-                                "Follow $guidedUnitCount goal-based lessons or build your own practice session."
-                            },
+                            text = fingerUiText(currentLang, "Đi theo $guidedUnitCount bài có mục tiêu hoặc tự thiết lập buổi luyện.", "Follow $guidedUnitCount goal-based lessons or build your own practice session."),
                             color = textColor.copy(alpha = 0.52f),
                             fontSize = if (compactHeight) 8.7.sp else 9.3.sp,
                             maxLines = 1,
@@ -9078,20 +9756,16 @@ private fun FingerTrainingEntryContent(
                     ModernPracticeEntryCard(
                         modifier = Modifier.height(entryCardHeight),
                         number = "01",
-                        title = if (isVietnamese) "Luyện ngón" else "Finger training",
-                        description = if (isVietnamese) {
-                            "Chạy ngón theo 6 bài và luyện 5 thế tay CAGED trực quan trên cần đàn."
-                        } else {
-                            "Practice six finger drills and five visual CAGED positions on the fretboard."
-                        },
-                        metaLeft = if (isVietnamese) "6 bài · 5 thế tay" else "6 drills · 5 shapes",
-                        metaRight = if (isVietnamese) "Nên bắt đầu" else "Start first",
+                        title = fingerUiText(currentLang, "Luyện ngón", "Finger training"),
+                        description = fingerUiText(currentLang, "Chạy ngón theo 6 bài và luyện 5 thế tay CAGED trực quan trên cần đàn.", "Practice six finger drills and five visual CAGED positions on the fretboard."),
+                        metaLeft = fingerUiText(currentLang, "6 bài · 5 thế tay", "6 drills · 5 shapes"),
+                        metaRight = fingerUiText(currentLang, "Nên bắt đầu", "Start first"),
                         accent = tunaGreen,
                         surfaceColor = surfaceColor,
                         textColor = textColor,
                         enabled = fingerEnabled,
                         compact = compactHeight,
-                        disabledText = if (isVietnamese) "Chỉ hỗ trợ Guitar / Ukulele" else "Guitar / Ukulele only",
+                        disabledText = fingerUiText(currentLang, "Chỉ hỗ trợ Guitar / Ukulele", "Guitar / Ukulele only"),
                         preview = {
                             MiniFingerFretboardCanvas(
                                 numStrings = if (instrument == "Ukulele") 4 else 6,
@@ -9106,21 +9780,16 @@ private fun FingerTrainingEntryContent(
                     ModernPracticeEntryCard(
                         modifier = Modifier.height(entryCardHeight),
                         number = "02",
-                        title = if (isVietnamese) "Triad & Arpeggio" else "Triads & Arpeggios",
-                        description = if (isVietnamese) {
-                            "Chạy hợp âm theo ii-V-I, I-IV-V và các vòng phổ biến với dẫn giọng tự động."
-                        } else {
-                            "Run ii-V-I, I-IV-V and common progressions with automatic voice-leading."
-                        },
-                        metaLeft = if (isVietnamese) "$harmonyProgressionCount vòng · 12 tông"
-                        else "$harmonyProgressionCount loops · 12 keys",
-                        metaRight = "Voice leading",
+                        title = fingerUiText(currentLang, "Hòa âm & Chord Melody", "Harmony & Chord Melody"),
+                        description = fingerUiText(currentLang, "Luyện vòng mẫu hoặc vòng riêng, chèn Passing Chord và đặt nốt melody ở bè trên.", "Practice presets or custom loops, insert passing chords and keep melody on top."),
+                        metaLeft = fingerUiText(currentLang, "$harmonyProgressionCount vòng · 12 tông", "$harmonyProgressionCount loops · 12 keys"),
+                        metaRight = fingerUiText(currentLang, "Dẫn giọng", "Voice leading"),
                         accent = harmonyAccent,
                         surfaceColor = surfaceColor,
                         textColor = textColor,
                         enabled = harmonyEnabled,
                         compact = compactHeight,
-                        disabledText = if (isVietnamese) "Hiện hỗ trợ Guitar" else "Guitar only for now",
+                        disabledText = fingerUiText(currentLang, "Hiện hỗ trợ Guitar", "Guitar only for now"),
                         preview = {
                             MiniHarmonyProgressionCanvas(
                                 accent = harmonyAccent,
@@ -9135,14 +9804,10 @@ private fun FingerTrainingEntryContent(
                     ModernPracticeEntryCard(
                         modifier = Modifier.height(entryCardHeight),
                         number = "03",
-                        title = if (isVietnamese) "Nhận diện nốt & cao độ" else "Note & pitch recognition",
-                        description = if (isVietnamese) {
-                            "5 bước từ chơi đúng nốt, giữ nhịp đến áp dụng trực tiếp vào bài hát."
-                        } else {
-                            "Five steps from playing the right note to rhythm and song practice."
-                        },
-                        metaLeft = if (isVietnamese) "5 bước" else "5 steps",
-                        metaRight = if (isVietnamese) "Dùng mic" else "Microphone",
+                        title = fingerUiText(currentLang, "Nhận diện nốt & cao độ", "Note & pitch recognition"),
+                        description = fingerUiText(currentLang, "5 bước từ chơi đúng nốt, giữ nhịp đến áp dụng trực tiếp vào bài hát.", "Five steps from playing the right note to rhythm and song practice."),
+                        metaLeft = fingerUiText(currentLang, "5 bước", "5 steps"),
+                        metaRight = fingerUiText(currentLang, "Dùng mic", "Microphone"),
                         accent = pitchAccent,
                         surfaceColor = surfaceColor,
                         textColor = textColor,
@@ -9179,18 +9844,13 @@ private fun FingerTrainingEntryContent(
                     )
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        text = if (isVietnamese) {
-                            if (fingerEnabled) {
-                                "Người mới: mở Lộ trình học; ứng dụng sẽ tự chọn bài, nhịp và BPM phù hợp."
-                            } else {
-                                "Với Piano, bắt đầu ở Bước 1: Chơi đúng nốt."
-                            }
+                        text = if (fingerEnabled) {
+                            fingerUiText(currentLang,
+                                "Người mới: mở Lộ trình học; ứng dụng sẽ tự chọn bài, nhịp và BPM phù hợp.",
+                                "New players: open the guided path; the app selects the lesson, rhythm and BPM.")
                         } else {
-                            if (fingerEnabled) {
-                                "New players: open the guided path; the app selects the lesson, rhythm and BPM."
-                            } else {
-                                "For Piano, begin with Step 1: Play the correct note."
-                            }
+                            fingerUiText(currentLang, "Với Piano, bắt đầu ở Bước 1: Chơi đúng nốt.",
+                                "For Piano, begin with Step 1: Play the correct note.")
                         },
                         color = textColor.copy(alpha = 0.62f),
                         fontSize = if (compactHeight) 9.sp else 10.sp,
@@ -9208,6 +9868,7 @@ private fun FingerTrainingEntryContent(
 
 @Composable
 private fun FingerSectionTopBar(
+    currentLang: String,
     title: String,
     subtitle: String,
     surfaceColor: Color,
@@ -9230,7 +9891,7 @@ private fun FingerSectionTopBar(
         ) {
             Icon(
                 imageVector = Icons.Default.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = fingerUiText(currentLang, "Quay lại", "Back"),
                 tint = textColor,
                 modifier = Modifier.size(21.dp)
             )
