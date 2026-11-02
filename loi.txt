@@ -1,1 +1,48 @@
-Get-Content "C:\AudioSheetStudio\audio-sheet-studio\data\ai_diagnostics.txt" -Tail 60
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> Get-Content "C:\AudioSheetStudio\audio-sheet-studio\data\ai_diagnostics.txt" -Tail 60
+AUDIO SHEET STUDIO - AI DIAGNOSTICS
+Project: C:\AudioSheetStudio\audio-sheet-studio
+Python: 3.11.9
+Python executable: C:\AudioSheetStudio\audio-sheet-studio\.venv\Scripts\python.exe
+Platform: Windows-10-10.0.17763-SP0
+Package tensorflow: 2.15.0
+Package basic-pitch: 0.4.0
+Package numpy: 1.26.4
+Package librosa: 0.11.0
+Package music21: 10.5.2
+
+[1/4] Import TensorFlow
+WARNING:tensorflow:From C:\AudioSheetStudio\audio-sheet-studio\.venv\Lib\site-packages\keras\src\losses.py:2976: The name tf.losses.sparse_softmax_cross_entropy is deprecated. Please use tf.compat.v1.losses.sparse_softmax_cross_entropy instead.
+
+[OK] TensorFlow imported: 2.15.0
+
+[2/4] Import Basic Pitch, check model path
+WARNING:root:Coremltools is not installed. If you plan to use a CoreML Saved Model, reinstall basic-pitch with `pip install 'basic-pitch[coreml]'`
+WARNING:root:tflite-runtime is not installed. If you plan to use a TFLite Model, reinstall basic-pitch with `pip install 'basic-pitch tflite-runtime'` or `pip install 'basic-pitch[tf]'
+WARNING:root:onnxruntime is not installed. If you plan to use an ONNX Model, reinstall basic-pitch with `pip install 'basic-pitch[onnx]'`
+Basic Pitch model path: C:\AudioSheetStudio\audio-sheet-studio\.venv\Lib\site-packages\basic_pitch\saved_models\icassp_2022\nmp
+Model path exists: True
+
+[3/4] Load the actual model used by the website
+
+RESULT: FAILED - full traceback follows
+Traceback (most recent call last):
+  File "C:\AudioSheetStudio\audio-sheet-studio\scripts\diagnose_ai.py", line 108, in main
+    run_diagnostics()
+  File "C:\AudioSheetStudio\audio-sheet-studio\scripts\diagnose_ai.py", line 74, in run_diagnostics
+    model = _get_model()
+            ^^^^^^^^^^^^
+  File "C:\AudioSheetStudio\audio-sheet-studio\app\transcriber.py", line 26, in _get_model
+    from basic_pitch.inference import Model
+  File "C:\AudioSheetStudio\audio-sheet-studio\.venv\Lib\site-packages\basic_pitch\inference.py", line 67, in <module>
+    import basic_pitch.note_creation as infer
+  File "C:\AudioSheetStudio\audio-sheet-studio\.venv\Lib\site-packages\basic_pitch\note_creation.py", line 23, in <module>
+    import resampy
+  File "C:\AudioSheetStudio\audio-sheet-studio\.venv\Lib\site-packages\resampy\__init__.py", line 6, in <module>
+    from . import filters
+  File "C:\AudioSheetStudio\audio-sheet-studio\.venv\Lib\site-packages\resampy\filters.py", line 50, in <module>
+    import pkg_resources
+ModuleNotFoundError: No module named 'pkg_resources'
+PS C:\Users\Administrator>
