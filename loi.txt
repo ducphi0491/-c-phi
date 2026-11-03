@@ -1,14 +1,13 @@
-==========================================
-AudioSheet Studio - CAI AI NANG CAO (WSL2)
-==========================================
+wsl --status
+wsl -l -v
 
-[1] Pop2Piano - tao ban phoi piano B (thu nghiem)
-[2] SheetSage2 - melody va hop am (chi nghien cuu phi thuong mai)
-[3] Ca hai engine (tai du lieu rat lon)
-[Q] Thoat
 
-Chon 1, 2, 3 hoac Q: 2
-[LOI] WSL2/Ubuntu chua san sang. Mo PowerShell (Admin): wsl --install
-Khoi dong lai Windows, mo Ubuntu lan dau va chay lai file nay.
-Press any key to continue . . .
+wsl --install -d Ubuntu
+
+
+wsl -d Ubuntu
+
+
+wsl -l -v
+
 
