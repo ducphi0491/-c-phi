@@ -1,48 +1,11 @@
-wsl --status
-wsl -l -v
+Get-CimInstance Win32_OperatingSystem |
+Select-Object Caption, Version, BuildNumber, OSArchitecture
 
+Write-Host "`n===== KIEM TRA WSL ====="
+Test-Path "C:\Windows\System32\wsl.exe"
 
-wsl --install -d Ubuntu
+Write-Host "`n===== KIEM TRA TINH NANG WSL ====="
+Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux
 
-
-wsl -d Ubuntu
-
-
-wsl -l -v
-
-
-
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> wsl --status
->> wsl -l -v
-wsl : The term 'wsl' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:1 char:1
-+ wsl --status
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (wsl:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
-
-wsl : The term 'wsl' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:2 char:1
-+ wsl -l -v
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (wsl:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
-
-PS C:\Users\Administrator> wsl --install -d Ubuntu
-wsl : The term 'wsl' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
-spelling of the name, or if a path was included, verify that the path is correct and try again.
-At line:1 char:1
-+ wsl --install -d Ubuntu
-+ ~~~
-    + CategoryInfo          : ObjectNotFound: (wsl:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
-
-PS C:\Users\Administrator>
-
-
-
+Write-Host "`n===== KIEM TRA AO HOA ====="
+Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform
