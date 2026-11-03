@@ -11,3 +11,38 @@ wsl -d Ubuntu
 wsl -l -v
 
 
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> wsl --status
+>> wsl -l -v
+wsl : The term 'wsl' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ wsl --status
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (wsl:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+wsl : The term 'wsl' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:2 char:1
++ wsl -l -v
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (wsl:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS C:\Users\Administrator> wsl --install -d Ubuntu
+wsl : The term 'wsl' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ wsl --install -d Ubuntu
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (wsl:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS C:\Users\Administrator>
+
+
+
