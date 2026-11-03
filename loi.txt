@@ -1,2 +1,1 @@
-Engine THỰC TẾ: A = basic_pitch; B = heuristic; C = Basic Pitch; Hòa âm = local
-CẢNH BÁO: Gemini API lỗi, giữ hòa âm nội bộ: Gemini API error: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}
+GEMINI_MODEL=gemini-3.5-flash-lite
