@@ -1,3 +1,65 @@
-robocopy "C:\AI_Music" "C:\TunerTools\Audio\AI_Music" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:4 /TEE /LOG:"C:\TunerTools\Logs\copy_AI_Music.log"
+notepad "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
 
-Write-Host "Robocopy exit code: $LASTEXITCODE"
+
+Set WshShell = CreateObject("WScript.Shell")
+
+' Ket noi WIFI
+WshShell.Run Chr(34) & "C:\inetpub\wwwroot\AutoReconnectWIFI.bat" & Chr(34), 0
+
+' Thu muc AI Music moi
+WshShell.CurrentDirectory = "C:\TunerTools\Audio\AI_Music"
+
+' Khoi dong Python API
+WshShell.Run Chr(34) & "C:\Users\Administrator\venv311\Scripts\python.exe" & Chr(34) & " app.py", 0
+
+Set WshShell = Nothing
+
+
+
+2............
+$action = New-ScheduledTaskAction `
+    -Execute "wscript.exe" `
+    -Argument '"C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"' `
+    -WorkingDirectory "C:\TunerTools\Audio\AI_Music"
+
+Set-ScheduledTask -TaskName "AutoStart_Python_API" -Action $action
+
+
+(Get-ScheduledTask -TaskName "AutoStart_Python_API").Actions |
+Format-List Execute, Arguments, WorkingDirectory
+
+3.............
+
+$newPath = "C:\TunerTools\Audio\AI_Music"
+
+if (-not (Test-Path "$newPath\app.py")) {
+    throw "Khong tim thay app.py trong thu muc moi"
+}
+
+# Dung cac tien trinh Python dang chay app.py
+Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
+Where-Object { $_.CommandLine -match '(^|\s)app\.py(\s|$)' } |
+ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force
+}
+
+# Dong bo lan cuoi neu thu muc cu van con
+if (Test-Path "C:\AI_Music") {
+    robocopy "C:\AI_Music" $newPath /E /Z /COPY:DAT /DCOPY:DAT /XJ /XF ChayNgam.vbs /R:2 /W:2 /MT:4
+
+    if ($LASTEXITCODE -ge 8) {
+        throw "Dong bo du lieu that bai. Chua khoi dong API moi."
+    }
+}
+
+# Chay Python API tu thu muc moi
+Start-Process `
+    -FilePath "C:\Users\Administrator\venv311\Scripts\python.exe" `
+    -ArgumentList "app.py" `
+    -WorkingDirectory $newPath `
+    -WindowStyle Hidden
+4......
+Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue |
+Select-Object LocalAddress, LocalPort, OwningProcess
+
+Invoke-RestMethod "http://127.0.0.1:5000/"
