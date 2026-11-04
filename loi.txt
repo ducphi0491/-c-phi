@@ -23,3 +23,15 @@ alwaysdata.net
 cd /d C:\TunerToolsGP_Fresh
 ren drive_token.json drive_token_before_production.json
 py tt_gp_bulk.py auth
+
+
+
+
+cd /d C:\TunerToolsGP_Fresh
+py tt_gp_sections.py audit
+
+
+py tt_gp_sections.py manifest
+
+
+py tt_gp_sections.py publish --yes
