@@ -1,86 +1,42 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$source = "C:\inetpub\wwwroot\tunertools"
+$target = "C:\TunerTools\Web\tunertools"
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
-PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
->>
->> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
->> $root = "C:\TunerTools\Data\GuitarPro"
->>
->> # 1. Kiem tra cau hinh IIS
->> $config = (& $appcmd list config "Default Web Site/tab" `
->>     /section:system.webServer/security/requestFiltering | Out-String)
->>
->> if ($LASTEXITCODE -ne 0) {
->>     throw "Khong doc duoc cau hinh IIS"
->> }
->>
->> if ($config -notmatch 'allowDoubleEscaping="true"') {
->>     $backup = "TT_TAB_FIX_" + (Get-Date -Format "yyyyMMdd_HHmmss")
->>
->>     & $appcmd add backup $backup
->>
->>     if ($LASTEXITCODE -ne 0) {
->>         throw "Khong sao luu duoc IIS"
->>     }
->>
->>     & $appcmd set config "Default Web Site/tab" `
->>         /section:system.webServer/security/requestFiltering `
->>         /allowDoubleEscaping:true `
->>         /commit:apphost
->>
->>     if ($LASTEXITCODE -ne 0) {
->>         throw "Khong cap nhat duoc IIS"
->>     }
->>
->>     Write-Host "DA SUA IIS" -ForegroundColor Green
->> }
->> else {
->>     Write-Host "IIS DA DUOC CAU HINH" -ForegroundColor Green
->> }
->>
->> # 2. Tim file Guitar Pro trong thu muc co dau +
->> $testDir = Join-Path $root "+"
->>
->> if (-not (Test-Path -LiteralPath $testDir)) {
->>     throw "Khong tim thay thu muc +"
->> }
->>
->> $file = Get-ChildItem -LiteralPath $testDir -Recurse -File |
->>     Where-Object {
->>         $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx"
->>     } |
->>     Select-Object -First 1
->>
->> if (-not $file) {
->>     throw "Khong tim thay file GP de kiem tra"
->> }
->>
->> # 3. Tao URL va thu tai
->> $relative = $file.FullName.Substring($root.Length).TrimStart('\')
->>
->> $encoded = (($relative -split '\\') |
->>     ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
->>
->> $url = "https://tunertools.top/tab/$encoded"
->>
->> Write-Host "FILE EXISTS: $(Test-Path -LiteralPath $file.FullName)"
->> Write-Host "TEST URL: $url"
->>
->> $status = & curl.exe --path-as-is -sS -L -r 0-0 `
->>     -o NUL -w "%{http_code}" "$url"
->>
->> Write-Host "GP HTTP STATUS: $status" -ForegroundColor Cyan
->>
->> if ($status -eq "200" -or $status -eq "206") {
->>     Write-Host "GUITAR PRO DOWNLOAD OK" -ForegroundColor Green
->> }
->> else {
->>     Write-Host "CAN KIEM TRA TIEP LOI HTTP $status" -ForegroundColor Yellow
->> }
->>
-IIS DA DUOC CAU HINH
-FILE EXISTS: True
-TEST URL: https://tunertools.top/tab/%2B/%2Bcaro/%2Bcaro%20-%20Todo%20Es%20Por%20Nada.gp4
-GP HTTP STATUS: 206
-GUITAR PRO DOWNLOAD OK
-PS C:\Users\Administrator>
+if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+    throw "Khong tim thay website goc."
+}
+
+New-Item -ItemType Directory -Path $target -Force | Out-Null
+
+Write-Host "`n=== DONG BO WEBSITE ===" -ForegroundColor Cyan
+
+& robocopy.exe $source $target /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
+
+if ($LASTEXITCODE -ge 8) {
+    throw "Robocopy gap loi."
+}
+
+Write-Host "`n=== KIEM TRA SO FILE ===" -ForegroundColor Cyan
+
+$sourceCount = (Get-ChildItem $source -Recurse -File | Measure-Object).Count
+$targetCount = (Get-ChildItem $target -Recurse -File | Measure-Object).Count
+
+Write-Host "SOURCE FILES: $sourceCount"
+Write-Host "TARGET FILES: $targetCount"
+
+Write-Host "`n=== IIS SITES ===" -ForegroundColor Cyan
+& $appcmd list sites
+
+Write-Host "`n=== IIS APPLICATIONS ===" -ForegroundColor Cyan
+& $appcmd list apps
+
+Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
+& $appcmd list vdirs
+
+Write-Host "`n=== WEBSITE FOLDERS ===" -ForegroundColor Cyan
+
+Get-ChildItem -LiteralPath $target -Directory |
+    Select-Object Name |
+    Format-Table -AutoSize
+
+Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
