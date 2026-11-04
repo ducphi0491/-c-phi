@@ -1,59 +1,83 @@
 $ErrorActionPreference = "Stop"
 
-$live = "C:\inetpub\wwwroot\api_gp_search.php"
-$newApi = "C:\TunerTools\Web\API\api_gp_search.php"
+$live = "C:\inetpub\wwwroot\api_songs.php"
+$newApi = "C:\TunerTools\Web\API\api_songs.php"
 $backupDir = "C:\TunerTools\Backups"
+$phpExe = "C:\php\php.exe"
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
 New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
 if (-not (Test-Path -LiteralPath $live -PathType Leaf)) {
-    throw "Thieu PHP dang hoat dong."
+    throw "Thieu PHP goc."
 }
 
 if (-not (Test-Path -LiteralPath $newApi -PathType Leaf)) {
-    throw "Thieu PHP tai thu muc moi."
+    throw "Thieu PHP moi."
 }
 
-function Test-GpApi {
-    foreach ($profile in @("fluidr3", "musescore")) {
-        $url = "http://127.0.0.1/api_gp_search.php?action=soundfont_info&profile=$profile"
-
-        $response = & curl.exe -fsS --max-time 30 `
-            -H "Host: tunertools.top" "$url"
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "HTTP API failed: $profile"
-        }
-
-        $json = ($response -join "`n") | ConvertFrom-Json
-
-        if ($json.success -ne $true -or
-            -not $json.data.file_name) {
-            throw "API response invalid: $profile"
-        }
-
-        Write-Host "API OK: $profile" -ForegroundColor Green
-    }
-}
-
-# Kiem tra PHP moi
-& "C:\php\php.exe" -l $newApi
+# Kiem tra cu phap PHP moi
+& $phpExe -l $newApi
 
 if ($LASTEXITCODE -ne 0) {
     throw "PHP moi co loi cu phap."
 }
 
-# Kiem tra truoc khi chuyen
+# Kiem tra API bang action khong hop le (khong ghi du lieu)
+function Test-SongsApi {
+    $url = "http://127.0.0.1/api_songs.php?action=__tt_migration_check"
+    $body = Join-Path $backupDir "__songs_probe_$stamp.tmp"
+
+    try {
+        $status = (& curl.exe -sS --max-time 30 `
+            -H "Host: tunertools.top" `
+            -H "Cache-Control: no-cache" `
+            -o $body -w "%{http_code}" `
+            "$url" | Out-String).Trim()
+
+        if ($LASTEXITCODE -ne 0 -or
+            $status -notmatch '^\d{3}$') {
+            throw "Khong ket noi duoc API."
+        }
+
+        $isJson = $false
+
+        try {
+            $content = [System.IO.File]::ReadAllText($body)
+            $null = $content | ConvertFrom-Json -ErrorAction Stop
+            $isJson = $true
+        }
+        catch {
+            $isJson = $false
+        }
+
+        return [PSCustomObject]@{
+            Status = $status
+            IsJson = $isJson
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $body) {
+            Remove-Item -LiteralPath $body -Force
+        }
+    }
+}
+
 Write-Host "`n=== BEFORE ===" -ForegroundColor Cyan
-Test-GpApi
 
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$before = Test-SongsApi
+$before | Format-Table -AutoSize
 
-$backup = Join-Path $backupDir "api_gp_search_live_$stamp.php.bak"
-$stage = Join-Path $backupDir "api_gp_search_wrapper_$stamp.tmp"
-$rollbackOld = Join-Path $backupDir "api_gp_search_failed_wrapper_$stamp.bak"
+if ($before.Status -match '^5' -or -not $before.IsJson) {
+    throw "API goc chua dat dieu kien kiem tra. Chua chuyen."
+}
 
-$wrapper = "<?php`r`nrequire 'C:/TunerTools/Web/API/api_gp_search.php';`r`n"
+# Sao luu va tao wrapper
+$backup = Join-Path $backupDir "api_songs_live_$stamp.php.bak"
+$stage = Join-Path $backupDir "api_songs_wrapper_$stamp.tmp"
+$failedWrapper = Join-Path $backupDir "api_songs_failed_$stamp.bak"
+
+$wrapper = "<?php`r`nrequire 'C:/TunerTools/Web/API/api_songs.php';`r`n"
 
 [System.IO.File]::WriteAllText(
     $stage,
@@ -64,21 +88,27 @@ $wrapper = "<?php`r`nrequire 'C:/TunerTools/Web/API/api_gp_search.php';`r`n"
 $switched = $false
 
 try {
-    # Thay PHP bang wrapper va luu ban goc
     [System.IO.File]::Replace($stage, $live, $backup)
     $switched = $true
 
-    & "C:\php\php.exe" -l $live
+    & $phpExe -l $live
 
     if ($LASTEXITCODE -ne 0) {
-        throw "PHP wrapper syntax error."
+        throw "Wrapper co loi cu phap."
     }
 
     Write-Host "`n=== AFTER ===" -ForegroundColor Cyan
-    Test-GpApi
+
+    $after = Test-SongsApi
+    $after | Format-Table -AutoSize
+
+    if ($after.Status -ne $before.Status -or
+        $after.IsJson -ne $before.IsJson) {
+        throw "API moi tra ve ket qua kiem tra khac API goc."
+    }
 
     Write-Host ""
-    Write-Host "API_GP_SEARCH CHUYEN THANH CONG" -ForegroundColor Green
+    Write-Host "API_SONGS CHUYEN THANH CONG" -ForegroundColor Green
     Write-Host "Main PHP: $newApi"
     Write-Host "Backup: $backup"
 }
@@ -91,7 +121,7 @@ catch {
         [System.IO.File]::Replace(
             $stage,
             $live,
-            $rollbackOld
+            $failedWrapper
         )
 
         Write-Host "DA KHOI PHUC PHP GOC" -ForegroundColor Yellow
