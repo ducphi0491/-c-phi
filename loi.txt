@@ -1,32 +1,22 @@
-PS C:\Users\Administrator> $source = "C:\inetpub\wwwroot"
->> $target = "C:\TunerTools\Audio\SoundFonts"
->>
->> New-Item -ItemType Directory -Path $target -Force | Out-Null
->>
->> $files = @(
->>     "MuseScore_General.sf3",
->>     "FluidR3_GM.sf2"
->> )
->>
->> foreach ($file in $files) {
->>     $src = Join-Path $source $file
->>     $dst = Join-Path $target $file
->>
->>     Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
->>
->>     [PSCustomObject]@{
->>         File = $file
->>         Identical = (
->>             (Get-FileHash $src).Hash -eq
->>             (Get-FileHash $dst).Hash
->>         )
->>     }
->> }
+$root = "C:\inetpub\wwwroot"
 
-File                  Identical
-----                  ---------
-MuseScore_General.sf3      True
-FluidR3_GM.sf2             True
+$files = @(
+    Get-ChildItem $root -File |
+    Where-Object { $_.Extension -in ".php", ".config" }
 
+    Get-ChildItem "$root\tunertools" -Recurse -File |
+    Where-Object { $_.Extension -in ".php", ".js", ".json", ".config" }
+)
 
-PS C:\Users\Administrator>
+$patterns = @(
+    'C:\inetpub\wwwroot',
+    'tab/',
+    'MuseScore_General.sf3',
+    'FluidR3_GM.sf2'
+)
+
+$files |
+Select-String -SimpleMatch -Pattern $patterns |
+Select-Object Path, LineNumber, Pattern |
+Sort-Object Path, LineNumber |
+Format-Table -AutoSize
