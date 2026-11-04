@@ -1,16 +1,72 @@
-Get-ScheduledTask -TaskName "AutoStart_Python_API" |
-Select-Object -ExpandProperty Actions |
-Format-List Execute, Arguments, WorkingDirectory
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> & "$env:windir\System32\inetsrv\appcmd.exe" list vdir
+VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
+PS C:\Users\Administrator> Get-ScheduledTask |
+>> Where-Object {
+>>     $task = $_
+>>     $task.Actions | Where-Object {
+>>         ($_.Execute + " " + $_.Arguments + " " + $_.WorkingDirectory) -match "TunerToolsGP_Fresh|AI_Music|tunertools"
+>>     }
+>> } |
+>> Select-Object TaskName, TaskPath, State
+
+TaskName             TaskPath State
+--------             -------- -----
+AutoStart_Python_API \        Ready
+
+
+PS C:\Users\Administrator> Get-ScheduledTask -TaskName "AutoStart_Python_API" |
+>> Select-Object -ExpandProperty Actions |
+>> Format-List Execute, Arguments, WorkingDirectory
+
+
+Execute          : wscript.exe
+Arguments        : "C:\AI_Music\ChayNgam.vbs"
+WorkingDirectory : C:\AI_Music\
 
 
 
-Get-ScheduledTaskInfo -TaskName "AutoStart_Python_API" |
-Format-List LastRunTime, LastTaskResult, NextRunTime
+PS C:\Users\Administrator>
+>> Get-ScheduledTaskInfo -TaskName "AutoStart_Python_API" |
+>> Format-List LastRunTime, LastTaskResult, NextRunTime
+>>
 
 
-Get-CimInstance Win32_Process |
-Where-Object {
-    $_.Name -match "python|php|cloudflared"
-} |
-Select-Object Name, ProcessId, CommandLine |
-Format-List
+LastRunTime    : 23-10-2026 18:30:30
+LastTaskResult : 0
+NextRunTime    :
+
+
+
+PS C:\Users\Administrator>
+>> Get-CimInstance Win32_Process |
+>> Where-Object {
+>>     $_.Name -match "python|php|cloudflared"
+>> } |
+>> Select-Object Name, ProcessId, CommandLine |
+>> Format-List
+
+
+Name        : cloudflared.exe
+ProcessId   : 8596
+CommandLine : C:\Cloudflared\cloudflared.exe tunnel run --token eyJhIjoiOTRhMTNlOWM3MTA2YTllYTc3YzRhNmE5M2M5OWZmMjIiLCJ
+              0IjoiYmJkNTUxYmYtNGM1ZC00NjBiLTg5M2YtZjFlMzI2MjkwZDhlIiwicyI6IllqWXdOR0kwTXpZdFlqWXpOQzAwWlRnekxXSm1aakl0
+              WkRCaVpHRm1NREV4WVRBeSJ9
+
+Name        : python.exe
+ProcessId   : 2840
+CommandLine : python  app.py
+
+Name        : python.exe
+ProcessId   : 9516
+CommandLine : "C:\Program Files\Python311\python.exe" app.py
+
+Name        : php-cgi.exe
+ProcessId   : 2248
+CommandLine : "C:\php\php-cgi.exe"
+
+
+
+PS C:\Users\Administrator>
