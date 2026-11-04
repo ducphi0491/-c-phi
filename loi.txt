@@ -1,86 +1,27 @@
-$ErrorActionPreference = "Stop"
+$file = "C:\inetpub\wwwroot\api_songs.php"
 
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
-$folder = "C:\TunerTools\Web\tunertools\app-guides"
+$patterns = @(
+    '__DIR__',
+    '__FILE__',
+    'DOCUMENT_ROOT',
+    'SCRIPT_FILENAME',
+    'require',
+    'include',
+    'chdir(',
+    'C:\inetpub\wwwroot'
+)
 
-if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
-    throw "Khong tim thay thu muc app-guides."
-}
+Select-String -LiteralPath $file -SimpleMatch -Pattern $patterns |
+ForEach-Object {
+    $line = $_.Line.Trim()
 
-# Kiem tra Virtual Directory chua ton tai
-$vdirs = & $appcmd list vdirs | Out-String
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong doc duoc cau hinh IIS."
-}
-
-if ($vdirs -match 'VDIR "Default Web Site/app-guides"') {
-    throw "Virtual Directory /app-guides da ton tai."
-}
-
-# Tim mot hinh anh thuc te de kiem tra
-$sample = Get-ChildItem -LiteralPath $folder -Recurse -File |
-    Where-Object {
-        $_.Extension -in ".jpg", ".jpeg", ".png"
-    } |
-    Select-Object -First 1
-
-if (-not $sample) {
-    throw "Khong tim thay anh de kiem tra."
-}
-
-$relative = $sample.FullName.Substring($folder.Length).TrimStart('\')
-
-$encoded = (($relative -split '\\') |
-    ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-
-$url = "http://127.0.0.1/app-guides/$encoded"
-
-# Sao luu IIS
-$backup = "TT_GUIDES_" + (Get-Date -Format "yyyyMMdd_HHmmss")
-
-& $appcmd add backup $backup
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong sao luu duoc IIS."
-}
-
-$created = $false
-
-try {
-    # Tao Virtual Directory
-    & $appcmd add vdir `
-        '/app.name:Default Web Site/' `
-        '/path:/app-guides' `
-        "/physicalPath:$folder"
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong tao duoc Virtual Directory."
+    if ($line -match '(?i)password|token|secret|api.?key|authorization|private.?key') {
+        $line = "[DA AN NOI DUNG NHAY CAM]"
     }
 
-    $created = $true
-
-    # Kiem tra HTTP
-    $status = (& curl.exe --path-as-is -sS -L `
-        --max-time 30 -r 0-0 -o NUL `
-        -H "Host: tunertools.top" `
-        -w "%{http_code}" "$url" | Out-String).Trim()
-
-    Write-Host "APP-GUIDES HTTP STATUS: $status"
-
-    if ($LASTEXITCODE -ne 0 -or $status -notin @("200", "206")) {
-        throw "Kiem tra HTTP that bai."
+    [PSCustomObject]@{
+        Line = $_.LineNumber
+        Code = $line
     }
-
-    Write-Host "APP-GUIDES CHUYEN THANH CONG" -ForegroundColor Green
-
-    & $appcmd list vdirs
-}
-catch {
-    if ($created) {
-        & $appcmd delete vdir "Default Web Site/app-guides"
-    }
-
-    Write-Host "DA HOAN TAC ANH XA MOI NEU DA TAO" -ForegroundColor Yellow
-    throw
-}
+} |
+Format-Table -AutoSize -Wrap
