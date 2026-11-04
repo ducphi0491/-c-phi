@@ -1,2 +1,5 @@
 SHOW TRIGGERS
 WHERE `Table` = 'songs';
+
+
+SHOW CREATE TABLE song_sync_changes;
