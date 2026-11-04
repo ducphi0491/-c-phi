@@ -1,50 +1,10 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+& "$env:windir\System32\inetsrv\appcmd.exe" list vdir
 
-PS C:\Users\Administrator> $root = "C:\TunerTools"
->>
->> $folders = @(
->>     "Web",
->>     "Data",
->>     "Data\GuitarPro",
->>     "Audio",
->>     "Audio\METRONOME",
->>     "Audio\DRUM",
->>     "Audio\CHORD_AI",
->>     "Audio\AI_MODELS",
->>     "Tools",
->>     "Tools\GP_Fresh",
->>     "Cache",
->>     "Backups",
->>     "Logs"
->> )
->>
->> foreach ($folder in $folders) {
->>     $path = Join-Path $root $folder
->>     New-Item -Path $path -ItemType Directory -Force |
->>         Out-Null
->> }
->>
->> Get-ChildItem $root -Directory -Recurse |
->>     Select-Object FullName
-
-FullName
---------
-C:\TunerTools\Audio
-C:\TunerTools\Backups
-C:\TunerTools\Cache
-C:\TunerTools\Data
-C:\TunerTools\Logs
-C:\TunerTools\Tools
-C:\TunerTools\Web
-C:\TunerTools\Audio\AI_MODELS
-C:\TunerTools\Audio\CHORD_AI
-C:\TunerTools\Audio\DRUM
-C:\TunerTools\Audio\METRONOME
-C:\TunerTools\Data\GuitarPro
-C:\TunerTools\Tools\GP_Fresh
-
-
-PS C:\Users\Administrator>
-
-
+Get-ScheduledTask |
+Where-Object {
+    $task = $_
+    $task.Actions | Where-Object {
+        ($_.Execute + " " + $_.Arguments + " " + $_.WorkingDirectory) -match "TunerToolsGP_Fresh|AI_Music|tunertools"
+    }
+} |
+Select-Object TaskName, TaskPath, State
