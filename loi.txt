@@ -1,58 +1,120 @@
-$files = @(
-    "C:\TunerTools\Web\API\api_gp_search.php",
-    "C:\TunerTools\Web\API\api_songs.php",
-    "C:\TunerTools\Audio\AI_Music\app.py",
-    "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs",
-    "C:\inetpub\wwwroot\api_AI.bat",
-    "C:\inetpub\wwwroot\api_documents.php"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$patterns = @(
-    'C:/inetpub/wwwroot',
-    'C:\inetpub\wwwroot',
-    'C:/AI_Music',
-    'C:\AI_Music',
-    'firebase-service-account.json',
-    'google-services.json',
-    'tuner_images_'
-)
+PS C:\Users\Administrator> $files = @(
+>>     "C:\TunerTools\Web\API\api_gp_search.php",
+>>     "C:\TunerTools\Web\API\api_songs.php",
+>>     "C:\TunerTools\Audio\AI_Music\app.py",
+>>     "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs",
+>>     "C:\inetpub\wwwroot\api_AI.bat",
+>>     "C:\inetpub\wwwroot\api_documents.php"
+>> )
+>>
+>> $patterns = @(
+>>     'C:/inetpub/wwwroot',
+>>     'C:\inetpub\wwwroot',
+>>     'C:/AI_Music',
+>>     'C:\AI_Music',
+>>     'firebase-service-account.json',
+>>     'google-services.json',
+>>     'tuner_images_'
+>> )
+>>
+>> Write-Host "`n=== DUONG DAN CON THAM CHIEU ===" -ForegroundColor Cyan
+>>
+>> foreach ($file in $files) {
+>>     if (Test-Path -LiteralPath $file -PathType Leaf) {
+>>         Select-String -LiteralPath $file `
+>>             -SimpleMatch -Pattern $patterns |
+>>         Select-Object @{
+>>             Name = 'File'
+>>             Expression = { Split-Path $_.Path -Leaf }
+>>         }, LineNumber, Pattern
+>>     }
+>> }
+>>
+>> Write-Host "`n=== DU LIEU CU ===" -ForegroundColor Cyan
+>>
+>> @(
+>>     "C:\AI_Music",
+>>     "C:\inetpub\wwwroot\tunertools",
+>>     "C:\inetpub\wwwroot\guitar_HD",
+>>     "C:\inetpub\wwwroot\libs",
+>>     "C:\inetpub\wwwroot\img_sys",
+>>     "C:\inetpub\wwwroot\support_chat_uploads",
+>>     "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
+>> ) | ForEach-Object {
+>>     [PSCustomObject]@{
+>>         Folder = $_
+>>         Exists = Test-Path -LiteralPath $_
+>>     }
+>> } | Format-Table -AutoSize
+>>
+>> Write-Host "`n=== DUNG LUONG O C ===" -ForegroundColor Cyan
+>>
+>> Get-PSDrive C |
+>> Select-Object Name,
+>> @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}},
+>> @{Name="UsedGB";Expression={[math]::Round($_.Used/1GB,2)}} |
+>> Format-Table -AutoSize
+>>
+>> Write-Host "FINAL AUDIT OK" -ForegroundColor Green
 
-Write-Host "`n=== DUONG DAN CON THAM CHIEU ===" -ForegroundColor Cyan
+=== DUONG DAN CON THAM CHIEU ===
 
-foreach ($file in $files) {
-    if (Test-Path -LiteralPath $file -PathType Leaf) {
-        Select-String -LiteralPath $file `
-            -SimpleMatch -Pattern $patterns |
-        Select-Object @{
-            Name = 'File'
-            Expression = { Split-Path $_.Path -Leaf }
-        }, LineNumber, Pattern
-    }
-}
 
-Write-Host "`n=== DU LIEU CU ===" -ForegroundColor Cyan
+=== DU LIEU CU ===
+File              LineNumber Pattern
+----              ---------- -------
+api_gp_search.php       1259 C:/inetpub/wwwroot
+api_gp_search.php       1328 google-services.json
+api_gp_search.php       1339 C:/inetpub/wwwroot
+api_gp_search.php       1358 C:/AI_Music
+api_gp_search.php       1500 C:/inetpub/wwwroot
+api_gp_search.php       1510 firebase-service-account.json
+api_gp_search.php       1778 C:/inetpub/wwwroot
+api_gp_search.php       2148 C:/inetpub/wwwroot
+api_gp_search.php       3445 C:/inetpub/wwwroot
+api_gp_search.php       3474 C:/AI_Music
+api_gp_search.php       3498 C:/AI_Music
+api_gp_search.php       3557 C:/AI_Music
+api_songs.php             59 C:/inetpub/wwwroot
+api_songs.php            231 google-services.json
+api_songs.php            242 C:/inetpub/wwwroot
+api_songs.php            261 C:/AI_Music
+api_songs.php            403 C:/inetpub/wwwroot
+api_songs.php            413 firebase-service-account.json
+api_songs.php            717 C:/inetpub/wwwroot
+api_songs.php           1574 C:/inetpub/wwwroot
+api_songs.php           3486 C:/inetpub/wwwroot
+api_songs.php           3515 C:/AI_Music
+api_songs.php           3539 C:/AI_Music
+api_songs.php           3598 C:/AI_Music
+ChayNgam.vbs               4 C:\inetpub\wwwroot
+api_documents.php          6 C:\inetpub\wwwroot
+api_documents.php          9 C:\inetpub\wwwroot
+api_documents.php         12 C:\inetpub\wwwroot
 
-@(
-    "C:\AI_Music",
-    "C:\inetpub\wwwroot\tunertools",
-    "C:\inetpub\wwwroot\guitar_HD",
-    "C:\inetpub\wwwroot\libs",
-    "C:\inetpub\wwwroot\img_sys",
-    "C:\inetpub\wwwroot\support_chat_uploads",
-    "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
-) | ForEach-Object {
-    [PSCustomObject]@{
-        Folder = $_
-        Exists = Test-Path -LiteralPath $_
-    }
-} | Format-Table -AutoSize
 
-Write-Host "`n=== DUNG LUONG O C ===" -ForegroundColor Cyan
 
-Get-PSDrive C |
-Select-Object Name,
-@{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}},
-@{Name="UsedGB";Expression={[math]::Round($_.Used/1GB,2)}} |
-Format-Table -AutoSize
+Folder                                       Exists
+------                                       ------
+C:\AI_Music                                   False
+C:\inetpub\wwwroot\tunertools                  True
+C:\inetpub\wwwroot\guitar_HD                   True
+C:\inetpub\wwwroot\libs                        True
+C:\inetpub\wwwroot\img_sys                     True
+C:\inetpub\wwwroot\support_chat_uploads        True
+C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE   True
 
-Write-Host "FINAL AUDIT OK" -ForegroundColor Green
+
+
+=== DUNG LUONG O C ===
+
+Name FreeGB UsedGB
+---- ------ ------
+C     51.06  187.4
+
+
+FINAL AUDIT OK
+PS C:\Users\Administrator>
