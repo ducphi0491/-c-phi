@@ -1,36 +1,40 @@
-$root = "C:\TunerTools\Data\GuitarPro"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$file = Get-ChildItem -LiteralPath $root -Recurse -File |
-Where-Object {
-    $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx"
-} |
-Select-Object -First 1
+PS C:\Users\Administrator> $root = "C:\TunerTools\Data\GuitarPro"
+>>
+>> $file = Get-ChildItem -LiteralPath $root -Recurse -File |
+>> Where-Object {
+>>     $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx"
+>> } |
+>> Select-Object -First 1
+>>
+>> if (-not $file) {
+>>     Write-Host "Khong tim thay file GP de kiem tra."
+>> } else {
+>>     $relative = $file.FullName.Substring($root.Length).TrimStart('\')
+>>
+>>     $url = "https://tunertools.top/tab/" + (
+>>         (($relative -split '\\') |
+>>         ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+>>     )
+>>
+>>     try {
+>>         $response = Invoke-WebRequest -Uri $url -Method Head `
+>>             -UseBasicParsing -TimeoutSec 30
+>>
+>>         Write-Host "GP HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
+>>     } catch {
+>>         Write-Host "GP HTTP ERROR: $($_.Exception.Message)" -ForegroundColor Red
+>>     }
+>> }
+>>
+GP HTTP ERROR: The remote server returned an error: (404) Not Found.
+PS C:\Users\Administrator> Select-String `
+>>     -Path "C:\inetpub\wwwroot\web.config" `
+>>     -Pattern "tunertools", "app-guides" |
+>> Select-Object LineNumber, Line |
+>> Format-Table -AutoSize -Wrap
+PS C:\Users\Administrator>
 
-if (-not $file) {
-    Write-Host "Khong tim thay file GP de kiem tra."
-} else {
-    $relative = $file.FullName.Substring($root.Length).TrimStart('\')
 
-    $url = "https://tunertools.top/tab/" + (
-        (($relative -split '\\') |
-        ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-    )
-
-    try {
-        $response = Invoke-WebRequest -Uri $url -Method Head `
-            -UseBasicParsing -TimeoutSec 30
-
-        Write-Host "GP HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
-    } catch {
-        Write-Host "GP HTTP ERROR: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-
-2............
-
-Select-String `
-    -Path "C:\inetpub\wwwroot\web.config" `
-    -Pattern "tunertools", "app-guides" |
-Select-Object LineNumber, Line |
-Format-Table -AutoSize -Wrap
