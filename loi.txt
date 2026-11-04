@@ -1,2 +1,3 @@
 dir *.ps1
 cd C:\TunerTools_Diagnostic
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_TunerTools_IIS_Update_HTTP50x.ps1
