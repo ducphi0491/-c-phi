@@ -1,42 +1,98 @@
-$source = "C:\inetpub\wwwroot\tunertools"
-$target = "C:\TunerTools\Web\tunertools"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-if (-not (Test-Path -LiteralPath $source -PathType Container)) {
-    throw "Khong tim thay website goc."
-}
+PS C:\Users\Administrator> $source = "C:\inetpub\wwwroot\tunertools"
+>> $target = "C:\TunerTools\Web\tunertools"
+>> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+>>
+>> if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+>>     throw "Khong tim thay website goc."
+>> }
+>>
+>> New-Item -ItemType Directory -Path $target -Force | Out-Null
+>>
+>> Write-Host "`n=== DONG BO WEBSITE ===" -ForegroundColor Cyan
+>>
+>> & robocopy.exe $source $target /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
+>>
+>> if ($LASTEXITCODE -ge 8) {
+>>     throw "Robocopy gap loi."
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA SO FILE ===" -ForegroundColor Cyan
+>>
+>> $sourceCount = (Get-ChildItem $source -Recurse -File | Measure-Object).Count
+>> $targetCount = (Get-ChildItem $target -Recurse -File | Measure-Object).Count
+>>
+>> Write-Host "SOURCE FILES: $sourceCount"
+>> Write-Host "TARGET FILES: $targetCount"
+>>
+>> Write-Host "`n=== IIS SITES ===" -ForegroundColor Cyan
+>> & $appcmd list sites
+>>
+>> Write-Host "`n=== IIS APPLICATIONS ===" -ForegroundColor Cyan
+>> & $appcmd list apps
+>>
+>> Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
+>> & $appcmd list vdirs
+>>
+>> Write-Host "`n=== WEBSITE FOLDERS ===" -ForegroundColor Cyan
+>>
+>> Get-ChildItem -LiteralPath $target -Directory |
+>>     Select-Object Name |
+>>     Format-Table -AutoSize
+>>
+>> Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
 
-New-Item -ItemType Directory -Path $target -Force | Out-Null
+=== DONG BO WEBSITE ===
 
-Write-Host "`n=== DONG BO WEBSITE ===" -ForegroundColor Cyan
+-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows
+-------------------------------------------------------------------------------
 
-& robocopy.exe $source $target /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
+  Started : Thursday, November 5, 2026 1:22:30
+   Source : C:\inetpub\wwwroot\tunertools\
+     Dest : C:\TunerTools\Web\tunertools\
 
-if ($LASTEXITCODE -ge 8) {
-    throw "Robocopy gap loi."
-}
+    Files : *.*
 
-Write-Host "`n=== KIEM TRA SO FILE ===" -ForegroundColor Cyan
+  Options : *.* /NDL /NFL /S /E /DCOPY:DAT /COPY:DAT /NP /R:2 /W:1
 
-$sourceCount = (Get-ChildItem $source -Recurse -File | Measure-Object).Count
-$targetCount = (Get-ChildItem $target -Recurse -File | Measure-Object).Count
+------------------------------------------------------------------------------
 
-Write-Host "SOURCE FILES: $sourceCount"
-Write-Host "TARGET FILES: $targetCount"
 
-Write-Host "`n=== IIS SITES ===" -ForegroundColor Cyan
-& $appcmd list sites
+------------------------------------------------------------------------------
 
-Write-Host "`n=== IIS APPLICATIONS ===" -ForegroundColor Cyan
-& $appcmd list apps
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Dirs :        38         0        38         0         0         0
+   Files :       194         0       194         0         0         0
+   Bytes :   28.61 m         0   28.61 m         0         0         0
+   Times :   0:00:00   0:00:00                       0:00:00   0:00:00
+   Ended : Thursday, November 5, 2026 1:22:31
 
-Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
-& $appcmd list vdirs
 
-Write-Host "`n=== WEBSITE FOLDERS ===" -ForegroundColor Cyan
+=== KIEM TRA SO FILE ===
+SOURCE FILES: 194
+TARGET FILES: 194
 
-Get-ChildItem -LiteralPath $target -Directory |
-    Select-Object Name |
-    Format-Table -AutoSize
+=== IIS SITES ===
+SITE "Default Web Site" (id:1,bindings:http/*:80:tunertools.top,state:Started)
 
-Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
+=== IIS APPLICATIONS ===
+APP "Default Web Site/" (applicationPool:DefaultAppPool)
+
+=== IIS VIRTUAL DIRECTORIES ===
+VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
+VDIR "Default Web Site/tab" (physicalPath:C:\TunerTools\Data\GuitarPro)
+
+=== WEBSITE FOLDERS ===
+
+Name
+----
+app-guides
+
+
+
+KIEM TRA HOAN TAT
+PS C:\Users\Administrator>
+
