@@ -1,106 +1,56 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$root = "C:\inetpub\wwwroot"
 
-PS C:\Users\Administrator> $folders = @(
->>     "C:\inetpub\wwwroot\guitar_HD",
->>     "C:\inetpub\wwwroot\img_sys",
->>     "C:\inetpub\wwwroot\libs"
->> )
->>
->> foreach ($folder in $folders) {
->>     Write-Host "`n=== $folder ===" -ForegroundColor Cyan
->>
->>     if (Test-Path -LiteralPath $folder) {
->>         Get-ChildItem -LiteralPath $folder -Force |
->>             Select-Object -First 15 Name, Mode |
->>             Format-Table -AutoSize
->>     }
->>     else {
->>         Write-Host "KHONG TON TAI"
->>     }
->> }
->>
->> Write-Host "`n=== KIEM TRA TASK AI ===" -ForegroundColor Cyan
->>
->> Get-ScheduledTask -TaskName "AutoStart_Python_API" |
->>     Select-Object -ExpandProperty Actions |
->>     Select-Object Execute, Arguments, WorkingDirectory |
->>     Format-Table -AutoSize -Wrap
->>
->> Write-Host "`n=== KIEM TRA DU LIEU CON LAI ===" -ForegroundColor Cyan
->>
->> @(
->>     "C:\AI_Music",
->>     "C:\inetpub\wwwroot\tunertools",
->>     "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE",
->>     "C:\inetpub\wwwroot\support_chat_uploads"
->> ) | ForEach-Object {
->>     [PSCustomObject]@{
->>         Path = $_
->>         Exists = Test-Path -LiteralPath $_
->>     }
->> } | Format-Table -AutoSize
+$names = @("guitar_HD", "img_sys", "libs")
 
-=== C:\inetpub\wwwroot\guitar_HD ===
+Write-Host "`n=== DUNG LUONG DU LIEU ===" -ForegroundColor Cyan
 
-Name                   Mode
-----                   ----
-images                 d-----
-videos                 d-----
-course_index.json      -a----
-level_01.json          -a----
-level_02.json          -a----
-level_03.json          -a----
-level_04.json          -a----
-level_05.json          -a----
-practice_patterns.json -a----
-practice_songs.json    -a----
+foreach ($name in $names) {
+    $path = Join-Path $root $name
 
+    $stats = Get-ChildItem -LiteralPath $path -Recurse -File |
+        Measure-Object -Property Length -Sum
 
+    [PSCustomObject]@{
+        Folder = $name
+        Files = $stats.Count
+        SizeMB = [math]::Round($stats.Sum / 1MB, 2)
+    }
+}
 
-=== C:\inetpub\wwwroot\img_sys ===
+Write-Host "`n=== KIEM TRA URL ===" -ForegroundColor Cyan
 
-Name               Mode
-----               ----
-guitar_decor1.png  -a----
-guitar_decor33.png -a----
-logo.png           -a----
-nen.png            -a----
-nen1.png           -a----
-nen_bh.png         -a----
-nen_bh0.png        -a----
-nen_bh1.png        -a----
-nen_bh7.png        -a----
-nen_mobile.png     -a----
+$urls = @(
+    "/guitar_HD/course_index.json",
+    "/libs/guitar.json",
+    "/libs/piano.json",
+    "/libs/ukulele.json",
+    "/img_sys/logo.png"
+)
 
+foreach ($path in $urls) {
+    $url = "http://127.0.0.1$path"
 
+    $status = & curl.exe -sS --max-time 15 `
+        -H "Host: tunertools.top" `
+        -r 0-0 -o NUL `
+        -w "%{http_code}" "$url"
 
-=== C:\inetpub\wwwroot\libs ===
+    [PSCustomObject]@{
+        URL = $path
+        HTTP = $status
+    }
+}
 
-Name         Mode
-----         ----
-guitar.json  -a----
-piano.json   -a----
-ukulele.json -a----
+Write-Host "`n=== KIEM TRA AI MOI ===" -ForegroundColor Cyan
 
+@(
+    "C:\TunerTools\Audio\AI_Music\app.py",
+    "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
+) | ForEach-Object {
+    [PSCustomObject]@{
+        File = $_
+        Exists = Test-Path -LiteralPath $_
+    }
+}
 
-
-=== KIEM TRA TASK AI ===
-
-Execute     Arguments                                   WorkingDirectory
--------     ---------                                   ----------------
-wscript.exe "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs" C:\TunerTools\Audio\AI_Music
-
-
-
-=== KIEM TRA DU LIEU CON LAI ===
-
-Path                                         Exists
-----                                         ------
-C:\AI_Music                                   False
-C:\inetpub\wwwroot\tunertools                  True
-C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE   True
-C:\inetpub\wwwroot\support_chat_uploads        True
-
-
-PS C:\Users\Administrator>
+Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
