@@ -1,40 +1,39 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+# Kiem tra file GP da chon co ton tai hay khong
+Test-Path -LiteralPath $file.FullName
 
-PS C:\Users\Administrator> $root = "C:\TunerTools\Data\GuitarPro"
->>
->> $file = Get-ChildItem -LiteralPath $root -Recurse -File |
->> Where-Object {
->>     $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx"
->> } |
->> Select-Object -First 1
->>
->> if (-not $file) {
->>     Write-Host "Khong tim thay file GP de kiem tra."
->> } else {
->>     $relative = $file.FullName.Substring($root.Length).TrimStart('\')
->>
->>     $url = "https://tunertools.top/tab/" + (
->>         (($relative -split '\\') |
->>         ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
->>     )
->>
->>     try {
->>         $response = Invoke-WebRequest -Uri $url -Method Head `
->>             -UseBasicParsing -TimeoutSec 30
->>
->>         Write-Host "GP HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
->>     } catch {
->>         Write-Host "GP HTTP ERROR: $($_.Exception.Message)" -ForegroundColor Red
->>     }
->> }
->>
-GP HTTP ERROR: The remote server returned an error: (404) Not Found.
-PS C:\Users\Administrator> Select-String `
->>     -Path "C:\inetpub\wwwroot\web.config" `
->>     -Pattern "tunertools", "app-guides" |
->> Select-Object LineNumber, Line |
->> Format-Table -AutoSize -Wrap
-PS C:\Users\Administrator>
+# Thu tai file bang GET thay vi HEAD
+curl.exe -sS -L -r 0-0 -o NUL `
+    -w "GET HTTP STATUS: %{http_code}`n" `
+    "$url"
 
+# Doc nhat ky IIS
+$log = Get-ChildItem "C:\inetpub\logs\LogFiles" `
+    -Recurse -File -Filter "*.log" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
 
+Write-Host "IIS LOG: $($log.FullName)"
+
+Get-Content $log.FullName -Tail 5000 |
+    Where-Object { $_ -match '\s(HEAD|GET)\s/tab/' } |
+    Select-Object -Last 10
+
+2............
+
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+
+& $appcmd set config "Default Web Site/tab" `
+    /section:system.webServer/staticContent `
+    "/+[fileExtension='.gp3',mimeType='application/octet-stream']"
+
+& $appcmd set config "Default Web Site/tab" `
+    /section:system.webServer/staticContent `
+    "/+[fileExtension='.gp4',mimeType='application/octet-stream']"
+
+& $appcmd set config "Default Web Site/tab" `
+    /section:system.webServer/staticContent `
+    "/+[fileExtension='.gp5',mimeType='application/octet-stream']"
+
+& $appcmd set config "Default Web Site/tab" `
+    /section:system.webServer/staticContent `
+    "/+[fileExtension='.gpx',mimeType='application/octet-stream']"
