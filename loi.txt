@@ -1,64 +1,114 @@
-$root = "C:\inetpub\wwwroot"
-$api = "C:\TunerTools\Web\API"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Write-Host "`n=== KIEM TRA TAI NGUYEN ===" -ForegroundColor Cyan
+PS C:\Users\Administrator> $root = "C:\inetpub\wwwroot"
+>> $api = "C:\TunerTools\Web\API"
+>>
+>> Write-Host "`n=== KIEM TRA TAI NGUYEN ===" -ForegroundColor Cyan
+>>
+>> $paths = @(
+>>     "$root\firebase-service-account.json",
+>>     "$root\google-services.json",
+>>     "$root\support_chat_uploads"
+>> )
+>>
+>> foreach ($path in $paths) {
+>>     $exists = Test-Path -LiteralPath $path
+>>
+>>     [PSCustomObject]@{
+>>         Name   = Split-Path $path -Leaf
+>>         Exists = $exists
+>>         Type   = if ($exists) {
+>>             if (Test-Path -LiteralPath $path -PathType Container) {
+>>                 "Folder"
+>>             } else {
+>>                 "File"
+>>             }
+>>         } else {
+>>             "Missing"
+>>         }
+>>     }
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA THU MUC UPLOAD ===" -ForegroundColor Cyan
+>>
+>> $upload = "$root\support_chat_uploads"
+>>
+>> if (Test-Path -LiteralPath $upload -PathType Container) {
+>>     $stats = Get-ChildItem -LiteralPath $upload -Recurse -File |
+>>         Measure-Object -Property Length -Sum
+>>
+>>     Write-Host "SO FILE: $($stats.Count)"
+>>     Write-Host "DUNG LUONG MB: $([math]::Round($stats.Sum / 1MB, 2))"
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA THAM CHIEU TRONG PHP ===" -ForegroundColor Cyan
+>>
+>> $files = @(
+>>     "$api\api_gp_search.php",
+>>     "$api\api_songs.php",
+>>     "$root\api_documents.php"
+>> )
+>>
+>> $patterns = @(
+>>     'firebase-service-account.json',
+>>     'google-services.json',
+>>     'support_chat_uploads',
+>>     'tuner_images_'
+>> )
+>>
+>> Select-String -Path $files -SimpleMatch -Pattern $patterns |
+>>     Select-Object @{
+>>         Name = 'File'
+>>         Expression = { Split-Path $_.Path -Leaf }
+>>     }, LineNumber, Pattern |
+>>     Format-Table -AutoSize
+>>
+>> Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
 
-$paths = @(
-    "$root\firebase-service-account.json",
-    "$root\google-services.json",
-    "$root\support_chat_uploads"
-)
+=== KIEM TRA TAI NGUYEN ===
 
-foreach ($path in $paths) {
-    $exists = Test-Path -LiteralPath $path
 
-    [PSCustomObject]@{
-        Name   = Split-Path $path -Leaf
-        Exists = $exists
-        Type   = if ($exists) {
-            if (Test-Path -LiteralPath $path -PathType Container) {
-                "Folder"
-            } else {
-                "File"
-            }
-        } else {
-            "Missing"
-        }
-    }
-}
+=== KIEM TRA THU MUC UPLOAD ===
+SO FILE: 4
+DUNG LUONG MB: 0.21
 
-Write-Host "`n=== KIEM TRA THU MUC UPLOAD ===" -ForegroundColor Cyan
+=== KIEM TRA THAM CHIEU TRONG PHP ===
+Name                          Exists Type
+----                          ------ ----
+firebase-service-account.json  False Missing
+google-services.json           False Missing
+support_chat_uploads            True Folder
 
-$upload = "$root\support_chat_uploads"
 
-if (Test-Path -LiteralPath $upload -PathType Container) {
-    $stats = Get-ChildItem -LiteralPath $upload -Recurse -File |
-        Measure-Object -Property Length -Sum
 
-    Write-Host "SO FILE: $($stats.Count)"
-    Write-Host "DUNG LUONG MB: $([math]::Round($stats.Sum / 1MB, 2))"
-}
+File              LineNumber Pattern
+----              ---------- -------
+api_gp_search.php       1259 firebase-service-account.json
+api_gp_search.php       1328 google-services.json
+api_gp_search.php       1339 google-services.json
+api_gp_search.php       1500 firebase-service-account.json
+api_gp_search.php       1510 firebase-service-account.json
+api_gp_search.php       1778 firebase-service-account.json
+api_gp_search.php       2148 tuner_images_
+api_gp_search.php       3051 support_chat_uploads
+api_gp_search.php       3057 support_chat_uploads
+api_gp_search.php       3081 support_chat_uploads
+api_gp_search.php       3094 support_chat_uploads
+api_songs.php             59 firebase-service-account.json
+api_songs.php            231 google-services.json
+api_songs.php            242 google-services.json
+api_songs.php            403 firebase-service-account.json
+api_songs.php            413 firebase-service-account.json
+api_songs.php            717 firebase-service-account.json
+api_songs.php           1574 tuner_images_
+api_songs.php           2804 support_chat_uploads
+api_songs.php           2810 support_chat_uploads
+api_songs.php           2834 support_chat_uploads
+api_songs.php           2847 support_chat_uploads
 
-Write-Host "`n=== KIEM TRA THAM CHIEU TRONG PHP ===" -ForegroundColor Cyan
 
-$files = @(
-    "$api\api_gp_search.php",
-    "$api\api_songs.php",
-    "$root\api_documents.php"
-)
 
-$patterns = @(
-    'firebase-service-account.json',
-    'google-services.json',
-    'support_chat_uploads',
-    'tuner_images_'
-)
+KIEM TRA HOAN TAT
+PS C:\Users\Administrator>
 
-Select-String -Path $files -SimpleMatch -Pattern $patterns |
-    Select-Object @{
-        Name = 'File'
-        Expression = { Split-Path $_.Path -Leaf }
-    }, LineNumber, Pattern |
-    Format-Table -AutoSize
-
-Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
