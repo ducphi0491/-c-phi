@@ -1,80 +1,106 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $root = "C:\inetpub\wwwroot"
->>
->> Write-Host "`n=== KIEM TRA URL IMG_SYS ===" -ForegroundColor Cyan
->>
->> $status = & curl.exe -sS --max-time 15 `
->>     -H "Host: tunertools.top" `
->>     -o NUL -w "%{http_code}" `
->>     "http://127.0.0.1/img_sys/logo.png"
->>
->> Write-Host "IMG_SYS HTTP: $status"
->>
->> Write-Host "`n=== TIM HE THONG SU DUNG IMG_SYS ===" -ForegroundColor Cyan
->>
->> $folders = @(
->>     "$root\tunertools",
->>     "$root\document",
->>     "$root\melowave"
->> )
->>
->> $files = @(
->>     Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue
->> )
->>
->> foreach ($folder in $folders) {
->>     if (Test-Path -LiteralPath $folder) {
->>         $files += Get-ChildItem -LiteralPath $folder `
->>             -Recurse -File -ErrorAction SilentlyContinue
->>     }
->> }
->>
->> $files = $files | Where-Object {
->>     $_.Extension -in ".php", ".js", ".json", ".html", ".css", ".config" `
->>     -and $_.Length -lt 2MB
->> }
->>
->> $matches = @(
->>     $files | Select-String -SimpleMatch `
->>         -Pattern "img_sys/", "img_sys\" `
->>         -ErrorAction SilentlyContinue
->> )
->>
->> if ($matches.Count -eq 0) {
->>     Write-Host "KHONG TIM THAY THAM CHIEU TRONG CAC FILE DA QUET"
->> }
->> else {
->>     $matches |
->>         Select-Object Path, LineNumber |
->>         Format-Table -AutoSize
->> }
->>
->> Write-Host "`n=== KIEM TRA BAN SAO ===" -ForegroundColor Cyan
->>
->> Test-Path "C:\TunerTools\Web\img_sys\logo.png"
+$source = "C:\inetpub\wwwroot\img_sys"
+$target = "C:\TunerTools\Web\img_sys"
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
-=== KIEM TRA URL IMG_SYS ===
-IMG_SYS HTTP: 200
+# 1. Kiem tra du lieu nguon va dich
+$files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
+$targetFiles = @(Get-ChildItem -LiteralPath $target -Recurse -File)
 
-=== TIM HE THONG SU DUNG IMG_SYS ===
+if ($files.Count -ne $targetFiles.Count) {
+    throw "So file khong trung khop"
+}
 
-Path                         LineNumber
-----                         ----------
-C:\inetpub\wwwroot\index.php        578
-C:\inetpub\wwwroot\index.php        579
-C:\inetpub\wwwroot\index.php        580
-C:\inetpub\wwwroot\index.php        583
-C:\inetpub\wwwroot\index.php        605
-C:\inetpub\wwwroot\index.php        620
-C:\inetpub\wwwroot\index.php        812
-C:\inetpub\wwwroot\index.php        856
-C:\inetpub\wwwroot\index.php       1049
-C:\inetpub\wwwroot\index.php       1461
+foreach ($f in $files) {
+    $relative = $f.FullName.Substring($source.Length).TrimStart('\')
+    $dest = Join-Path $target $relative
 
+    if (!(Test-Path -LiteralPath $dest -PathType Leaf)) {
+        throw "Thieu file: $relative"
+    }
 
+    if ((Get-FileHash -LiteralPath $f.FullName).Hash -ne
+        (Get-FileHash -LiteralPath $dest).Hash) {
+        throw "File khac nhau: $relative"
+    }
+}
 
-=== KIEM TRA BAN SAO ===
-True
-PS C:\Users\Administrator>
+Write-Host "IMG_SYS HASH VERIFIED: $($files.Count) FILES" -ForegroundColor Green
+
+# 2. Kiem tra URL hien tai
+$url = "http://127.0.0.1/img_sys/logo.png"
+
+function Test-ImgUrl {
+    $status = (& curl.exe -sS --max-time 20 -r 0-0 `
+        -H "Host: tunertools.top" `
+        -o NUL -w "%{http_code}" $url | Out-String).Trim()
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Khong ket noi duoc IMG_SYS"
+    }
+
+    return $status
+}
+
+$before = Test-ImgUrl
+Write-Host "HTTP BEFORE: $before"
+
+if ($before -notin @("200", "206")) {
+    throw "URL goc chua hoat dong"
+}
+
+# 3. Kiem tra anh xa IIS
+$vdirs = & $appcmd list vdirs | Out-String
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong doc duoc IIS"
+}
+
+if ($vdirs -match 'VDIR "Default Web Site/img_sys"') {
+    throw "IMG_SYS da co Virtual Directory. Khong ghi de."
+}
+
+# 4. Backup IIS
+$backup = "TT_IMG_SYS_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+
+& $appcmd add backup $backup
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong backup duoc IIS"
+}
+
+$created = $false
+
+try {
+    & $appcmd add vdir `
+        '/app.name:Default Web Site/' `
+        '/path:/img_sys' `
+        "/physicalPath:$target"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tao Virtual Directory that bai"
+    }
+
+    $created = $true
+
+    $after = Test-ImgUrl
+    Write-Host "HTTP AFTER: $after"
+
+    if ($after -notin @("200", "206")) {
+        throw "URL moi khong hoat dong"
+    }
+
+    Write-Host ""
+    Write-Host "IMG_SYS MIGRATION OK" -ForegroundColor Green
+
+    & $appcmd list vdirs
+}
+catch {
+    if ($created) {
+        & $appcmd delete vdir "Default Web Site/img_sys"
+    }
+
+    Write-Host "DA THU KHOI PHUC IIS" -ForegroundColor Yellow
+    throw
+}
