@@ -1,131 +1,64 @@
-$ErrorActionPreference = "Stop"
+$root = "C:\inetpub\wwwroot"
+$api = "C:\TunerTools\Web\API"
 
-$live = "C:\inetpub\wwwroot\api_songs.php"
-$newApi = "C:\TunerTools\Web\API\api_songs.php"
-$backupDir = "C:\TunerTools\Backups"
-$phpExe = "C:\php\php.exe"
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+Write-Host "`n=== KIEM TRA TAI NGUYEN ===" -ForegroundColor Cyan
 
-New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-
-if (-not (Test-Path -LiteralPath $live -PathType Leaf)) {
-    throw "Thieu PHP goc."
-}
-
-if (-not (Test-Path -LiteralPath $newApi -PathType Leaf)) {
-    throw "Thieu PHP moi."
-}
-
-# Kiem tra cu phap PHP moi
-& $phpExe -l $newApi
-
-if ($LASTEXITCODE -ne 0) {
-    throw "PHP moi co loi cu phap."
-}
-
-# Kiem tra API bang action khong hop le (khong ghi du lieu)
-function Test-SongsApi {
-    $url = "http://127.0.0.1/api_songs.php?action=__tt_migration_check"
-    $body = Join-Path $backupDir "__songs_probe_$stamp.tmp"
-
-    try {
-        $status = (& curl.exe -sS --max-time 30 `
-            -H "Host: tunertools.top" `
-            -H "Cache-Control: no-cache" `
-            -o $body -w "%{http_code}" `
-            "$url" | Out-String).Trim()
-
-        if ($LASTEXITCODE -ne 0 -or
-            $status -notmatch '^\d{3}$') {
-            throw "Khong ket noi duoc API."
-        }
-
-        $isJson = $false
-
-        try {
-            $content = [System.IO.File]::ReadAllText($body)
-            $null = $content | ConvertFrom-Json -ErrorAction Stop
-            $isJson = $true
-        }
-        catch {
-            $isJson = $false
-        }
-
-        return [PSCustomObject]@{
-            Status = $status
-            IsJson = $isJson
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $body) {
-            Remove-Item -LiteralPath $body -Force
-        }
-    }
-}
-
-Write-Host "`n=== BEFORE ===" -ForegroundColor Cyan
-
-$before = Test-SongsApi
-$before | Format-Table -AutoSize
-
-if ($before.Status -match '^5' -or -not $before.IsJson) {
-    throw "API goc chua dat dieu kien kiem tra. Chua chuyen."
-}
-
-# Sao luu va tao wrapper
-$backup = Join-Path $backupDir "api_songs_live_$stamp.php.bak"
-$stage = Join-Path $backupDir "api_songs_wrapper_$stamp.tmp"
-$failedWrapper = Join-Path $backupDir "api_songs_failed_$stamp.bak"
-
-$wrapper = "<?php`r`nrequire 'C:/TunerTools/Web/API/api_songs.php';`r`n"
-
-[System.IO.File]::WriteAllText(
-    $stage,
-    $wrapper,
-    [System.Text.Encoding]::ASCII
+$paths = @(
+    "$root\firebase-service-account.json",
+    "$root\google-services.json",
+    "$root\support_chat_uploads"
 )
 
-$switched = $false
+foreach ($path in $paths) {
+    $exists = Test-Path -LiteralPath $path
 
-try {
-    [System.IO.File]::Replace($stage, $live, $backup)
-    $switched = $true
-
-    & $phpExe -l $live
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Wrapper co loi cu phap."
+    [PSCustomObject]@{
+        Name   = Split-Path $path -Leaf
+        Exists = $exists
+        Type   = if ($exists) {
+            if (Test-Path -LiteralPath $path -PathType Container) {
+                "Folder"
+            } else {
+                "File"
+            }
+        } else {
+            "Missing"
+        }
     }
-
-    Write-Host "`n=== AFTER ===" -ForegroundColor Cyan
-
-    $after = Test-SongsApi
-    $after | Format-Table -AutoSize
-
-    if ($after.Status -ne $before.Status -or
-        $after.IsJson -ne $before.IsJson) {
-        throw "API moi tra ve ket qua kiem tra khac API goc."
-    }
-
-    Write-Host ""
-    Write-Host "API_SONGS CHUYEN THANH CONG" -ForegroundColor Green
-    Write-Host "Main PHP: $newApi"
-    Write-Host "Backup: $backup"
 }
-catch {
-    Write-Host "LOI: $($_.Exception.Message)" -ForegroundColor Red
 
-    if ($switched -and (Test-Path -LiteralPath $backup)) {
-        Copy-Item -LiteralPath $backup -Destination $stage -Force
+Write-Host "`n=== KIEM TRA THU MUC UPLOAD ===" -ForegroundColor Cyan
 
-        [System.IO.File]::Replace(
-            $stage,
-            $live,
-            $failedWrapper
-        )
+$upload = "$root\support_chat_uploads"
 
-        Write-Host "DA KHOI PHUC PHP GOC" -ForegroundColor Yellow
-    }
+if (Test-Path -LiteralPath $upload -PathType Container) {
+    $stats = Get-ChildItem -LiteralPath $upload -Recurse -File |
+        Measure-Object -Property Length -Sum
 
-    throw
+    Write-Host "SO FILE: $($stats.Count)"
+    Write-Host "DUNG LUONG MB: $([math]::Round($stats.Sum / 1MB, 2))"
 }
+
+Write-Host "`n=== KIEM TRA THAM CHIEU TRONG PHP ===" -ForegroundColor Cyan
+
+$files = @(
+    "$api\api_gp_search.php",
+    "$api\api_songs.php",
+    "$root\api_documents.php"
+)
+
+$patterns = @(
+    'firebase-service-account.json',
+    'google-services.json',
+    'support_chat_uploads',
+    'tuner_images_'
+)
+
+Select-String -Path $files -SimpleMatch -Pattern $patterns |
+    Select-Object @{
+        Name = 'File'
+        Expression = { Split-Path $_.Path -Leaf }
+    }, LineNumber, Pattern |
+    Format-Table -AutoSize
+
+Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
