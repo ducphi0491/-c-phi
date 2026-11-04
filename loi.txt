@@ -1,27 +1,45 @@
-$root = 'C:\inetpub\wwwroot'
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$files = @(
-    Get-ChildItem $root -File |
-    Where-Object { $_.Extension -in '.php', '.config', '.bat' }
-)
+PS C:\Users\Administrator> $root = 'C:\inetpub\wwwroot'
+>>
+>> $files = @(
+>>     Get-ChildItem $root -File |
+>>     Where-Object { $_.Extension -in '.php', '.config', '.bat' }
+>> )
+>>
+>> $files += @(
+>>     Get-ChildItem "$root\tunertools" -Recurse -File |
+>>     Where-Object { $_.Extension -in '.php', '.js', '.json', '.config' }
+>> )
+>>
+>> $patterns = @(
+>>     'C:\inetpub\wwwroot',
+>>     'C:\\inetpub\\wwwroot',
+>>     'tab/',
+>>     'MuseScore_General.sf3',
+>>     'FluidR3_GM.sf2'
+>> )
+>>
+>> $matches = @($files | Select-String -SimpleMatch -Pattern $patterns)
+>>
+>> $matches |
+>> Select-Object Path, LineNumber, Pattern |
+>> Format-Table -AutoSize
+>>
+>> Write-Host "TONG SO VI TRI: $($matches.Count)"
 
-$files += @(
-    Get-ChildItem "$root\tunertools" -Recurse -File |
-    Where-Object { $_.Extension -in '.php', '.js', '.json', '.config' }
-)
+Path                                 LineNumber Pattern
+----                                 ---------- -------
+C:\inetpub\wwwroot\api_documents.php          6 C:\inetpub\wwwroot
+C:\inetpub\wwwroot\api_documents.php          9 C:\inetpub\wwwroot
+C:\inetpub\wwwroot\api_documents.php         12 C:\inetpub\wwwroot
+C:\inetpub\wwwroot\api_documents.php       2386 C:\\inetpub\\wwwroot
+C:\inetpub\wwwroot\api_gp_search.php        415 FluidR3_GM.sf2
+C:\inetpub\wwwroot\api_gp_search.php        420 MuseScore_General.sf3
+C:\inetpub\wwwroot\api_gp_search.php        766 tab/
+C:\inetpub\wwwroot\api_gp_search.php        853 tab/
 
-$patterns = @(
-    'C:\inetpub\wwwroot',
-    'C:\\inetpub\\wwwroot',
-    'tab/',
-    'MuseScore_General.sf3',
-    'FluidR3_GM.sf2'
-)
 
-$matches = @($files | Select-String -SimpleMatch -Pattern $patterns)
-
-$matches |
-Select-Object Path, LineNumber, Pattern |
-Format-Table -AutoSize
-
-Write-Host "TONG SO VI TRI: $($matches.Count)"
+TONG SO VI TRI: 8
+PS C:\Users\Administrator>
