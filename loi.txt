@@ -1,52 +1,64 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $file = "C:\inetpub\wwwroot\api_songs.php"
->>
->> $patterns = @(
->>     '__DIR__',
->>     '__FILE__',
->>     'DOCUMENT_ROOT',
->>     'SCRIPT_FILENAME',
->>     'require',
->>     'include',
->>     'chdir(',
->>     'C:\inetpub\wwwroot'
->> )
->>
->> Select-String -LiteralPath $file -SimpleMatch -Pattern $patterns |
->> ForEach-Object {
->>     $line = $_.Line.Trim()
->>
->>     if ($line -match '(?i)password|token|secret|api.?key|authorization|private.?key') {
->>         $line = "[DA AN NOI DUNG NHAY CAM]"
->>     }
->>
->>     [PSCustomObject]@{
->>         Line = $_.LineNumber
->>         Code = $line
->>     }
->> } |
->> Format-Table -AutoSize -Wrap
+$file = "C:\inetpub\wwwroot\api_songs.php"
+$dest = "C:\TunerTools\Web\API\api_songs.php"
+$gpFolder = "C:\TunerTools\Data\GuitarPro"
 
-Line Code
----- ----
-  59 $firebase_service_account_path = __DIR__ . '/firebase-service-account.json';
- 134 function tt_song_sync_require_schema($conn) {
- 242 $googleServicesPath = __DIR__ . '/google-services.json';
- 403 $serviceAccountPath = __DIR__ . '/firebase-service-account.json';
- 542 $required = ['conversation_key', 'user_email', 'merged_into_id'];
- 551 foreach ($required as $column) {
- 717 $service_account_path = __DIR__ . '/firebase-service-account.json'; // File JSON của bạn
- 801 tt_song_sync_require_schema($conn);
- 827 tt_song_sync_require_schema($conn);
- 896 tt_song_sync_require_schema($conn);
-1453 'code' => 'MISSING_REQUIRED_FIELDS'
-1574 $tempFilesDir = __DIR__ . DIRECTORY_SEPARATOR . 'tuner_images_' . uniqid('', true);
-2804 $baseDir = __DIR__ . DIRECTORY_SEPARATOR . 'support_chat_uploads';
-3385 $baseDir = __DIR__ . DIRECTORY_SEPARATOR . 'tab';
-3422 $baseDir = __DIR__ . DIRECTORY_SEPARATOR . 'tab';
-3486 $dir = __DIR__;
+if (-not (Test-Path -LiteralPath $gpFolder -PathType Container)) {
+    throw "Khong tim thay thu muc Guitar Pro moi."
+}
 
+$encoding = [System.Text.Encoding]::GetEncoding(28591)
+$content = $encoding.GetString(
+    [System.IO.File]::ReadAllBytes($file)
+)
 
-PS C:\Users\Administrator>
+$old = '$baseDir = __DIR__ . DIRECTORY_SEPARATOR . ''tab'';'
+$new = '$baseDir = ''C:/TunerTools/Data/GuitarPro'';'
+
+$count = ([regex]::Matches(
+    $content,
+    [regex]::Escape($old)
+)).Count
+
+if ($count -ne 2) {
+    throw "Can dung 2 vi tri, nhung tim thay: $count"
+}
+
+$backup = "C:\TunerTools\Backups\api_songs_before_gp_" +
+          (Get-Date -Format "yyyyMMdd_HHmmss") + ".php.bak"
+
+Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
+
+try {
+    $content = $content.Replace($old, $new)
+
+    [System.IO.File]::WriteAllBytes(
+        $file,
+        $encoding.GetBytes($content)
+    )
+
+    & "C:\php\php.exe" -l $file
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "PHP syntax error."
+    }
+
+    Copy-Item -LiteralPath $file `
+        -Destination $dest `
+        -Force `
+        -ErrorAction Stop
+
+    Write-Host ""
+    Write-Host "API_SONGS PATH UPDATED OK" -ForegroundColor Green
+    Write-Host "Da sua: 2 vi tri"
+    Write-Host "Guitar Pro: $gpFolder"
+    Write-Host "Backup: $backup"
+}
+catch {
+    Copy-Item -LiteralPath $backup `
+        -Destination $file `
+        -Force
+
+    throw "Cap nhat that bai. Da khoi phuc PHP goc."
+}
