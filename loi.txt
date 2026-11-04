@@ -1,141 +1,53 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
-PS C:\Users\Administrator> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
->>
->> $backup = "TT_TAB_40411_" + (Get-Date -Format "yyyyMMdd_HHmmss")
->>
->> & $appcmd add backup $backup
->> if ($LASTEXITCODE -ne 0) {
->>     throw "Khong sao luu duoc IIS"
->> }
->>
->> & $appcmd set config "Default Web Site/tab" `
->>     /section:system.webServer/security/requestFiltering `
->>     /allowDoubleEscaping:true `
->>     /commit:apphost
->>
->> if ($LASTEXITCODE -ne 0) {
->>     throw "Cap nhat IIS that bai"
->> }
->>
->> & $appcmd list config "Default Web Site/tab" `
->>     /section:system.webServer/security/requestFiltering
-BACKUP object "TT_TAB_40411_20261105_011407" added
-Applied configuration changes to section "system.webServer/security/requestFiltering" for "MACHINE/WEBROOT/APPHOST/Default Web Site/tab" at configuration commit path "MACHINE/WEBROOT/APPHOST"
-<system.webServer>
-  <security>
-    <requestFiltering allowDoubleEscaping="true">
-      <fileExtensions allowUnlisted="true" applyToWebDAV="true">
-        <add fileExtension=".asax" allowed="false" />
-        <add fileExtension=".ascx" allowed="false" />
-        <add fileExtension=".master" allowed="false" />
-        <add fileExtension=".skin" allowed="false" />
-        <add fileExtension=".browser" allowed="false" />
-        <add fileExtension=".sitemap" allowed="false" />
-        <add fileExtension=".config" allowed="false" />
-        <add fileExtension=".cs" allowed="false" />
-        <add fileExtension=".csproj" allowed="false" />
-        <add fileExtension=".vb" allowed="false" />
-        <add fileExtension=".vbproj" allowed="false" />
-        <add fileExtension=".webinfo" allowed="false" />
-        <add fileExtension=".licx" allowed="false" />
-        <add fileExtension=".resx" allowed="false" />
-        <add fileExtension=".resources" allowed="false" />
-        <add fileExtension=".mdb" allowed="false" />
-        <add fileExtension=".vjsproj" allowed="false" />
-        <add fileExtension=".java" allowed="false" />
-        <add fileExtension=".jsl" allowed="false" />
-        <add fileExtension=".ldb" allowed="false" />
-        <add fileExtension=".dsdgm" allowed="false" />
-        <add fileExtension=".ssdgm" allowed="false" />
-        <add fileExtension=".lsad" allowed="false" />
-        <add fileExtension=".ssmap" allowed="false" />
-        <add fileExtension=".cd" allowed="false" />
-        <add fileExtension=".dsprototype" allowed="false" />
-        <add fileExtension=".lsaprototype" allowed="false" />
-        <add fileExtension=".sdm" allowed="false" />
-        <add fileExtension=".sdmDocument" allowed="false" />
-        <add fileExtension=".mdf" allowed="false" />
-        <add fileExtension=".ldf" allowed="false" />
-        <add fileExtension=".ad" allowed="false" />
-        <add fileExtension=".dd" allowed="false" />
-        <add fileExtension=".ldd" allowed="false" />
-        <add fileExtension=".sd" allowed="false" />
-        <add fileExtension=".adprototype" allowed="false" />
-        <add fileExtension=".lddprototype" allowed="false" />
-        <add fileExtension=".exclude" allowed="false" />
-        <add fileExtension=".refresh" allowed="false" />
-        <add fileExtension=".compiled" allowed="false" />
-        <add fileExtension=".msgx" allowed="false" />
-        <add fileExtension=".vsdisco" allowed="false" />
-        <add fileExtension=".rules" allowed="false" />
-      </fileExtensions>
-      <requestLimits>
-        <headerLimits>
-        </headerLimits>
-      </requestLimits>
-      <verbs allowUnlisted="true" applyToWebDAV="true">
-      </verbs>
-      <hiddenSegments applyToWebDAV="true">
-        <add segment="web.config" />
-        <add segment="bin" />
-        <add segment="App_code" />
-        <add segment="App_GlobalResources" />
-        <add segment="App_LocalResources" />
-        <add segment="App_WebReferences" />
-        <add segment="App_Data" />
-        <add segment="App_Browsers" />
-      </hiddenSegments>
-      <alwaysAllowedUrls>
-      </alwaysAllowedUrls>
-      <alwaysAllowedQueryStrings>
-      </alwaysAllowedQueryStrings>
-      <denyUrlSequences>
-      </denyUrlSequences>
-      <denyQueryStringSequences>
-      </denyQueryStringSequences>
-      <filteringRules>
-      </filteringRules>
-    </requestFiltering>
-  </security>
-</system.webServer>
-PS C:\Users\Administrator> $root = "C:\TunerTools\Data\GuitarPro"
->> $plusDir = Join-Path $root "+"
->>
->> if (-not (Test-Path -LiteralPath $plusDir)) {
->>     throw "Khong tim thay thu muc +"
->> }
->>
->> $file = Get-ChildItem -LiteralPath $plusDir -Recurse -File |
->>     Where-Object { $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx" } |
->>     Select-Object -First 1
->>
->> if (-not $file) {
->>     throw "Khong tim thay file GP de kiem tra"
->> }
->>
->> $relative = $file.FullName.Substring($root.Length).TrimStart('\')
->>
->> $encoded = (($relative -split '\\') |
->>     ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
->>
->> $url = "https://tunertools.top/tab/$encoded"
->>
->> Write-Host "FILE EXISTS: $(Test-Path -LiteralPath $file.FullName)"
->> Write-Host "TEST URL: $url"
->>
->> curl.exe -sS -L -r 0-0 -o NUL `
->>     -w "GP HTTP STATUS: %{http_code}`n" `
->>     "$url"
->>
-FILE EXISTS: True
-TEST URL: https://tunertools.top/tab/%2B/%2Bcaro/%2Bcaro%20-%20Todo%20Es%20Por%20Nada.gp4
-GP HTTP STATUS: 206
-PS C:\Users\Administrator> & "$env:windir\System32\inetsrv\appcmd.exe" `
->>     set config "Default Web Site/tab" `
->>     /section:system.webServer/security/requestFiltering `
->>     /allowDoubleEscaping:false `
->>     /commit:apphost
-Applied configuration changes to section "system.webServer/security/requestFiltering" for "MACHINE/WEBROOT/APPHOST/Default Web Site/tab" at configuration commit path "MACHINE/WEBROOT/APPHOST"
-PS C:\Users\Administrator>
+$backup = "TT_TAB_FIX_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+
+& $appcmd add backup $backup
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong sao luu duoc IIS"
+}
+
+& $appcmd set config "Default Web Site/tab" `
+    /section:system.webServer/security/requestFiltering `
+    /allowDoubleEscaping:true `
+    /commit:apphost
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong cap nhat duoc IIS"
+}
+
+Write-Host "DA CAP NHAT IIS /tab" -ForegroundColor Green
+
+& $appcmd list config "Default Web Site/tab" `
+    /section:system.webServer/security/requestFiltering
+
+
+2.................
+
+$root = "C:\TunerTools\Data\GuitarPro"
+$testDir = Join-Path $root "+"
+
+$file = Get-ChildItem -LiteralPath $testDir -Recurse -File |
+    Where-Object {
+        $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx"
+    } |
+    Select-Object -First 1
+
+if (-not $file) {
+    throw "Khong tim thay file GP"
+}
+
+$relative = $file.FullName.Substring($root.Length).TrimStart('\')
+
+$encoded = (($relative -split '\\') |
+    ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+
+$url = "https://tunertools.top/tab/$encoded"
+
+Write-Host "FILE EXISTS: $(Test-Path -LiteralPath $file.FullName)"
+Write-Host "TEST URL: $url"
+
+curl.exe --path-as-is -sS -L -r 0-0 -o NUL `
+    -w "GP HTTP STATUS: %{http_code}`n" `
+    "$url"
