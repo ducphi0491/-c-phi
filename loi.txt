@@ -1,27 +1,19 @@
-$folders = @(
-    @{
-        Name = "THU MUC MOI"
-        Path = "C:\TunerTools\Data\support_chat_uploads"
-    },
-    @{
-        Name = "THU MUC CU"
-        Path = "C:\inetpub\wwwroot\support_chat_uploads"
-    }
-)
+Write-Host "=== KIEM TRA AI ==="
 
-foreach ($folder in $folders) {
-    $files = @(Get-ChildItem -LiteralPath $folder.Path -Recurse -File)
-    $latest = $files |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+try {
+    $result = Invoke-RestMethod `
+        "http://127.0.0.1:5000/" `
+        -TimeoutSec 15
 
-    [PSCustomObject]@{
-        Folder = $folder.Name
-        Files = $files.Count
-        LastUpdated = if ($latest) {
-            $latest.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
-        } else {
-            "-"
-        }
-    }
+    Write-Host "AI SERVER ONLINE" -ForegroundColor Green
+    Write-Host $result
 }
+catch {
+    Write-Host "AI SERVER ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+Write-Host "`n=== KIEM TRA CONG 5000 ==="
+
+Get-NetTCPConnection -LocalPort 5000 -State Listen `
+    -ErrorAction SilentlyContinue |
+Select-Object LocalAddress, LocalPort, State, OwningProcess
