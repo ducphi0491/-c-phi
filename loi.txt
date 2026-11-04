@@ -3,3 +3,44 @@ curl.exe -sS -i -X POST "https://tunertools.top/api_songs.php?action=update" -d 
 Get-Content "C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log" |
 Select-String "action=update" |
 Select-Object -Last 6
+
+
+
+PS C:\TunerToolsGP_Fresh> curl.exe -sS -i -X POST "https://tunertools.top/api_songs.php?action=update" -d "id=TT_DIAG_NOT_EXIST_20261104&title=TEST"
+HTTP/1.1 404 Not Found
+Date: Wed, 04 Nov 2026 14:59:50 GMT
+Content-Type: application/json; charset=utf-8
+Content-Length: 100
+Connection: keep-alive
+access-control-allow-origin: *
+Cache-Control: no-store, no-cache, must-revalidate, max-age=0
+Server: cloudflare
+x-powered-by: PHP/8.3.26
+x-powered-by: ASP.NET
+x-tunertools-sheet-update: responsefix-20261104
+cf-cache-status: DYNAMIC
+Nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+Report-To: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=x9tuKsOPvVKqN2Su5mKrohotrj8zAuVeKQYP1iLBHE0cKFFMx7WygDsQPg9qjWu9JD19GZ%2FTNs6LQZRymqMLx9C0cpgSd%2Bx1UCt5%2BxmBfeg0BAGfk9s8R0WhExtFG4KVxFx7CNjMwArdusx6IQ%3D%3D"}]}
+CF-RAY: a5547c1e8d890965-HKG
+alt-svc: h3=":443"; ma=86400
+
+{"success":false,"error":"Không tìm thấy bài hát cần cập nhật.","code":"SONG_NOT_FOUND"}
+PS C:\TunerToolsGP_Fresh> Get-Content "C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log" |
+>> Select-String "action=update" |
+>> Select-Object -Last 6
+
+2026-11-04 11:18:04 192.168.1.179 POST /api_songs.php action=update 80 - 192.168.1.179 TunerApp-Android-v1.02 - 502 0
+0 509 656551 567
+2026-11-04 14:34:54 192.168.1.179 POST /api_songs.php action=update 80 - 192.168.1.179 TunerApp-Android-v1.02 - 502 0
+0 509 386728 1577
+2026-11-04 14:43:17 192.168.1.179 POST /api_songs.php action=update 80 - 192.168.1.179 TunerApp-Android-v1.02 - 502 0
+0 509 386728 1273
+2026-11-04 14:43:58 192.168.1.179 POST /api_songs.php action=update 80 - 192.168.1.179 TunerApp-Android-v1.02 - 404 0
+0 452 429993 697
+2026-11-04 14:44:11 192.168.1.179 POST /api_songs.php action=update 80 - 192.168.1.179 TunerApp-Android-v1.02 - 404 0
+0 452 429993 686
+2026-11-04 14:59:50 192.168.1.179 POST /api_songs.php action=update 80 - 192.168.1.179 curl/8.13.0 - 404 0 0 452 574 17
+
+
+PS C:\TunerToolsGP_Fresh>
+
