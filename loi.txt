@@ -1,89 +1,48 @@
-ndows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$file = "C:\inetpub\wwwroot\api_gp_search.php"
+$dest = "C:\TunerTools\Web\API\api_gp_search.php"
 
-PS C:\Users\Administrator> $file = "C:\inetpub\wwwroot\api_gp_search.php"
->>
->> Select-String -Path $file -SimpleMatch -Pattern @(
->>     '__DIR__',
->>     'DOCUMENT_ROOT',
->>     'realpath',
->>     'dirname(',
->>     'file_name',
->>     'soundfont',
->>     'tabRoot',
->>     'tabDir'
->> ) |
->> Where-Object {
->>     $_.Line -notmatch '(?i)password|token|secret|api_key|authorization'
->> } |
->> Select-Object LineNumber,
->> @{Name="Code";Expression={$_.Line.Trim()}} |
->> Format-Table -AutoSize -Wrap
+$encoding = [System.Text.Encoding]::GetEncoding(28591)
+$content = $encoding.GetString([System.IO.File]::ReadAllBytes($file))
 
-LineNumber Code
----------- ----
-        15 // API THƯ VIỆN GUITAR PRO / SOUNDFONT CHO SONGTABPLAY.KT
-        17 // Khối này chạy TRƯỚC kết nối MySQL vì việc đọc thư mục GP và SoundFont
-        37 $ttgp_tab_root = __DIR__ . DIRECTORY_SEPARATOR . 'tab';
-        95 $rootReal = realpath($root);
-       106 $candidateReal = realpath($candidate);
-       122 $rootReal = realpath($root);
-       129 $candidateReal = realpath($candidate);
-       158 function ttgp_score_title_from_file_name($fileName) {
-       410 function ttgp_soundfont_profiles() {
-       415 'file_name' => 'FluidR3_GM.sf2'
-       420 'file_name' => 'MuseScore_General.sf3'
-       425 function ttgp_resolve_soundfont_profile($profile) {
-       429 $profiles = ttgp_soundfont_profiles();
-       433 function ttgp_handle_soundfont_info($profile) {
-       434 list($profileKey, $config) = ttgp_resolve_soundfont_profile($profile);
-       436 ttgp_json_exit(['success' => false, 'error' => 'Cấu hình SoundFont không hợp lệ.', 'data' => null], 400);
-       439 $fileName = $config['file_name'];
-       440 $filePath = __DIR__ . DIRECTORY_SEPARATOR . $fileName;
-       445 'error' => 'Không tìm thấy file SoundFont ' . $fileName . ' trên máy chủ.',
-       454 . '?action=download_soundfont&profile=' . rawurlencode($profileKey)
-       463 'file_name' => $fileName,
-       499 'title' => ttgp_score_title_from_file_name($fileName),
-       556 ttgp_contains_ignore_case(ttgp_score_title_from_file_name($entry) . ' ' . $relativePath, $keyword)
-       668 $dbTitle = ttgp_score_title_from_file_name(basename($relative));
-       907 $displayTitle = ttgp_score_title_from_file_name($fileInfo->getFilename());
-       913 $subfolder = dirname($relativeToSelected);
-       946 function ttgp_scan_international_files($tabRoot, $keyword, $supportedExtensions, $limit = 50) {
-       948 if (!is_dir($tabRoot)) return $results;
-       950 $rootReal = realpath($tabRoot);
-       966 $title = ttgp_score_title_from_file_name($fileInfo->getFilename());
-       987 function ttgp_handle_international_section($tabRoot, $dbFile, $top50File, $keyword, $supportedExtensions) {
-      1002 $results = ttgp_scan_international_files($tabRoot, $keyword, $supportedExtensions, 50);
-      1018 $title = ttgp_score_title_from_file_name(basename($relative));
-      1038 $results = ttgp_scan_international_files($tabRoot, '', $supportedExtensions, 20);
-      1060 $parent = dirname($relativePath);
-      1073 'title' => ttgp_score_title_from_file_name($fileName),
-      1092 function ttgp_handle_legacy_compat_request($tabRoot, $vietnamRoot, $keyword, $supportedExtensions, $limit =
-           100) {
-      1099 if (!is_dir($tabRoot)) {
-      1108 $rootReal = realpath($tabRoot);
-      1121 $searchText = ttgp_score_title_from_file_name($fileInfo->getFilename()) . ' ' . $relative;
-      1169 if ($ttgp_action === 'soundfont_info') {
-      1170 ttgp_handle_soundfont_info($ttgp_profile);
-      1173 if ($ttgp_action === 'download_soundfont') {
-      1174 list($ttgp_profile_key, $ttgp_soundfont_config) = ttgp_resolve_soundfont_profile($ttgp_profile);
-      1175 if ($ttgp_profile_key === null || !is_array($ttgp_soundfont_config)) {
-      1176 ttgp_json_exit(['success' => false, 'error' => 'Cấu hình SoundFont không hợp lệ.'], 400);
-      1178 $ttgp_soundfont_file = __DIR__ . DIRECTORY_SEPARATOR . $ttgp_soundfont_config['file_name'];
-      1179 ttgp_stream_binary_file($ttgp_soundfont_file, $ttgp_soundfont_config['file_name'], 86400);
-      1259 $firebase_service_account_path = __DIR__ . '/firebase-service-account.json';
-      1339 $googleServicesPath = __DIR__ . '/google-services.json';
-      1500 $serviceAccountPath = __DIR__ . '/firebase-service-account.json';
-      1778 $service_account_path = __DIR__ . '/firebase-service-account.json'; // File JSON của bạn
-      2148 $tempFilesDir = __DIR__ . '/tuner_images_' . uniqid();
-      3051 $baseDir = __DIR__ . DIRECTORY_SEPARATOR . 'support_chat_uploads';
-      3344 $baseDir = __DIR__ . DIRECTORY_SEPARATOR . 'tab';
-      3348 $fullPath = realpath($baseDir . DIRECTORY_SEPARATOR . $requestedRel);
-      3351 if ($fullPath && strpos($fullPath, realpath($baseDir)) === 0 && is_file($fullPath)) {
-      3381 $baseDir = __DIR__ . DIRECTORY_SEPARATOR . 'tab';
-      3398 $artistFolder = strtolower(basename(dirname($file->getPathname())));
-      3423 "artist" => basename(dirname($file->getPathname())),
-      3445 $dir = __DIR__;
+$old1 = '$filePath = __DIR__ . DIRECTORY_SEPARATOR . $fileName;'
+$new1 = '$filePath = ''C:/TunerTools/Audio/SoundFonts/'' . $fileName;'
 
+$old2 = '$ttgp_soundfont_file = __DIR__ . DIRECTORY_SEPARATOR . $ttgp_soundfont_config[''file_name''];'
+$new2 = '$ttgp_soundfont_file = ''C:/TunerTools/Audio/SoundFonts/'' . $ttgp_soundfont_config[''file_name''];'
 
-PS C:\Users\Administrator>
+foreach ($old in @($old1, $old2)) {
+    $count = ([regex]::Matches($content, [regex]::Escape($old))).Count
+
+    if ($count -ne 1) {
+        throw "Khong tim thay dung 1 vi tri: $old"
+    }
+}
+
+foreach ($name in @("FluidR3_GM.sf2", "MuseScore_General.sf3")) {
+    if (-not (Test-Path "C:\TunerTools\Audio\SoundFonts\$name")) {
+        throw "Thieu SoundFont: $name"
+    }
+}
+
+$backup = "C:\TunerTools\Backups\api_gp_search_" +
+          (Get-Date -Format "yyyyMMdd_HHmmss") + ".php.bak"
+
+Copy-Item $file $backup -ErrorAction Stop
+
+$content = $content.Replace($old1, $new1).Replace($old2, $new2)
+
+[System.IO.File]::WriteAllBytes(
+    $file,
+    $encoding.GetBytes($content)
+)
+
+& "C:\php\php.exe" -l $file
+
+if ($LASTEXITCODE -ne 0) {
+    Copy-Item $backup $file -Force
+    throw "PHP syntax error. Da khoi phuc ban goc."
+}
+
+Copy-Item $file $dest -Force -ErrorAction Stop
+
+Write-Host "SOUNDFONT PATH UPDATED OK" -ForegroundColor Green
