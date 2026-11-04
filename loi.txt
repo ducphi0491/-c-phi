@@ -5,39 +5,10 @@ py kiem_tra_loi_502_gp.txt
 py kiem_tra_loi_502_gp.txt --base-url "https://tunertools.top/api_gp_search.php" --primary
 
 
+cd /d C:\TunerToolsGP_Fresh
+ren drive_token.json drive_token_old_20261104.json
+py tt_gp_bulk.py auth
 
-Microsoft Windows [Version 10.0.17763.8389]
-(c) 2018 Microsoft Corporation. All rights reserved.
 
-C:\Users\Administrator>cd /d C:\TunerToolsGP_Fresh
-
-C:\TunerToolsGP_Fresh>py kiem_tra_loi_502_gp.txt
-SERVER: tuner.alwaysdata.net
-
-=== 1. HEALTH ===
-ok: True
-database: songsterr_drive_test.db
-songs_total: 1641938
-drive_ready: 1641938
-drive_pending: 0
-token_file_exists: True
-pdo_sqlite: True
-curl: True
-Note: health does NOT test whether the OAuth token can download a file.
-
-=== 2. SEARCH ===
-results returned: 3
-song ID: 4048873389842274367
-format: gp4
-
-=== 3. DOWNLOAD ONE GP FILE ===
-Request destination: tuner.alwaysdata.net/api_gp_drive.php
-HTTP status: 502
-PHP error: google_token_refresh_failed
-PHP http_code: 400
-Google OAuth error: invalid_grant
-Likely PHP OAuth refresh failure or upstream Google Drive download failure.
-No tokens or credentials have been printed. Share this output if necessary.
-
-C:\TunerToolsGP_Fresh>
+https://console.cloud.google.com/auth/branding?authuser=1&project=tunertools-drive
 
