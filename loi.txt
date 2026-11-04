@@ -1,77 +1,8 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+Get-Process robocopy -ErrorAction SilentlyContinue |
+Select-Object Id, StartTime
 
-PS C:\Users\Administrator> Get-Content "C:\TunerTools\Logs\copy_tunertools_web.log" -Tail 18
-            New File                1082        C:\inetpub\wwwroot\tunertools\app-guides\tuner\instrument-tuning\subtitles\zh.vtt
-100%
-            New File              747755        C:\inetpub\wwwroot\tunertools\app-guides\tuner\instrument-tuning\videos\video.mp4
-100%
+Get-PSDrive C |
+Select-Object Name,
+@{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
 
-------------------------------------------------------------------------------
-
-               Total    Copied   Skipped  Mismatch    FAILED    Extras
-    Dirs :        38        38         0         0         0         0
-   Files :       194       194         0         0         0         0
-   Bytes :   28.61 m   28.61 m         0         0         0         0
-   Times :   0:00:01   0:00:00                       0:00:00   0:00:00
-
-
-   Speed :            88519879 Bytes/sec.
-   Speed :            5065.148 MegaBytes/min.
-   Ended : Thursday, November 5, 2026 0:22:34
-
-PS C:\Users\Administrator> Get-PSDrive C |
->> Select-Object Name,
->> @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
->>
->> robocopy "C:\inetpub\wwwroot\tab" "C:\TunerTools\Data\GuitarPro" /L /E /XJ /NFL /NDL /NP /BYTES /R:0 /W:0
-
-
--------------------------------------------------------------------------------
-   ROBOCOPY     ::     Robust File Copy for Windows
--------------------------------------------------------------------------------
-
-  Started : Thursday, November 5, 2026 0:26:29
-   Source : C:\inetpub\wwwroot\tab\
-     Dest : C:\TunerTools\Data\GuitarPro\
-
-    Files : *.*
-
-  Options : *.* /BYTES /NDL /NFL /L /S /E /DCOPY:DA /COPY:DAT /NP /XJ /R:0 /W:0
-
-------------------------------------------------------------------------------
-
-
-------------------------------------------------------------------------------
-
-                 Total      Copied   Skipped  Mismatch    FAILED    Extras
-    Dirs :        6792        6791         1         0         0         0
-   Files :     1639039     1639039         0         0         0         0
-   Bytes : 57955266829 57955266829         0         0         0         0
-   Times :     0:00:03     0:00:00                       0:00:00   0:00:03
-   Ended : Thursday, November 5, 2026 0:26:32
-
-Name FreeGB
----- ------
-C     62.21
-
-
-PS C:\Users\Administrator> robocopy "C:\inetpub\wwwroot\tab" "C:\TunerTools\Data\GuitarPro" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:8 /NFL /NDL /NP /TEE /LOG:"C:\TunerTools\Logs\copy_guitarpro.log"
->>
->> Write-Host "Robocopy exit code: $LASTEXITCODE"
-
- Log File : C:\TunerTools\Logs\copy_guitarpro.log
-
--------------------------------------------------------------------------------
-   ROBOCOPY     ::     Robust File Copy for Windows
--------------------------------------------------------------------------------
-
-  Started : Thursday, November 5, 2026 0:26:50
-   Source : C:\inetpub\wwwroot\tab\
-     Dest : C:\TunerTools\Data\GuitarPro\
-
-    Files : *.*
-
-  Options : *.* /NDL /NFL /TEE /S /E /DCOPY:DAT /COPY:DAT /Z /NP /XJ /MT:8 /R:2 /W:2
-
-------------------------------------------------------------------------------
+Get-Content "C:\TunerTools\Logs\copy_guitarpro.log" -Tail 15
