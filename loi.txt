@@ -1,27 +1,24 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$source = "C:\inetpub\wwwroot\tab"
+$partial = "C:\TunerTools\Data\GuitarPro"
+$backup = "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
 
-PS C:\Users\Administrator> foreach ($profile in @("fluidr3", "musescore")) {
->>     try {
->>         $url = "https://tunertools.top/api_gp_search.php?action=soundfont_info&profile=$profile"
->>
->>         $result = Invoke-RestMethod -Uri $url -TimeoutSec 30
->>
->>         [PSCustomObject]@{
->>             Profile = $profile
->>             Success = $result.success
->>             File    = $result.data.file_name
->>         }
->>     }
->>     catch {
->>         Write-Host "ERROR $profile : $($_.Exception.Message)"
->>     }
->> }
+if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+    throw "Khong tim thay thu muc Guitar Pro goc."
+}
 
-Profile   Success File
--------   ------- ----
-fluidr3      True FluidR3_GM.sf2
-musescore    True MuseScore_General.sf3
+if (-not (Test-Path -LiteralPath $partial -PathType Container)) {
+    throw "Khong tim thay thu muc ban sao do."
+}
 
+if (Test-Path -LiteralPath $backup) {
+    throw "Ten thu muc du phong da ton tai."
+}
 
-PS C:\Users\Administrator>
+Rename-Item -LiteralPath $partial `
+    -NewName "GuitarPro_COPY_INCOMPLETE" `
+    -ErrorAction Stop
+
+Write-Host "CHUAN BI GUITAR PRO OK" -ForegroundColor Green
+
+Test-Path $source
+Test-Path $backup
