@@ -1,64 +1,93 @@
 $ErrorActionPreference = "Stop"
 
-$file = "C:\inetpub\wwwroot\api_songs.php"
-$dest = "C:\TunerTools\Web\API\api_songs.php"
-$gpFolder = "C:\TunerTools\Data\GuitarPro"
+$root = "C:\inetpub\wwwroot"
+$apiDir = "C:\TunerTools\Web\API"
+$backupDir = "C:\TunerTools\Backups"
+$phpExe = "C:\php\php.exe"
 
-if (-not (Test-Path -LiteralPath $gpFolder -PathType Container)) {
-    throw "Khong tim thay thu muc Guitar Pro moi."
-}
+New-Item -ItemType Directory -Path $apiDir -Force | Out-Null
+New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
-$encoding = [System.Text.Encoding]::GetEncoding(28591)
-$content = $encoding.GetString(
-    [System.IO.File]::ReadAllBytes($file)
-)
+$enc = [System.Text.Encoding]::GetEncoding(28591)
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
-$old = '$baseDir = __DIR__ . DIRECTORY_SEPARATOR . ''tab'';'
-$new = '$baseDir = ''C:/TunerTools/Data/GuitarPro'';'
+# Chuan bi hai PHP trong thu muc moi
+foreach ($name in @("api_gp_search.php", "api_songs.php")) {
 
-$count = ([regex]::Matches(
-    $content,
-    [regex]::Escape($old)
-)).Count
+    $source = Join-Path $root $name
+    $target = Join-Path $apiDir $name
 
-if ($count -ne 2) {
-    throw "Can dung 2 vi tri, nhung tim thay: $count"
-}
-
-$backup = "C:\TunerTools\Backups\api_songs_before_gp_" +
-          (Get-Date -Format "yyyyMMdd_HHmmss") + ".php.bak"
-
-Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
-
-try {
-    $content = $content.Replace($old, $new)
-
-    [System.IO.File]::WriteAllBytes(
-        $file,
-        $encoding.GetBytes($content)
-    )
-
-    & "C:\php\php.exe" -l $file
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "PHP syntax error."
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Thieu file nguon: $name"
     }
 
-    Copy-Item -LiteralPath $file `
-        -Destination $dest `
-        -Force `
-        -ErrorAction Stop
+    # Sao luu ban trong thu muc moi neu da ton tai
+    if (Test-Path -LiteralPath $target) {
+        Copy-Item -LiteralPath $target `
+            -Destination (Join-Path $backupDir "$name.$stamp.bak") `
+            -ErrorAction Stop
+    }
+
+    # Lay ban PHP moi nhat dang hoat dong
+    Copy-Item -LiteralPath $source -Destination $target -Force
+
+    $content = $enc.GetString(
+        [System.IO.File]::ReadAllBytes($target)
+    )
+
+    # Giu nguyen duong dan tai nguyen phu thuoc tam thoi
+    $content = $content.Replace(
+        '__DIR__',
+        "'C:/inetpub/wwwroot'"
+    )
+
+    [System.IO.File]::WriteAllBytes(
+        $target,
+        $enc.GetBytes($content)
+    )
+
+    & $phpExe -l $target
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "PHP syntax error: $name"
+    }
+
+    Write-Host "PREPARED: $name" -ForegroundColor Green
+}
+
+# Tao API kiem tra tam thoi
+$probeName = "__tt_api_test_$([guid]::NewGuid().ToString('N')).php"
+$probePath = Join-Path $root $probeName
+
+$probeCode = "<?php require 'C:/TunerTools/Web/API/api_gp_search.php';"
+
+try {
+    [System.IO.File]::WriteAllBytes(
+        $probePath,
+        [System.Text.Encoding]::ASCII.GetBytes($probeCode)
+    )
+
+    $testUrl = "http://127.0.0.1/${probeName}?action=soundfont_info&profile=musescore"
+
+    $response = & curl.exe -sS --max-time 30 `
+        -H "Host: tunertools.top" `
+        "$testUrl"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Khong goi duoc API test"
+    }
+
+    $result = ($response -join "`n") | ConvertFrom-Json
+
+    if ($result.success -ne $true) {
+        throw "API moi chua hoat dong dung"
+    }
 
     Write-Host ""
-    Write-Host "API_SONGS PATH UPDATED OK" -ForegroundColor Green
-    Write-Host "Da sua: 2 vi tri"
-    Write-Host "Guitar Pro: $gpFolder"
-    Write-Host "Backup: $backup"
+    Write-Host "NEW API FOLDER TEST OK" -ForegroundColor Green
 }
-catch {
-    Copy-Item -LiteralPath $backup `
-        -Destination $file `
-        -Force
-
-    throw "Cap nhat that bai. Da khoi phuc PHP goc."
+finally {
+    if (Test-Path -LiteralPath $probePath) {
+        Remove-Item -LiteralPath $probePath -Force
+    }
 }
