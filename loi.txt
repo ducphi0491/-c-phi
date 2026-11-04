@@ -1,93 +1,101 @@
 $ErrorActionPreference = "Stop"
 
-$root = "C:\inetpub\wwwroot"
-$apiDir = "C:\TunerTools\Web\API"
+$live = "C:\inetpub\wwwroot\api_gp_search.php"
+$newApi = "C:\TunerTools\Web\API\api_gp_search.php"
 $backupDir = "C:\TunerTools\Backups"
-$phpExe = "C:\php\php.exe"
 
-New-Item -ItemType Directory -Path $apiDir -Force | Out-Null
 New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
-$enc = [System.Text.Encoding]::GetEncoding(28591)
+if (-not (Test-Path -LiteralPath $live -PathType Leaf)) {
+    throw "Thieu PHP dang hoat dong."
+}
+
+if (-not (Test-Path -LiteralPath $newApi -PathType Leaf)) {
+    throw "Thieu PHP tai thu muc moi."
+}
+
+function Test-GpApi {
+    foreach ($profile in @("fluidr3", "musescore")) {
+        $url = "http://127.0.0.1/api_gp_search.php?action=soundfont_info&profile=$profile"
+
+        $response = & curl.exe -fsS --max-time 30 `
+            -H "Host: tunertools.top" "$url"
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "HTTP API failed: $profile"
+        }
+
+        $json = ($response -join "`n") | ConvertFrom-Json
+
+        if ($json.success -ne $true -or
+            -not $json.data.file_name) {
+            throw "API response invalid: $profile"
+        }
+
+        Write-Host "API OK: $profile" -ForegroundColor Green
+    }
+}
+
+# Kiem tra PHP moi
+& "C:\php\php.exe" -l $newApi
+
+if ($LASTEXITCODE -ne 0) {
+    throw "PHP moi co loi cu phap."
+}
+
+# Kiem tra truoc khi chuyen
+Write-Host "`n=== BEFORE ===" -ForegroundColor Cyan
+Test-GpApi
+
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
-# Chuan bi hai PHP trong thu muc moi
-foreach ($name in @("api_gp_search.php", "api_songs.php")) {
+$backup = Join-Path $backupDir "api_gp_search_live_$stamp.php.bak"
+$stage = Join-Path $backupDir "api_gp_search_wrapper_$stamp.tmp"
+$rollbackOld = Join-Path $backupDir "api_gp_search_failed_wrapper_$stamp.bak"
 
-    $source = Join-Path $root $name
-    $target = Join-Path $apiDir $name
+$wrapper = "<?php`r`nrequire 'C:/TunerTools/Web/API/api_gp_search.php';`r`n"
 
-    if (-not (Test-Path -LiteralPath $source)) {
-        throw "Thieu file nguon: $name"
-    }
+[System.IO.File]::WriteAllText(
+    $stage,
+    $wrapper,
+    [System.Text.Encoding]::ASCII
+)
 
-    # Sao luu ban trong thu muc moi neu da ton tai
-    if (Test-Path -LiteralPath $target) {
-        Copy-Item -LiteralPath $target `
-            -Destination (Join-Path $backupDir "$name.$stamp.bak") `
-            -ErrorAction Stop
-    }
-
-    # Lay ban PHP moi nhat dang hoat dong
-    Copy-Item -LiteralPath $source -Destination $target -Force
-
-    $content = $enc.GetString(
-        [System.IO.File]::ReadAllBytes($target)
-    )
-
-    # Giu nguyen duong dan tai nguyen phu thuoc tam thoi
-    $content = $content.Replace(
-        '__DIR__',
-        "'C:/inetpub/wwwroot'"
-    )
-
-    [System.IO.File]::WriteAllBytes(
-        $target,
-        $enc.GetBytes($content)
-    )
-
-    & $phpExe -l $target
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "PHP syntax error: $name"
-    }
-
-    Write-Host "PREPARED: $name" -ForegroundColor Green
-}
-
-# Tao API kiem tra tam thoi
-$probeName = "__tt_api_test_$([guid]::NewGuid().ToString('N')).php"
-$probePath = Join-Path $root $probeName
-
-$probeCode = "<?php require 'C:/TunerTools/Web/API/api_gp_search.php';"
+$switched = $false
 
 try {
-    [System.IO.File]::WriteAllBytes(
-        $probePath,
-        [System.Text.Encoding]::ASCII.GetBytes($probeCode)
-    )
+    # Thay PHP bang wrapper va luu ban goc
+    [System.IO.File]::Replace($stage, $live, $backup)
+    $switched = $true
 
-    $testUrl = "http://127.0.0.1/${probeName}?action=soundfont_info&profile=musescore"
-
-    $response = & curl.exe -sS --max-time 30 `
-        -H "Host: tunertools.top" `
-        "$testUrl"
+    & "C:\php\php.exe" -l $live
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Khong goi duoc API test"
+        throw "PHP wrapper syntax error."
     }
 
-    $result = ($response -join "`n") | ConvertFrom-Json
-
-    if ($result.success -ne $true) {
-        throw "API moi chua hoat dong dung"
-    }
+    Write-Host "`n=== AFTER ===" -ForegroundColor Cyan
+    Test-GpApi
 
     Write-Host ""
-    Write-Host "NEW API FOLDER TEST OK" -ForegroundColor Green
+    Write-Host "API_GP_SEARCH CHUYEN THANH CONG" -ForegroundColor Green
+    Write-Host "Main PHP: $newApi"
+    Write-Host "Backup: $backup"
 }
-finally {
-    if (Test-Path -LiteralPath $probePath) {
-        Remove-Item -LiteralPath $probePath -Force
+catch {
+    Write-Host "LOI: $($_.Exception.Message)" -ForegroundColor Red
+
+    if ($switched -and (Test-Path -LiteralPath $backup)) {
+        Copy-Item -LiteralPath $backup -Destination $stage -Force
+
+        [System.IO.File]::Replace(
+            $stage,
+            $live,
+            $rollbackOld
+        )
+
+        Write-Host "DA KHOI PHUC PHP GOC" -ForegroundColor Yellow
     }
+
+    throw
 }
