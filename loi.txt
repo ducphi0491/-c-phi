@@ -1,96 +1,50 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+try {
+    $result = Invoke-RestMethod "http://127.0.0.1:5000/" -TimeoutSec 15
+    Write-Host "API STATUS: $($result.status)" -ForegroundColor Green
+} catch {
+    Write-Host "API ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
 
-PS C:\Users\Administrator> notepad "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
-PS C:\Users\Administrator> $action = New-ScheduledTaskAction `
->>     -Execute "wscript.exe" `
->>     -Argument '"C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"' `
->>     -WorkingDirectory "C:\TunerTools\Audio\AI_Music"
->>
->> Set-ScheduledTask -TaskName "AutoStart_Python_API" -Action $action
+3............
 
-TaskPath                                       TaskName                          State
---------                                       --------                          -----
-\                                              AutoStart_Python_API              Ready
+$oldPath = 'C:\AI_Music'
 
+$folders = @(
+    'C:\inetpub\wwwroot',
+    'C:\TunerTools\Audio\AI_Music',
+    'C:\inetpub\wwwroot\tunertools'
+)
 
-PS C:\Users\Administrator> (Get-ScheduledTask -TaskName "AutoStart_Python_API").Actions |
->> Format-List Execute, Arguments, WorkingDirectory
+$extensions = @('.php', '.py', '.bat', '.cmd', '.ps1', '.vbs', '.config')
 
+$files = @()
 
-Execute          : wscript.exe
-Arguments        : "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
-WorkingDirectory : C:\TunerTools\Audio\AI_Music
+foreach ($folder in $folders) {
+    if (Test-Path $folder) {
+        $files += Get-ChildItem $folder -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in $extensions }
+    }
+}
 
+foreach ($folder in $folders[1..2]) {
+    if (Test-Path $folder) {
+        $files += Get-ChildItem $folder -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in $extensions }
+    }
+}
 
+$matches = @(
+    $files |
+    Sort-Object FullName -Unique |
+    Select-String -SimpleMatch $oldPath -ErrorAction SilentlyContinue
+)
 
-PS C:\Users\Administrator> $newPath = "C:\TunerTools\Audio\AI_Music"
->>
->> if (-not (Test-Path "$newPath\app.py")) {
->>     throw "Khong tim thay app.py trong thu muc moi"
->> }
->>
->> # Dung cac tien trinh Python dang chay app.py
->> Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
->> Where-Object { $_.CommandLine -match '(^|\s)app\.py(\s|$)' } |
->> ForEach-Object {
->>     Stop-Process -Id $_.ProcessId -Force
->> }
->>
->> # Dong bo lan cuoi neu thu muc cu van con
->> if (Test-Path "C:\AI_Music") {
->>     robocopy "C:\AI_Music" $newPath /E /Z /COPY:DAT /DCOPY:DAT /XJ /XF ChayNgam.vbs /R:2 /W:2 /MT:4
->>
->>     if ($LASTEXITCODE -ge 8) {
->>         throw "Dong bo du lieu that bai. Chua khoi dong API moi."
->>     }
->> }
->>
->> # Chay Python API tu thu muc moi
->> Start-Process `
->>     -FilePath "C:\Users\Administrator\venv311\Scripts\python.exe" `
->>     -ArgumentList "app.py" `
->>     -WorkingDirectory $newPath `
->>     -WindowStyle Hidden
+if ($matches.Count -eq 0) {
+    Write-Host "KHONG TIM THAY DUONG DAN CU TRONG CAC FILE DA KIEM TRA" -ForegroundColor Green
+} else {
+    $matches |
+        Select-Object Path, LineNumber |
+        Format-Table -AutoSize
+}
 
--------------------------------------------------------------------------------
-   ROBOCOPY     ::     Robust File Copy for Windows
--------------------------------------------------------------------------------
-
-  Started : Thursday, November 5, 2026 0:05:34
-   Source : C:\AI_Music\
-     Dest : C:\TunerTools\Audio\AI_Music\
-
-    Files : *.*
-
-Exc Files : ChayNgam.vbs
-
-  Options : *.* /S /E /DCOPY:DAT /COPY:DAT /Z /XJ /MT:4 /R:2 /W:2
-
-------------------------------------------------------------------------------
-
-
-------------------------------------------------------------------------------
-
-               Total    Copied   Skipped  Mismatch    FAILED    Extras
-    Dirs :        21        21        21         0         0         0
-   Files :      3150         0      3150         0         0         0
-   Bytes :   6.548 g         0   6.543 g         0         0         0
-   Times :   0:00:00   0:00:00                       0:00:00   0:00:00
-   Ended : Thursday, November 5, 2026 0:05:34
-
-PS C:\Users\Administrator> Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue |
->> Select-Object LocalAddress, LocalPort, OwningProcess
->>
->> Invoke-RestMethod "http://127.0.0.1:5000/"
-
-LocalAddress LocalPort OwningProcess
------------- --------- -------------
-0.0.0.0           5000         14684
-
-
-
-PS C:\Users\Administrator>
-
-
-
+Write-Host "SO VI TRI THAM CHIEU DUONG DAN CU: $($matches.Count)"
