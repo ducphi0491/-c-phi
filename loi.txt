@@ -1,25 +1,24 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$source = "C:\inetpub\wwwroot"
+$target = "C:\TunerTools\Audio\SoundFonts"
 
-PS C:\Users\Administrator> Get-ChildItem "C:\inetpub\wwwroot" -File |
->> Select-Object Name, Extension |
->> Format-Table -AutoSize
+New-Item -ItemType Directory -Path $target -Force | Out-Null
 
-Name                                       Extension
-----                                       ---------
-.tunertools_document_schema_v10.ready      .ready
-.tunertools_document_schema_v10.ready.lock .lock
-api_AI.bat                                 .bat
-api_documents.php                          .php
-api_gp_search.php                          .php
-api_songs.php                              .php
-drive_picker.php                           .php
-FluidR3_GM.sf2                             .sf2
-index.php                                  .php
-MuseScore_General.sf3                      .sf3
-test.php                                   .php
-web.config                                 .config
+$files = @(
+    "MuseScore_General.sf3",
+    "FluidR3_GM.sf2"
+)
 
+foreach ($file in $files) {
+    $src = Join-Path $source $file
+    $dst = Join-Path $target $file
 
-PS C:\Users\Administrator>
+    Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
 
+    [PSCustomObject]@{
+        File = $file
+        Identical = (
+            (Get-FileHash $src).Hash -eq
+            (Get-FileHash $dst).Hash
+        )
+    }
+}
