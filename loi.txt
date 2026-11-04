@@ -1,3 +1,25 @@
 dir *.ps1
 cd C:\TunerTools_Diagnostic
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_TunerTools_IIS_Update_HTTP50x.ps1
+
+
+PS C:\Users\Administrator> cd C:\TunerToolsGP_Fresh
+PS C:\TunerToolsGP_Fresh> powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_TunerTools_IIS_Update_HTTP50x.ps1
+TunerTools sheet update - IIS request diagnostics
+Generated local time: 2026-11-04 21:53:15
+Time window: last 48 hours
+IIS logs scanned: 2
+Matching action=update requests: 6
+
+TimeLocal | Method | HTTP | Substatus | Win32 | TimeTakenMs | File
+2026-11-04 21:44:11 | POST | 404 | 0 | 0 | 686 | C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
+2026-11-04 21:43:58 | POST | 404 | 0 | 0 | 697 | C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
+2026-11-04 21:43:17 | POST | 502 | 0 | 0 | 1273 | C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
+2026-11-04 21:34:54 | POST | 502 | 0 | 0 | 1577 | C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
+2026-11-04 18:18:04 | POST | 502 | 0 | 0 | 567 | C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
+2026-11-04 18:05:04 | POST | 502 | 0 | 0 | 998 | C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
+
+No PHP/MySQL password, GitHub token, query parameters, or image data is collected.
+
+Saved to: C:\TunerToolsGP_Fresh\TunerTools_HTTP50x_IIS_20261104_215315.txt
+PS C:\TunerToolsGP_Fresh>
