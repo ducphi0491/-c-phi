@@ -1,106 +1,58 @@
-$ErrorActionPreference = "Stop"
+$files = @(
+    "C:\TunerTools\Web\API\api_gp_search.php",
+    "C:\TunerTools\Web\API\api_songs.php",
+    "C:\TunerTools\Audio\AI_Music\app.py",
+    "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs",
+    "C:\inetpub\wwwroot\api_AI.bat",
+    "C:\inetpub\wwwroot\api_documents.php"
+)
 
-$source = "C:\inetpub\wwwroot\img_sys"
-$target = "C:\TunerTools\Web\img_sys"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+$patterns = @(
+    'C:/inetpub/wwwroot',
+    'C:\inetpub\wwwroot',
+    'C:/AI_Music',
+    'C:\AI_Music',
+    'firebase-service-account.json',
+    'google-services.json',
+    'tuner_images_'
+)
 
-# 1. Kiem tra du lieu nguon va dich
-$files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
-$targetFiles = @(Get-ChildItem -LiteralPath $target -Recurse -File)
+Write-Host "`n=== DUONG DAN CON THAM CHIEU ===" -ForegroundColor Cyan
 
-if ($files.Count -ne $targetFiles.Count) {
-    throw "So file khong trung khop"
-}
-
-foreach ($f in $files) {
-    $relative = $f.FullName.Substring($source.Length).TrimStart('\')
-    $dest = Join-Path $target $relative
-
-    if (!(Test-Path -LiteralPath $dest -PathType Leaf)) {
-        throw "Thieu file: $relative"
+foreach ($file in $files) {
+    if (Test-Path -LiteralPath $file -PathType Leaf) {
+        Select-String -LiteralPath $file `
+            -SimpleMatch -Pattern $patterns |
+        Select-Object @{
+            Name = 'File'
+            Expression = { Split-Path $_.Path -Leaf }
+        }, LineNumber, Pattern
     }
+}
 
-    if ((Get-FileHash -LiteralPath $f.FullName).Hash -ne
-        (Get-FileHash -LiteralPath $dest).Hash) {
-        throw "File khac nhau: $relative"
+Write-Host "`n=== DU LIEU CU ===" -ForegroundColor Cyan
+
+@(
+    "C:\AI_Music",
+    "C:\inetpub\wwwroot\tunertools",
+    "C:\inetpub\wwwroot\guitar_HD",
+    "C:\inetpub\wwwroot\libs",
+    "C:\inetpub\wwwroot\img_sys",
+    "C:\inetpub\wwwroot\support_chat_uploads",
+    "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
+) | ForEach-Object {
+    [PSCustomObject]@{
+        Folder = $_
+        Exists = Test-Path -LiteralPath $_
     }
-}
+} | Format-Table -AutoSize
 
-Write-Host "IMG_SYS HASH VERIFIED: $($files.Count) FILES" -ForegroundColor Green
+Write-Host "`n=== DUNG LUONG O C ===" -ForegroundColor Cyan
 
-# 2. Kiem tra URL hien tai
-$url = "http://127.0.0.1/img_sys/logo.png"
+Get-PSDrive C |
+Select-Object Name,
+@{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}},
+@{Name="UsedGB";Expression={[math]::Round($_.Used/1GB,2)}} |
+Format-Table -AutoSize
 
-function Test-ImgUrl {
-    $status = (& curl.exe -sS --max-time 20 -r 0-0 `
-        -H "Host: tunertools.top" `
-        -o NUL -w "%{http_code}" $url | Out-String).Trim()
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong ket noi duoc IMG_SYS"
-    }
-
-    return $status
-}
-
-$before = Test-ImgUrl
-Write-Host "HTTP BEFORE: $before"
-
-if ($before -notin @("200", "206")) {
-    throw "URL goc chua hoat dong"
-}
-
-# 3. Kiem tra anh xa IIS
-$vdirs = & $appcmd list vdirs | Out-String
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong doc duoc IIS"
-}
-
-if ($vdirs -match 'VDIR "Default Web Site/img_sys"') {
-    throw "IMG_SYS da co Virtual Directory. Khong ghi de."
-}
-
-# 4. Backup IIS
-$backup = "TT_IMG_SYS_" + (Get-Date -Format "yyyyMMdd_HHmmss")
-
-& $appcmd add backup $backup
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong backup duoc IIS"
-}
-
-$created = $false
-
-try {
-    & $appcmd add vdir `
-        '/app.name:Default Web Site/' `
-        '/path:/img_sys' `
-        "/physicalPath:$target"
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Tao Virtual Directory that bai"
-    }
-
-    $created = $true
-
-    $after = Test-ImgUrl
-    Write-Host "HTTP AFTER: $after"
-
-    if ($after -notin @("200", "206")) {
-        throw "URL moi khong hoat dong"
-    }
-
-    Write-Host ""
-    Write-Host "IMG_SYS MIGRATION OK" -ForegroundColor Green
-
-    & $appcmd list vdirs
-}
-catch {
-    if ($created) {
-        & $appcmd delete vdir "Default Web Site/img_sys"
-    }
-
-    Write-Host "DA THU KHOI PHUC IIS" -ForegroundColor Yellow
-    throw
-}
+Write-Host "FINAL AUDIT OK" -ForegroundColor Green
