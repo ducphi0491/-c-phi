@@ -1,155 +1,191 @@
-$ErrorActionPreference = "Stop"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$source = "C:\inetpub\wwwroot\tab"
-$target = "C:\TunerTools\Data\GuitarPro"
-$php = "C:\inetpub\wwwroot\api_gp_search.php"
-$phpCopy = "C:\TunerTools\Web\API\api_gp_search.php"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
+>>
+>> $source = "C:\inetpub\wwwroot\tab"
+>> $target = "C:\TunerTools\Data\GuitarPro"
+>> $php = "C:\inetpub\wwwroot\api_gp_search.php"
+>> $phpCopy = "C:\TunerTools\Web\API\api_gp_search.php"
+>> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+>>
+>> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+>> $phpBackup = "C:\TunerTools\Backups\api_gp_search_before_move_$stamp.php"
+>> $iisBackup = "TT_GP_$stamp"
+>>
+>> # Kiem tra truoc khi chuyen
+>> if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+>>     throw "Khong tim thay thu muc nguon."
+>> }
+>>
+>> if (Test-Path -LiteralPath $target) {
+>>     throw "Thu muc dich da ton tai. Khong thuc hien CUT."
+>> }
+>>
+>> if (-not (Test-Path -LiteralPath $php -PathType Leaf)) {
+>>     throw "Khong tim thay file PHP."
+>> }
+>>
+>> # Kiem tra Virtual Directory /tab chua ton tai
+>> $vdirs = @(& $appcmd list vdirs '/app.name:Default Web Site/')
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>     throw "Khong doc duoc cau hinh IIS."
+>> }
+>>
+>> if (($vdirs -join "`n") -match 'VDIR "Default Web Site/tab"') {
+>>     throw "IIS da co Virtual Directory /tab. Can kiem tra truoc."
+>> }
+>>
+>> # Chuan bi sua dung 3 vi tri PHP
+>> $enc = [System.Text.Encoding]::GetEncoding(28591)
+>> $content = $enc.GetString([System.IO.File]::ReadAllBytes($php))
+>>
+>> $oldRoot = '$ttgp_tab_root = __DIR__ . DIRECTORY_SEPARATOR . ''tab'';'
+>> $newRoot = '$ttgp_tab_root = ''C:/TunerTools/Data/GuitarPro'';'
+>>
+>> $oldBase = '$baseDir = __DIR__ . DIRECTORY_SEPARATOR . ''tab'';'
+>> $newBase = '$baseDir = ''C:/TunerTools/Data/GuitarPro'';'
+>>
+>> $rootCount = ([regex]::Matches($content, [regex]::Escape($oldRoot))).Count
+>> $baseCount = ([regex]::Matches($content, [regex]::Escape($oldBase))).Count
+>>
+>> if ($rootCount -ne 1 -or $baseCount -ne 2) {
+>>     throw "So vi tri PHP khong khop. Root=$rootCount, Base=$baseCount"
+>> }
+>>
+>> $newContent = $content.Replace($oldRoot, $newRoot)
+>> $newContent = $newContent.Replace($oldBase, $newBase)
+>>
+>> $moved = $false
+>> $vdirCreated = $false
+>>
+>> try {
+>>     # Sao luu cau hinh IIS va PHP
+>>     & $appcmd add backup $iisBackup | Out-Host
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "Khong sao luu duoc IIS."
+>>     }
+>>
+>>     Copy-Item -LiteralPath $php -Destination $phpBackup -ErrorAction Stop
+>>
+>>     # CUT thu muc Guitar Pro tren cung o C
+>>     Write-Host "DANG CHUYEN GUITAR PRO..." -ForegroundColor Cyan
+>>
+>>     Move-Item -LiteralPath $source -Destination $target -ErrorAction Stop
+>>     $moved = $true
+>>
+>>     # Giu nguyen URL /tab/ bang IIS Virtual Directory
+>>     & $appcmd add vdir `
+>>         '/app.name:Default Web Site/' `
+>>         '/path:/tab' `
+>>         "/physicalPath:$target" | Out-Host
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "Khong tao duoc IIS Virtual Directory."
+>>     }
+>>
+>>     $vdirCreated = $true
+>>
+>>     # Cap nhat 3 duong dan trong PHP
+>>     [System.IO.File]::WriteAllBytes(
+>>         $php,
+>>         $enc.GetBytes($newContent)
+>>     )
+>>
+>>     & "C:\php\php.exe" -l $php
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "PHP co loi cu phap."
+>>     }
+>>
+>>     Copy-Item -LiteralPath $php -Destination $phpCopy -Force -ErrorAction Stop
+>>
+>>     Write-Host ""
+>>     Write-Host "CHUYEN GUITAR PRO THANH CONG" -ForegroundColor Green
+>>     Write-Host "Du lieu: $target"
+>>     Write-Host "URL: /tab/"
+>>     Write-Host "PHP: Da sua 3 vi tri"
+>> }
+>> catch {
+>>     Write-Host "CO LOI: $($_.Exception.Message)" -ForegroundColor Red
+>>     Write-Host "DANG KHOI PHUC..." -ForegroundColor Yellow
+>>
+>>     if (Test-Path -LiteralPath $phpBackup) {
+>>         Copy-Item -LiteralPath $phpBackup -Destination $php -Force
+>>     }
+>>
+>>     if ($vdirCreated) {
+>>         & $appcmd delete vdir "Default Web Site/tab" | Out-Host
+>>     }
+>>
+>>     if ($moved -and
+>>         (Test-Path -LiteralPath $target) -and
+>>         -not (Test-Path -LiteralPath $source)) {
+>>
+>>         Move-Item -LiteralPath $target -Destination $source -ErrorAction Stop
+>>     }
+>>
+>>     throw "Chuyen du lieu that bai. Kiem tra ket qua khoi phuc o tren."
+>> }
+>>
+BACKUP object "TT_GP_20261105_010441" added
+DANG CHUYEN GUITAR PRO...
+VDIR object "Default Web Site/tab" added
+No syntax errors detected in C:\inetpub\wwwroot\api_gp_search.php
 
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$phpBackup = "C:\TunerTools\Backups\api_gp_search_before_move_$stamp.php"
-$iisBackup = "TT_GP_$stamp"
+CHUYEN GUITAR PRO THANH CONG
+Du lieu: C:\TunerTools\Data\GuitarPro
+URL: /tab/
+PHP: Da sua 3 vi tri
+PS C:\Users\Administrator>
+>> Write-Host "=== GUITAR PRO ==="
+>>
+>> Test-Path "C:\TunerTools\Data\GuitarPro"
+>>
+>> Get-ChildItem "C:\TunerTools\Data\GuitarPro" -Directory |
+>> Select-Object -First 15 Name
+>>
+>> Write-Host "=== IIS ==="
+>>
+>> & "$env:windir\System32\inetsrv\appcmd.exe" list vdir
+>>
+>> Write-Host "=== PHP ==="
+>>
+>> & "C:\php\php.exe" -l "C:\inetpub\wwwroot\api_gp_search.php"
+>>
+>> Write-Host "=== SOUNDFONT ==="
+>>
+>> (Invoke-RestMethod "https://tunertools.top/api_gp_search.php?action=soundfont_info&profile=musescore").success
+=== GUITAR PRO ===
+True
 
-# Kiem tra truoc khi chuyen
-if (-not (Test-Path -LiteralPath $source -PathType Container)) {
-    throw "Khong tim thay thu muc nguon."
-}
-
-if (Test-Path -LiteralPath $target) {
-    throw "Thu muc dich da ton tai. Khong thuc hien CUT."
-}
-
-if (-not (Test-Path -LiteralPath $php -PathType Leaf)) {
-    throw "Khong tim thay file PHP."
-}
-
-# Kiem tra Virtual Directory /tab chua ton tai
-$vdirs = @(& $appcmd list vdirs '/app.name:Default Web Site/')
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong doc duoc cau hinh IIS."
-}
-
-if (($vdirs -join "`n") -match 'VDIR "Default Web Site/tab"') {
-    throw "IIS da co Virtual Directory /tab. Can kiem tra truoc."
-}
-
-# Chuan bi sua dung 3 vi tri PHP
-$enc = [System.Text.Encoding]::GetEncoding(28591)
-$content = $enc.GetString([System.IO.File]::ReadAllBytes($php))
-
-$oldRoot = '$ttgp_tab_root = __DIR__ . DIRECTORY_SEPARATOR . ''tab'';'
-$newRoot = '$ttgp_tab_root = ''C:/TunerTools/Data/GuitarPro'';'
-
-$oldBase = '$baseDir = __DIR__ . DIRECTORY_SEPARATOR . ''tab'';'
-$newBase = '$baseDir = ''C:/TunerTools/Data/GuitarPro'';'
-
-$rootCount = ([regex]::Matches($content, [regex]::Escape($oldRoot))).Count
-$baseCount = ([regex]::Matches($content, [regex]::Escape($oldBase))).Count
-
-if ($rootCount -ne 1 -or $baseCount -ne 2) {
-    throw "So vi tri PHP khong khop. Root=$rootCount, Base=$baseCount"
-}
-
-$newContent = $content.Replace($oldRoot, $newRoot)
-$newContent = $newContent.Replace($oldBase, $newBase)
-
-$moved = $false
-$vdirCreated = $false
-
-try {
-    # Sao luu cau hinh IIS va PHP
-    & $appcmd add backup $iisBackup | Out-Host
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong sao luu duoc IIS."
-    }
-
-    Copy-Item -LiteralPath $php -Destination $phpBackup -ErrorAction Stop
-
-    # CUT thu muc Guitar Pro tren cung o C
-    Write-Host "DANG CHUYEN GUITAR PRO..." -ForegroundColor Cyan
-
-    Move-Item -LiteralPath $source -Destination $target -ErrorAction Stop
-    $moved = $true
-
-    # Giu nguyen URL /tab/ bang IIS Virtual Directory
-    & $appcmd add vdir `
-        '/app.name:Default Web Site/' `
-        '/path:/tab' `
-        "/physicalPath:$target" | Out-Host
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong tao duoc IIS Virtual Directory."
-    }
-
-    $vdirCreated = $true
-
-    # Cap nhat 3 duong dan trong PHP
-    [System.IO.File]::WriteAllBytes(
-        $php,
-        $enc.GetBytes($newContent)
-    )
-
-    & "C:\php\php.exe" -l $php
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "PHP co loi cu phap."
-    }
-
-    Copy-Item -LiteralPath $php -Destination $phpCopy -Force -ErrorAction Stop
-
-    Write-Host ""
-    Write-Host "CHUYEN GUITAR PRO THANH CONG" -ForegroundColor Green
-    Write-Host "Du lieu: $target"
-    Write-Host "URL: /tab/"
-    Write-Host "PHP: Da sua 3 vi tri"
-}
-catch {
-    Write-Host "CO LOI: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "DANG KHOI PHUC..." -ForegroundColor Yellow
-
-    if (Test-Path -LiteralPath $phpBackup) {
-        Copy-Item -LiteralPath $phpBackup -Destination $php -Force
-    }
-
-    if ($vdirCreated) {
-        & $appcmd delete vdir "Default Web Site/tab" | Out-Host
-    }
-
-    if ($moved -and
-        (Test-Path -LiteralPath $target) -and
-        -not (Test-Path -LiteralPath $source)) {
-
-        Move-Item -LiteralPath $target -Destination $source -ErrorAction Stop
-    }
-
-    throw "Chuyen du lieu that bai. Kiem tra ket qua khoi phuc o tren."
-}
+=== IIS ===
+VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
+VDIR "Default Web Site/tab" (physicalPath:C:\TunerTools\Data\GuitarPro)
+=== PHP ===
+No syntax errors detected in C:\inetpub\wwwroot\api_gp_search.php
+=== SOUNDFONT ===
+Name
+----
++
+1
+2
+3
+4
+5
+6
+7
+8
+@
+A
+B
+C
+D
+dieu_dem_nhac
+True
 
 
+PS C:\Users\Administrator>
 
-
-
-
-2...............
-
-
-Write-Host "=== GUITAR PRO ==="
-
-Test-Path "C:\TunerTools\Data\GuitarPro"
-
-Get-ChildItem "C:\TunerTools\Data\GuitarPro" -Directory |
-Select-Object -First 15 Name
-
-Write-Host "=== IIS ==="
-
-& "$env:windir\System32\inetsrv\appcmd.exe" list vdir
-
-Write-Host "=== PHP ==="
-
-& "C:\php\php.exe" -l "C:\inetpub\wwwroot\api_gp_search.php"
-
-Write-Host "=== SOUNDFONT ==="
-
-(Invoke-RestMethod "https://tunertools.top/api_gp_search.php?action=soundfont_info&profile=musescore").success
