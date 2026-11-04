@@ -25,3 +25,12 @@ if (-not $file) {
         Write-Host "GP HTTP ERROR: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
+
+
+2............
+
+Select-String `
+    -Path "C:\inetpub\wwwroot\web.config" `
+    -Pattern "tunertools", "app-guides" |
+Select-Object LineNumber, Line |
+Format-Table -AutoSize -Wrap
