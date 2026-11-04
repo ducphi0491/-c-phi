@@ -1,26 +1,50 @@
-$root = "C:\TunerTools"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$folders = @(
-    "Web",
-    "Data",
-    "Data\GuitarPro",
-    "Audio",
-    "Audio\METRONOME",
-    "Audio\DRUM",
-    "Audio\CHORD_AI",
-    "Audio\AI_MODELS",
-    "Tools",
-    "Tools\GP_Fresh",
-    "Cache",
-    "Backups",
-    "Logs"
-)
+PS C:\Users\Administrator> $root = "C:\TunerTools"
+>>
+>> $folders = @(
+>>     "Web",
+>>     "Data",
+>>     "Data\GuitarPro",
+>>     "Audio",
+>>     "Audio\METRONOME",
+>>     "Audio\DRUM",
+>>     "Audio\CHORD_AI",
+>>     "Audio\AI_MODELS",
+>>     "Tools",
+>>     "Tools\GP_Fresh",
+>>     "Cache",
+>>     "Backups",
+>>     "Logs"
+>> )
+>>
+>> foreach ($folder in $folders) {
+>>     $path = Join-Path $root $folder
+>>     New-Item -Path $path -ItemType Directory -Force |
+>>         Out-Null
+>> }
+>>
+>> Get-ChildItem $root -Directory -Recurse |
+>>     Select-Object FullName
 
-foreach ($folder in $folders) {
-    $path = Join-Path $root $folder
-    New-Item -Path $path -ItemType Directory -Force |
-        Out-Null
-}
+FullName
+--------
+C:\TunerTools\Audio
+C:\TunerTools\Backups
+C:\TunerTools\Cache
+C:\TunerTools\Data
+C:\TunerTools\Logs
+C:\TunerTools\Tools
+C:\TunerTools\Web
+C:\TunerTools\Audio\AI_MODELS
+C:\TunerTools\Audio\CHORD_AI
+C:\TunerTools\Audio\DRUM
+C:\TunerTools\Audio\METRONOME
+C:\TunerTools\Data\GuitarPro
+C:\TunerTools\Tools\GP_Fresh
 
-Get-ChildItem $root -Directory -Recurse |
-    Select-Object FullName
+
+PS C:\Users\Administrator>
+
+
