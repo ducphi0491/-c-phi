@@ -1,5 +1,1 @@
-SHOW TRIGGERS
-WHERE `Table` = 'songs';
-
-
-SHOW CREATE TABLE song_sync_changes;
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_TunerTools_IIS_Update_HTTP50x.ps1
