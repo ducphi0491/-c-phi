@@ -12,3 +12,9 @@ py tt_gp_bulk.py auth
 
 https://console.cloud.google.com/auth/branding?authuser=1&project=tunertools-drive
 
+https://tuner.alwaysdata.net/privacy-policy.php
+
+alwaysdata.net
+
+	https://tunertools.top/
+
