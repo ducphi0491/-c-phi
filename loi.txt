@@ -1,24 +1,32 @@
-$source = "C:\inetpub\wwwroot"
-$target = "C:\TunerTools\Audio\SoundFonts"
+PS C:\Users\Administrator> $source = "C:\inetpub\wwwroot"
+>> $target = "C:\TunerTools\Audio\SoundFonts"
+>>
+>> New-Item -ItemType Directory -Path $target -Force | Out-Null
+>>
+>> $files = @(
+>>     "MuseScore_General.sf3",
+>>     "FluidR3_GM.sf2"
+>> )
+>>
+>> foreach ($file in $files) {
+>>     $src = Join-Path $source $file
+>>     $dst = Join-Path $target $file
+>>
+>>     Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
+>>
+>>     [PSCustomObject]@{
+>>         File = $file
+>>         Identical = (
+>>             (Get-FileHash $src).Hash -eq
+>>             (Get-FileHash $dst).Hash
+>>         )
+>>     }
+>> }
 
-New-Item -ItemType Directory -Path $target -Force | Out-Null
+File                  Identical
+----                  ---------
+MuseScore_General.sf3      True
+FluidR3_GM.sf2             True
 
-$files = @(
-    "MuseScore_General.sf3",
-    "FluidR3_GM.sf2"
-)
 
-foreach ($file in $files) {
-    $src = Join-Path $source $file
-    $dst = Join-Path $target $file
-
-    Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
-
-    [PSCustomObject]@{
-        File = $file
-        Identical = (
-            (Get-FileHash $src).Hash -eq
-            (Get-FileHash $dst).Hash
-        )
-    }
-}
+PS C:\Users\Administrator>
