@@ -1,39 +1,106 @@
-$folders = @(
-    "C:\inetpub\wwwroot\guitar_HD",
-    "C:\inetpub\wwwroot\img_sys",
-    "C:\inetpub\wwwroot\libs"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($folder in $folders) {
-    Write-Host "`n=== $folder ===" -ForegroundColor Cyan
+PS C:\Users\Administrator> $folders = @(
+>>     "C:\inetpub\wwwroot\guitar_HD",
+>>     "C:\inetpub\wwwroot\img_sys",
+>>     "C:\inetpub\wwwroot\libs"
+>> )
+>>
+>> foreach ($folder in $folders) {
+>>     Write-Host "`n=== $folder ===" -ForegroundColor Cyan
+>>
+>>     if (Test-Path -LiteralPath $folder) {
+>>         Get-ChildItem -LiteralPath $folder -Force |
+>>             Select-Object -First 15 Name, Mode |
+>>             Format-Table -AutoSize
+>>     }
+>>     else {
+>>         Write-Host "KHONG TON TAI"
+>>     }
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA TASK AI ===" -ForegroundColor Cyan
+>>
+>> Get-ScheduledTask -TaskName "AutoStart_Python_API" |
+>>     Select-Object -ExpandProperty Actions |
+>>     Select-Object Execute, Arguments, WorkingDirectory |
+>>     Format-Table -AutoSize -Wrap
+>>
+>> Write-Host "`n=== KIEM TRA DU LIEU CON LAI ===" -ForegroundColor Cyan
+>>
+>> @(
+>>     "C:\AI_Music",
+>>     "C:\inetpub\wwwroot\tunertools",
+>>     "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE",
+>>     "C:\inetpub\wwwroot\support_chat_uploads"
+>> ) | ForEach-Object {
+>>     [PSCustomObject]@{
+>>         Path = $_
+>>         Exists = Test-Path -LiteralPath $_
+>>     }
+>> } | Format-Table -AutoSize
 
-    if (Test-Path -LiteralPath $folder) {
-        Get-ChildItem -LiteralPath $folder -Force |
-            Select-Object -First 15 Name, Mode |
-            Format-Table -AutoSize
-    }
-    else {
-        Write-Host "KHONG TON TAI"
-    }
-}
+=== C:\inetpub\wwwroot\guitar_HD ===
 
-Write-Host "`n=== KIEM TRA TASK AI ===" -ForegroundColor Cyan
+Name                   Mode
+----                   ----
+images                 d-----
+videos                 d-----
+course_index.json      -a----
+level_01.json          -a----
+level_02.json          -a----
+level_03.json          -a----
+level_04.json          -a----
+level_05.json          -a----
+practice_patterns.json -a----
+practice_songs.json    -a----
 
-Get-ScheduledTask -TaskName "AutoStart_Python_API" |
-    Select-Object -ExpandProperty Actions |
-    Select-Object Execute, Arguments, WorkingDirectory |
-    Format-Table -AutoSize -Wrap
 
-Write-Host "`n=== KIEM TRA DU LIEU CON LAI ===" -ForegroundColor Cyan
 
-@(
-    "C:\AI_Music",
-    "C:\inetpub\wwwroot\tunertools",
-    "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE",
-    "C:\inetpub\wwwroot\support_chat_uploads"
-) | ForEach-Object {
-    [PSCustomObject]@{
-        Path = $_
-        Exists = Test-Path -LiteralPath $_
-    }
-} | Format-Table -AutoSize
+=== C:\inetpub\wwwroot\img_sys ===
+
+Name               Mode
+----               ----
+guitar_decor1.png  -a----
+guitar_decor33.png -a----
+logo.png           -a----
+nen.png            -a----
+nen1.png           -a----
+nen_bh.png         -a----
+nen_bh0.png        -a----
+nen_bh1.png        -a----
+nen_bh7.png        -a----
+nen_mobile.png     -a----
+
+
+
+=== C:\inetpub\wwwroot\libs ===
+
+Name         Mode
+----         ----
+guitar.json  -a----
+piano.json   -a----
+ukulele.json -a----
+
+
+
+=== KIEM TRA TASK AI ===
+
+Execute     Arguments                                   WorkingDirectory
+-------     ---------                                   ----------------
+wscript.exe "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs" C:\TunerTools\Audio\AI_Music
+
+
+
+=== KIEM TRA DU LIEU CON LAI ===
+
+Path                                         Exists
+----                                         ------
+C:\AI_Music                                   False
+C:\inetpub\wwwroot\tunertools                  True
+C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE   True
+C:\inetpub\wwwroot\support_chat_uploads        True
+
+
+PS C:\Users\Administrator>
