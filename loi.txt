@@ -1,56 +1,81 @@
-$root = "C:\inetpub\wwwroot"
 
-$names = @("guitar_HD", "img_sys", "libs")
+PS C:\Users\Administrator> $root = "C:\inetpub\wwwroot"
+>>
+>> $names = @("guitar_HD", "img_sys", "libs")
+>>
+>> Write-Host "`n=== DUNG LUONG DU LIEU ===" -ForegroundColor Cyan
+>>
+>> foreach ($name in $names) {
+>>     $path = Join-Path $root $name
+>>
+>>     $stats = Get-ChildItem -LiteralPath $path -Recurse -File |
+>>         Measure-Object -Property Length -Sum
+>>
+>>     [PSCustomObject]@{
+>>         Folder = $name
+>>         Files = $stats.Count
+>>         SizeMB = [math]::Round($stats.Sum / 1MB, 2)
+>>     }
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA URL ===" -ForegroundColor Cyan
+>>
+>> $urls = @(
+>>     "/guitar_HD/course_index.json",
+>>     "/libs/guitar.json",
+>>     "/libs/piano.json",
+>>     "/libs/ukulele.json",
+>>     "/img_sys/logo.png"
+>> )
+>>
+>> foreach ($path in $urls) {
+>>     $url = "http://127.0.0.1$path"
+>>
+>>     $status = & curl.exe -sS --max-time 15 `
+>>         -H "Host: tunertools.top" `
+>>         -r 0-0 -o NUL `
+>>         -w "%{http_code}" "$url"
+>>
+>>     [PSCustomObject]@{
+>>         URL = $path
+>>         HTTP = $status
+>>     }
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA AI MOI ===" -ForegroundColor Cyan
+>>
+>> @(
+>>     "C:\TunerTools\Audio\AI_Music\app.py",
+>>     "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
+>> ) | ForEach-Object {
+>>     [PSCustomObject]@{
+>>         File = $_
+>>         Exists = Test-Path -LiteralPath $_
+>>     }
+>> }
+>>
+>> Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
 
-Write-Host "`n=== DUNG LUONG DU LIEU ===" -ForegroundColor Cyan
+=== DUNG LUONG DU LIEU ===
 
-foreach ($name in $names) {
-    $path = Join-Path $root $name
 
-    $stats = Get-ChildItem -LiteralPath $path -Recurse -File |
-        Measure-Object -Property Length -Sum
+=== KIEM TRA URL ===
 
-    [PSCustomObject]@{
-        Folder = $name
-        Files = $stats.Count
-        SizeMB = [math]::Round($stats.Sum / 1MB, 2)
-    }
-}
+=== KIEM TRA AI MOI ===
 
-Write-Host "`n=== KIEM TRA URL ===" -ForegroundColor Cyan
+KIEM TRA HOAN TAT
+Folder    Files SizeMB
+------    ----- ------
+guitar_HD    18    0.2
+img_sys      10   9.28
+libs          3   1.05
 
-$urls = @(
-    "/guitar_HD/course_index.json",
-    "/libs/guitar.json",
-    "/libs/piano.json",
-    "/libs/ukulele.json",
-    "/img_sys/logo.png"
-)
 
-foreach ($path in $urls) {
-    $url = "http://127.0.0.1$path"
 
-    $status = & curl.exe -sS --max-time 15 `
-        -H "Host: tunertools.top" `
-        -r 0-0 -o NUL `
-        -w "%{http_code}" "$url"
 
-    [PSCustomObject]@{
-        URL = $path
-        HTTP = $status
-    }
-}
 
-Write-Host "`n=== KIEM TRA AI MOI ===" -ForegroundColor Cyan
 
-@(
-    "C:\TunerTools\Audio\AI_Music\app.py",
-    "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
-) | ForEach-Object {
-    [PSCustomObject]@{
-        File = $_
-        Exists = Test-Path -LiteralPath $_
-    }
-}
 
-Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
+
+
+PS C:\Users\Administrator>
