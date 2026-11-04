@@ -26,8 +26,11 @@ internal fun getAlphaTabHtml(
     initialPanelColor: String,
     initialCursorWidth: Float,
     initialRegionOpacity: Float,
-    initialScoreZoomPercent: Int
+    initialScoreZoomPercent: Int,
+    initialDisplayMode: String = "scoretab"
 ): String {
+    val practiceIsVietnamese = currentLang.startsWith("vi", ignoreCase = true)
+    val quotedInitialDisplayMode = JSONObject.quote(initialDisplayMode)
     val quotedInitialSoundFontMode = JSONObject.quote(initialSoundFontMode)
     val quotedInitialSoundFontUrl = JSONObject.quote(initialSoundFontUrl)
     val quotedStandardSoundFontUrl = JSONObject.quote(STANDARD_SOUNDFONT_URL)
@@ -148,6 +151,40 @@ internal fun getAlphaTabHtml(
                 body.pdf-export-mode #tt-playhead-overlay {
                     display: none !important;
                 }
+                /* Step mode must never show the stale playback cursor. The
+                   practice pointer is attached to the actual beat bounds. */
+                body.tt-practice-step-active #tt-playhead-overlay { display: none !important; }
+                body.tt-practice-step-active .at-cursor-bar { opacity: 0 !important; }
+                #tt-practice-note-cursor {
+                    position: absolute; display: none; z-index: 32;
+                    pointer-events: none; box-sizing: border-box;
+                    transform: translateX(-50%); border-radius: 4px;
+                    background: var(--tt-cursor-color,#dc2626);
+                }
+                #tt-practice-note-cursor::before {
+                    content: ''; position: absolute; left: 50%; top: -7px;
+                    transform: translateX(-50%); width: 16px; height: 9px;
+                    border-radius: 7px; border: 1px solid rgba(15,23,42,.8);
+                    background: inherit;
+                }
+                body.pdf-export-mode #tt-practice-note-cursor { display: none !important; }
+                /* Explicit paused seek pointer for normal TAB playback. AlphaTab's
+                   native beat cursor sometimes does not move until the next Play
+                   event in Android WebView; place this at exact BeatBounds. */
+                #tt-normal-seek-cursor {
+                    position: absolute; display: none; z-index: 33;
+                    pointer-events: none; box-sizing: border-box;
+                    transform: translateX(-50%); border-radius: 4px;
+                }
+                #tt-normal-seek-cursor::before {
+                    content: ''; position: absolute; left: 50%; top: -7px;
+                    transform: translateX(-50%); width: 16px; height: 9px;
+                    border-radius: 7px; border: 1px solid rgba(15,23,42,.8);
+                    background: inherit;
+                }
+                body.tt-normal-seek-paused #tt-playhead-overlay { display: none !important; }
+                body.tt-normal-seek-paused .at-cursor-bar { opacity: 0 !important; }
+                body.pdf-export-mode #tt-normal-seek-cursor { display: none !important; }
                 @media print {
                     #tt-playhead-overlay { display: none !important; }
                 }
@@ -242,7 +279,7 @@ internal fun getAlphaTabHtml(
                     line-height: 13px;
                     font-weight: 600;
                     color: #667085;
-                    max-width: 45vw;
+                    max-width: 23vw;
                     display: inline-block;
                     overflow: hidden;
                     text-overflow: ellipsis;
@@ -290,7 +327,242 @@ internal fun getAlphaTabHtml(
                     line-height: 25px;
                     font-weight: 700;
                 }
+
+                /* Permanent X glyph: piano does not call refreshFretboard(). */
+                #tt-fretboard-close {
+                    position:relative; display:grid; place-items:center;
+                    cursor:pointer; flex-shrink:0;
+                }
+                #tt-fretboard-close::before,
+                #tt-fretboard-close::after {
+                    content:""; display:block; position:absolute;
+                    top:50%; left:50%; width:13px; height:2.3px;
+                    background:currentColor; border-radius:2px;
+                    transform:translate(-50%,-50%) rotate(45deg);
+                    pointer-events:none;
+                }
+                #tt-fretboard-close::after {
+                    transform:translate(-50%,-50%) rotate(-45deg);
+                }
+
+                /* Training setup lives inside the fretboard. It never resizes
+                   the notation or changes the size of the fretboard. */
+                #tt-practice-toggle {
+                    height: 27px; min-width: 62px; padding: 0 7px;
+                    border: 1.5px solid #7c3aed; border-radius: 16px;
+                    background: rgba(124, 58, 237, .09); color: #6d28d9;
+                    font: 800 11px/24px Arial,sans-serif; white-space: nowrap;
+                    cursor: pointer;
+                }
+                #tt-practice-toggle.is-active {
+                    background: #7c3aed; color: #fff; border-color: #7c3aed;
+                }
+                #tt-practice-sheet {
+                    display: none; position: absolute; top: 37px; left: 8px;
+                    right: 8px; bottom: var(--tt-fretboard-controls-height,66px);
+                    z-index: 100; box-sizing: border-box; overflow-y: auto;
+                    -webkit-overflow-scrolling: touch;
+                    border: 1px solid #c4b5fd; border-radius: 12px;
+                    padding: 9px 11px; background: #f8fafc; color: #111827;
+                    box-shadow: 0 4px 16px rgba(15,23,42,.25);
+                    font: 600 12px/1.3 Arial,sans-serif;
+                }
+                #tt-practice-sheet.is-open { display: block; }
+                .tt-practice-sheet-top {
+                    position: sticky; top: -9px; z-index: 2;
+                    display: flex; align-items: center; gap: 8px;
+                    min-height: 28px; margin: -9px -11px 6px;
+                    padding: 6px 11px 5px;
+                    background: #f8fafc;
+                    border-bottom: 1px solid #e2e8f0;
+                }
+                #tt-practice-heading { flex: 1; min-width: 0; font-size: 13px; }
+                #tt-practice-close {
+                    flex-shrink: 0; width: 28px; height: 28px;
+                    padding: 0; border: 1px solid #b2a2da;
+                    border-radius: 50%; background: #fff;
+                    color: #334155; font: 900 19px/26px Arial,sans-serif;
+                    cursor: pointer;
+                }
+                .tt-practice-line { display: flex; align-items: center; gap: 6px;
+                    margin-top: 7px; flex-wrap: wrap; }
+                .tt-practice-line:first-child { margin-top: 0; }
+                .tt-practice-line strong { font-size: 12px; }
+                .tt-practice-line button {
+                    border: 1px solid #b2a2da; border-radius: 8px;
+                    padding: 5px 9px; background: #fff; color: #5b21b6;
+                    font: 800 12px Arial,sans-serif; cursor: pointer;
+                    min-height: 29px;
+                }
+                .tt-practice-line button.tt-practice-primary {
+                    background: #6d28d9; color: #fff; border-color: #6d28d9;
+                }
+                .tt-practice-line button.tt-practice-danger {
+                    background: #fff0f1; color: #be123c; border-color: #fda4af;
+                }
+                .tt-practice-line button:disabled { opacity: .4; cursor: default; }
+                #tt-practice-speed { width: min(115px, 28vw); accent-color: #7c3aed; }
+                #tt-practice-message { color: #475569; font-size: 10.5px;
+                    line-height: 1.35; padding: 2px 0; }
+                #tt-practice-countdown {
+                    display: none; position: absolute; left: 50%; top: 48%;
+                    transform: translate(-50%,-50%); z-index: 8;
+                    min-width: 72px; min-height: 72px; border-radius: 50%;
+                    background: rgba(109,40,217,.95); color: #fff;
+                    border: 3px solid #fff; box-shadow: 0 0 0 5px rgba(167,139,250,.27);
+                    font: 900 38px/72px Arial,sans-serif; text-align: center;
+                    pointer-events: none;
+                }
+                body.tt-tab-dark #tt-practice-sheet {
+                    background: #151a25; color: #f8fafc;
+                    border-color: #7961ad;
+                }
+                body.tt-tab-dark .tt-practice-sheet-top {
+                    background: #151a25; border-bottom-color: #334155;
+                }
+                body.tt-tab-dark #tt-practice-close {
+                    background: #293144; border-color: #655386; color: #f8fafc;
+                }
+                body.tt-tab-dark .tt-practice-line button {
+                    background: #28213c; color: #ddd6fe; border-color: #655386;
+                }
+                body.tt-tab-dark .tt-practice-line button.tt-practice-primary {
+                    background: #7c3aed; color: #fff;
+                }
+                body.tt-tab-dark .tt-practice-line button.tt-practice-danger {
+                    background: #4c1d29; color: #fecdd3;
+                }
+                body.tt-tab-dark #tt-practice-message { color: #cbd5e1; }
+                body.tt-tab-dark #tt-practice-toggle { color: #ddd6fe;
+                    background: rgba(167,139,250,.12); }
+                body.tt-tab-dark #tt-practice-toggle.is-active {
+                    background: #7c3aed; color: #fff;
+                }
+                body.tt-tab-dark #tt-practice-speed { accent-color: #c4b5fd; }
+                body.pdf-export-mode #tt-practice-sheet,
+                body.pdf-export-mode #tt-practice-countdown { display: none !important; }
+
+
+                /* Practice setup is a compact non-scrolling popover. It can grow
+                   upwards over a small portion of the score, while the remaining
+                   visible score stays tappable for quick measure selection. */
+                #tt-fretboard-panel.tt-practice-sheet-open { overflow: visible; }
+                #tt-practice-sheet {
+                    overflow: hidden !important; overflow-x: hidden !important;
+                    overscroll-behavior: none; padding: 7px 9px;
+                }
+                #tt-practice-sheet.is-open {
+                    display: flex; flex-direction: column; justify-content: flex-start;
+                    gap: 5px;
+                }
+                .tt-practice-sheet-top {
+                    position: static; margin: -7px -9px 0;
+                    min-height: 30px; padding: 4px 9px;
+                    flex-shrink: 0;
+                }
+                #tt-practice-message { flex-shrink: 0; margin: 0;
+                    min-height: 15px; max-height: 32px; overflow: hidden;
+                    font-size: 10.5px; line-height: 15px; }
+                #tt-practice-sheet .tt-practice-line {
+                    margin-top: 0; flex-wrap: nowrap; gap: 4px;
+                    flex-shrink: 0;
+                }
+                #tt-practice-sheet .tt-practice-line button {
+                    min-height: 30px; line-height: 1.1; box-sizing: border-box;
+                    padding: 5px 5px; font-size: 11px;
+                }
+                .tt-practice-speed-row {
+                    display: grid !important;
+                    grid-template-columns: auto minmax(40px,1fr) 44px;
+                    align-items: center; column-gap: 6px;
+                }
+                #tt-practice-speed { min-width: 0; width: 100%; }
+                .tt-practice-action-row {
+                    display: grid !important;
+                    grid-template-columns: repeat(2, minmax(0,1fr));
+                    align-items: stretch; gap: 5px;
+                }
+                .tt-practice-action-row button { min-height: 31px !important; }
+                #tt-practice-sheet.tt-practice-condensed {
+                    padding-top: 4px; padding-bottom: 4px; gap: 3px;
+                }
+                #tt-practice-sheet.tt-practice-condensed .tt-practice-sheet-top {
+                    min-height: 27px; margin-top: -4px; padding-top: 2px; padding-bottom: 2px;
+                }
+                #tt-practice-sheet.tt-practice-condensed .tt-practice-line button {
+                    min-height: 26px; padding: 3px 4px; font-size: 10.5px;
+                }
+                #tt-practice-sheet.tt-practice-condensed .tt-practice-action-row button {
+                    min-height: 27px !important;
+                }
+                #tt-practice-sheet.tt-practice-condensed #tt-practice-message {
+                    min-height: 13px; max-height: 15px; white-space: nowrap;
+                    text-overflow: ellipsis; overflow: hidden;
+                }
+                .tt-practice-bar-highlight {
+                    position: absolute; pointer-events: none; box-sizing: border-box;
+                    z-index: 20; border: 2px dashed #7c3aed;
+                    border-radius: 5px; background: rgba(124, 58, 237, .06);
+                }
+                body.tt-tab-dark .tt-practice-bar-highlight {
+                    border-color: #c4b5fd; background: rgba(167, 139, 250, .10);
+                }
+                /* Select the field first, then tap a measure in the score/TAB. */
+                .tt-practice-range-row {
+                    display: grid !important;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    gap: 8px !important;
+                    align-items: stretch;
+                }
+                .tt-practice-range-choice {
+                    display: flex; align-items: center; justify-content: space-between;
+                    min-width: 0; gap: 5px; padding: 3px 8px;
+                    border: 1.5px solid #b6bfd0; border-radius: 10px;
+                    background: #ffffff; cursor: pointer;
+                    font: 800 11px/1.1 Arial, sans-serif;
+                }
+                .tt-practice-range-choice.is-selected {
+                    border: 2px solid #7c3aed;
+                    background: #f3e8ff;
+                    box-shadow: 0 0 0 1px rgba(124,58,237,.16);
+                }
+                .tt-practice-range-choice span { white-space: nowrap; }
+                .tt-practice-range-choice input {
+                    box-sizing: border-box; flex: 1; min-width: 0; max-width: 64px;
+                    height: 33px; padding: 1px 2px; text-align: center;
+                    border: 0; outline: 0; background: transparent;
+                    color: #4c1d95; font: 800 17px Arial, sans-serif;
+                    font-variant-numeric: tabular-nums;
+                }
+                .tt-practice-range-choice input:focus { outline: none; }
+                #tt-practice-range-summary {
+                    flex-shrink: 0; min-height: 14px; text-align: center;
+                    line-height: 14px; font-size: 11px; font-weight: 800;
+                    color: #6d28d9; white-space: nowrap;
+                }
+                body.tt-tab-dark .tt-practice-range-choice {
+                    background: #222a3b; border-color: #655386; color: #f8fafc;
+                }
+                body.tt-tab-dark .tt-practice-range-choice.is-selected {
+                    background: #30234e; border-color: #c4b5fd;
+                }
+                body.tt-tab-dark .tt-practice-range-choice input { color: #ede9fe; }
+                body.tt-tab-dark #tt-practice-range-summary { color: #ddd6fe; }
+                #tt-practice-sheet.tt-practice-condensed .tt-practice-range-choice {
+                    padding-top: 2px; padding-bottom: 2px;
+                }
+                #tt-practice-sheet.tt-practice-condensed .tt-practice-range-choice input {
+                    height: 29px;
+                }
+                @media (max-width: 350px) {
+                    .tt-practice-range-row { gap: 4px !important; }
+                    .tt-practice-range-choice { padding-left: 4px; padding-right: 4px; }
+                    .tt-practice-range-choice input { max-width: 45px; font-size: 15px; }
+                    #tt-practice-sheet .tt-practice-line button { padding-left: 3px; padding-right: 3px; }
+                    #tt-practice-sheet { left: 4px; right: 4px; }
+                }
                 #tt-fretboard-stage {
+                    position: relative;
                     flex: 1;
                     min-height: 112px;
                     width: 100%;
@@ -303,6 +575,69 @@ internal fun getAlphaTabHtml(
                     display: block;
                     width: 100%;
                     height: 100%;
+                }
+                /* Compact note-by-note controls stay visible after the setup
+                   popover closes; the original status row is replaced, not shifted. */
+                #tt-practice-quicksteps {
+                    display: none; flex-shrink: 0; height: 30px;
+                    align-items: center; justify-content: center; gap: 6px;
+                    box-sizing: border-box;
+                    font: 800 12px/28px Arial,sans-serif;
+                }
+                #tt-practice-quicksteps button {
+                    height: 28px; min-width: 63px; box-sizing: border-box;
+                    padding: 0 7px; white-space: nowrap;
+                    border: 1px solid #a78bfa; border-radius: 9px;
+                    background: #f3e8ff; color: #6d28d9;
+                    font: 800 12px/26px Arial,sans-serif;
+                }
+                #tt-practice-quicksteps button:disabled { opacity: .35; }
+                #tt-practice-quick-progress {
+                    text-align: center; min-width: 65px;
+                    white-space: nowrap; font-variant-numeric: tabular-nums;
+                }
+                #tt-fretboard-panel.tt-practice-step-mode #tt-practice-quicksteps {
+                    display: flex;
+                }
+                #tt-fretboard-panel.tt-practice-step-mode #tt-fretboard-status {
+                    display: none;
+                }
+                #tt-fretboard-panel.tt-practice-step-mode.tt-practice-comment-on #tt-fretboard-status {
+                    display: block;
+                    min-height: 22px; height: auto; max-height: 38px;
+                    padding: 0 6px; white-space: normal;
+                    line-height: 17px; font-size: 11px;
+                    overflow: hidden; text-overflow: clip;
+                }
+                #tt-practice-quick-hear.is-on {
+                    background: #6d28d9; border-color: #6d28d9; color: #fff;
+                }
+                body.tt-tab-dark #tt-practice-quick-hear.is-on {
+                    background: #8b5cf6; color: #fff; border-color: #c4b5fd;
+                }
+                .tt-practice-comment-option {
+                    display: flex; align-items: center; gap: 6px;
+                    margin: 0; min-height: 23px; flex-shrink: 0;
+                    cursor: pointer; color: inherit;
+                    font: 700 11px/19px Arial,sans-serif;
+                }
+                .tt-practice-comment-option input {
+                    margin: 0; width: 16px; height: 16px;
+                    accent-color: #7c3aed; flex-shrink: 0;
+                }
+                /* Controls remain outside the setup sheet, even if it is reopened. */
+                #tt-fretboard-panel.tt-practice-step-mode #tt-practice-sheet.is-open {
+                    bottom: calc(var(--tt-fretboard-controls-height, 66px) + 30px);
+                }
+                body.tt-tab-dark #tt-practice-quicksteps button {
+                    background: #30234e; color: #e9d5ff;
+                }
+                @media (max-width: 350px) {
+                    #tt-practice-quicksteps { gap: 3px; }
+                    #tt-practice-quicksteps button {
+                        min-width: 53px; padding: 0 4px; font-size: 11px;
+                    }
+                    #tt-practice-quick-progress { min-width: 56px; }
                 }
                 #tt-fretboard-status {
                     flex-shrink: 0;
@@ -500,6 +835,155 @@ internal fun getAlphaTabHtml(
                         display: none !important;
                     }
                 }
+                /* Piano view: independent engraving on grand staff; guitar source stays intact. */
+                #tt-piano-score-host { display:none; position:relative; width:100%; box-sizing:border-box; }
+                #tt-piano-score-container { position:relative; width:100%; padding:6px 0 45vh; box-sizing:border-box; }
+                #tt-piano-cursor { display:none; position:absolute; z-index:5; width:4px; border-radius:4px;
+                    pointer-events:none; background:#8b5cf6; box-shadow:0 0 0 1px #fff,0 0 5px #8b5cf688; }
+                body.tt-piano-open:not(.pdf-export-mode) #tt-piano-score-host { display:block; }
+                body.tt-piano-open:not(.pdf-export-mode) #tt-piano-score-container { background:#F7F8FD; }
+                body.tt-piano-open.tt-tab-dark:not(.pdf-export-mode) #tt-piano-score-container { background:#0B0F1A; }
+                body.tt-piano-open:not(.pdf-export-mode) #alphatab-container {
+                    position:absolute !important; left:-20000px !important; top:0 !important;
+                    visibility:hidden; pointer-events:none; padding:0 !important;
+                }
+                /* Optional original Guitar Pro TAB below the generated Piano score. */
+                #tt-piano-tab-label { display:none; padding:10px 12px 4px; font:700 11px Arial,sans-serif;
+                    color:#667085; background:transparent; }
+                body.tt-piano-open.tt-piano-with-tab:not(.pdf-export-mode) #tt-piano-tab-label {display:block;}
+                body.tt-piano-open.tt-piano-with-tab:not(.pdf-export-mode) #alphatab-container {
+                    position:relative !important; left:auto !important; top:auto !important;
+                    visibility:visible !important; pointer-events:auto !important;
+                    margin-top:0 !important; padding-bottom:var(--tt-score-bottom-reserve,240px) !important;
+                }
+                body.tt-piano-open.tt-piano-with-tab.tt-tab-dark #tt-piano-tab-label { color:#cbd5e1; }
+                body.tt-piano-open:not(.tt-piano-with-score) #tt-piano-score-host {display:none !important;}
+                body.tt-piano-open.tt-piano-with-tab.tt-piano-with-score #tt-piano-score-container {
+                    padding-bottom:12px !important;
+                }
+                body.tt-piano-open.tt-piano-with-score:not(.tt-piano-with-tab) #tt-piano-score-container {
+                    padding-bottom:var(--tt-score-bottom-reserve,240px) !important;
+                }
+                /* TAB+Piano (no Sol/Fa staff): the source TAB must retain its playhead. */
+                body.tt-piano-open:not(.pdf-export-mode) #tt-fretboard-panel { display:flex !important; visibility:visible !important; opacity:1 !important; pointer-events:auto; }
+                body.tt-piano-open #tt-fretboard-stage,
+                body.tt-piano-open #tt-fretboard-status,
+                body.tt-piano-open #tt-practice-sheet,
+                body.tt-piano-open #tt-practice-quicksteps,
+                body.tt-piano-open #tt-practice-toggle,
+                body.tt-piano-open #tt-fretboard-info,
+                body.tt-piano-open #tt-fretboard-chord {display:none !important;}
+                #tt-piano-stage {display:none; flex:1; min-height:0; flex-direction:column; gap:3px;
+                    box-sizing:border-box; padding:2px 4px 3px; overflow:hidden; }
+                body.tt-piano-open #tt-piano-stage {display:flex;}
+                #tt-piano-desc { display:flex; justify-content:space-between; align-items:center; flex-shrink:0;
+                    color:var(--tt-panel-text,#172033); font:700 11px Arial,sans-serif; }
+                .tt-piano-hand-left {color:#089c93;} .tt-piano-hand-right {color:#8752d9;}
+                #tt-piano-keyboard {width:100%; height:calc(100% - 106px); min-height:88px; flex:1 1 auto; border-radius:9px;
+                    overflow:hidden; background:#141923; border:1px solid #697383; box-sizing:border-box;}
+                /* Compact piano controls: one row for hands/split, one row for accompaniment. */
+                #tt-piano-settings {display:flex;align-items:center;justify-content:space-between;
+                    flex-wrap:nowrap;gap:5px;flex-shrink:0;min-width:0;min-height:32px;
+                    color:var(--tt-panel-text,#172033);font:700 11px Arial,sans-serif;}
+                .tt-piano-hand-tabs {display:flex;flex:1;min-width:0;gap:3px;padding:2px;
+                    border-radius:10px;background:rgba(124,58,237,.07);}
+                .tt-piano-hand-tabs button {flex:1;min-width:0;}
+                .tt-piano-split {display:flex;align-items:center;gap:3px;flex-shrink:0;}
+                #tt-piano-settings button {min-height:29px;min-width:27px;
+                    background:#f8fafc;color:#344054;border:1px solid #b9c1d0;
+                    border-radius:8px;font:700 11px Arial,sans-serif;padding:3px 5px;
+                    cursor:pointer;}
+                #tt-piano-settings button.is-selected {background:#7c3aed;color:white;border-color:#7c3aed;}
+                #tt-piano-settings button:disabled {opacity:.45;}
+                #tt-piano-split-label {font-size:10px;white-space:nowrap;min-width:38px;text-align:center;}
+                #tt-piano-accomp-settings {display:flex;align-items:center;gap:6px;
+                    flex-wrap:nowrap;min-height:33px;flex-shrink:0;min-width:0;
+                    font:700 11px Arial,sans-serif;color:var(--tt-panel-text,#172033);}
+                #tt-piano-accomp-settings select {display:none !important;}
+                .tt-piano-accomp-caption {white-space:nowrap;font-weight:700;
+                    color:var(--tt-panel-muted,#667085);font-size:10px;}
+                #tt-piano-accomp-trigger {display:flex;align-items:center;justify-content:space-between;
+                    gap:5px;flex:1;min-width:0;height:32px;padding:0 9px;
+                    background:var(--tt-panel-bg,#f8fafc);color:var(--tt-panel-text,#344054);
+                    border:1px solid #a99ae3;border-radius:10px;font:700 11px Arial,sans-serif;
+                    cursor:pointer;box-sizing:border-box;}
+                #tt-piano-accomp-trigger .tt-piano-accomp-current {overflow:hidden;
+                    text-overflow:ellipsis;white-space:nowrap;}
+                .tt-piano-chevron {font-size:10px;color:#7c3aed;flex-shrink:0;}
+                #tt-piano-accomp-audio {height:32px;min-width:83px;flex-shrink:0;
+                    border:1px solid #aeb7c9;border-radius:10px;
+                    padding:0 7px;background:#f8fafc;color:#475467;
+                    font:700 10.5px Arial,sans-serif;cursor:pointer;white-space:nowrap;}
+                #tt-piano-accomp-audio.is-selected {background:#7c3aed;color:#fff;border-color:#7c3aed;}
+                #tt-piano-accomp-audio:disabled {opacity:.5;cursor:default;}
+                #tt-piano-meta {display:flex;align-items:center;justify-content:space-between;
+                    gap:8px;min-height:12px;flex-shrink:0;min-width:0;}
+                #tt-piano-accomp-status {font-size:10px;font-weight:600;
+                    color:var(--tt-panel-muted,#667085);white-space:nowrap;}
+                #tt-piano-hint {white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                    min-width:0;flex:1;font-size:10px;color:var(--tt-panel-muted,#667085);
+                    text-align:right;}
+                body.tt-tab-dark #tt-piano-accomp-trigger,
+                body.tt-tab-dark #tt-piano-accomp-audio {background:#222b3a;color:#f4f4fa;
+                    border-color:#566276;}
+                body.tt-tab-dark #tt-piano-accomp-audio.is-selected {background:#7c3aed;
+                    border-color:#a78bfa;color:white;}
+                /* Custom compact selection dialog instead of Android's huge native select popup. */
+                #tt-piano-style-modal {display:none;position:fixed;inset:0;
+                    z-index:2147483590;align-items:center;justify-content:center;
+                    box-sizing:border-box;padding:12px;}
+                #tt-piano-style-modal.is-open {display:flex;}
+                #tt-piano-style-modal .tt-piano-style-backdrop {position:absolute;inset:0;
+                    background:rgba(15,23,42,.55);}
+                .tt-piano-style-card {position:relative;width:min(100%,355px);
+                    box-sizing:border-box;border-radius:18px;padding:14px;
+                    background:#fff;color:#172033;box-shadow:0 18px 48px rgba(15,23,42,.33);
+                    border:1px solid rgba(148,163,184,.35);}
+                .tt-piano-style-header {display:flex;align-items:center;justify-content:space-between;
+                    gap:10px;margin-bottom:10px;}
+                .tt-piano-style-header strong {font:800 15px/1.3 Arial,sans-serif;}
+                .tt-piano-style-header small {display:block;font:500 10px/1.4 Arial,sans-serif;
+                    color:#667085;margin-top:2px;}
+                .tt-piano-style-exit {width:30px;height:30px;flex-shrink:0;border-radius:50%;
+                    color:#475467;background:#f3f4f8;border:1px solid #d0d5dd;
+                    font:800 19px/28px Arial,sans-serif;cursor:pointer;}
+                .tt-piano-style-options {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;}
+                .tt-piano-style-option {min-height:58px;min-width:0;display:flex;align-items:center;
+                    gap:8px;text-align:left;padding:9px 11px;background:#f8fafc;
+                    border:1.5px solid #e2e8f0;border-radius:11px;cursor:pointer;
+                    color:#182230;font-family:Arial,sans-serif;}
+                .tt-piano-style-option[data-style="bass_chord"] {grid-column:1/-1;}
+                .tt-piano-style-option.is-active {border-color:#7c3aed;background:#f0eaff;}
+                .tt-piano-style-option .tt-style-copy {flex:1;min-width:0;}
+                .tt-piano-style-option .tt-style-copy strong {display:block;font:700 11.5px/1.35 Arial,sans-serif;}
+                .tt-piano-style-option .tt-style-copy small {display:block;font:500 9.5px/1.4 Arial,sans-serif;
+                    color:#667085;margin-top:2px;}
+                .tt-piano-style-option .tt-style-check {font:900 15px Arial,sans-serif;color:#7c3aed;
+                    visibility:hidden;}
+                .tt-piano-style-option.is-active .tt-style-check {visibility:visible;}
+                .tt-piano-style-foot {color:#667085;font:500 10px/1.4 Arial,sans-serif;
+                    margin-top:9px;text-align:center;}
+                body.tt-tab-dark .tt-piano-style-card {background:#202838;color:#f3f4fa;border-color:#566276;}
+                body.tt-tab-dark .tt-piano-style-header small,
+                body.tt-tab-dark .tt-piano-style-option .tt-style-copy small,
+                body.tt-tab-dark .tt-piano-style-foot {color:#b8c3d6;}
+                body.tt-tab-dark .tt-piano-style-option {background:#2c3547;color:#f3f4fa;border-color:#46536b;}
+                body.tt-tab-dark .tt-piano-style-option.is-active {background:#41336d;border-color:#a78bfa;}
+                body.tt-tab-dark .tt-piano-style-exit {background:#303b4c;color:#f3f4fa;border-color:#64748b;}
+                @media(max-width:350px) {
+                    #tt-piano-accomp-audio {min-width:73px;padding:0 5px;font-size:10px;}
+                    #tt-piano-split-label {min-width:33px;}
+                    .tt-piano-accomp-caption {display:none;}
+                    #tt-piano-settings {gap:3px;}
+                    #tt-piano-settings button {padding:2px 3px;}
+                }
+                body.tt-tab-dark #tt-piano-settings button {background:#222b3a; color:#e6eaf1; border-color:#566276;}
+                body.tt-tab-dark #tt-piano-settings button.is-selected {background:#7c3aed; border-color:#8b5cf6; color:white;}
+                body.tt-tab-dark #tt-piano-desc {color:#eef2ff;}
+                body.tt-tab-dark #tt-piano-keyboard {border-color:#475467;}
+                body.tt-piano-open.tt-piano-with-score #tt-playhead-overlay {display:none !important;}
+                body.pdf-export-mode #tt-piano-score-host {display:none !important;}
+                body.pdf-export-mode #alphatab-container {position:relative !important;left:auto !important;visibility:visible !important;}
             </style>
             <!-- Live colors/thickness go AFTER the base CSS to win equal-specificity rules. -->
             <style id="dynamic-theme-style"></style>
@@ -507,12 +991,57 @@ internal fun getAlphaTabHtml(
         <body>
             <div class="wrapper" id="scroll-wrapper">
                 <div id="tunertools-score-title-fallback" aria-hidden="true"></div>
+                <div id="tt-piano-score-host" aria-label="Khuông nhạc piano hai tay">
+                    <div id="tt-piano-score-container"></div>
+                    <div id="tt-piano-cursor"></div>
+                </div>
+                <div id="tt-piano-tab-label">TAB Guitar Pro gốc / Original Guitar Pro TAB</div>
                 <div id="alphatab-container"></div>
             </div>
             <!-- Fixed outside alphaTab's own cursor/score layers so it cannot be
                  clipped by a 1px native cursor or a transformed score SVG. -->
             <div id="tt-playhead-overlay" aria-hidden="true">
                 <div id="tt-playhead-overlay-cap"></div>
+            </div>
+            <div id="tt-piano-style-modal" role="dialog" aria-modal="true"
+                 aria-label="Ch&#7885;n ki&#7875;u &#273;&#7879;m tay tr&#225;i">
+                <div class="tt-piano-style-backdrop" onclick="pianoCloseAccompChooser()"></div>
+                <div class="tt-piano-style-card">
+                    <div class="tt-piano-style-header">
+                        <div><strong>&#272;&#7879;m tay tr&#225;i</strong>
+                            <small>Ch&#7885;n m&#7897;t c&#225;ch &#273;&#7879;m cho b&#224;i nh&#7841;c</small></div>
+                        <button type="button" class="tt-piano-style-exit"
+                                onclick="pianoCloseAccompChooser()" aria-label="&#272;&#243;ng">&#215;</button>
+                    </div>
+                    <div class="tt-piano-style-options" role="group" aria-label="Ki&#7875;u &#273;&#7879;m">
+                        <button class="tt-piano-style-option" type="button" data-style="original"
+                            onclick="pianoPickAccompStyle('original')">
+                            <span class="tt-style-copy"><strong>GP5 g&#7889;c</strong><small>Gi&#7919; nguy&#234;n</small></span>
+                            <span class="tt-style-check">&#10003;</span>
+                        </button>
+                        <button class="tt-piano-style-option" type="button" data-style="bass"
+                            onclick="pianoPickAccompStyle('bass')">
+                            <span class="tt-style-copy"><strong>Bass</strong><small>M&#7897;t n&#7889;t tr&#7847;m</small></span>
+                            <span class="tt-style-check">&#10003;</span>
+                        </button>
+                        <button class="tt-piano-style-option" type="button" data-style="block"
+                            onclick="pianoPickAccompStyle('block')">
+                            <span class="tt-style-copy"><strong>H&#7907;p &#226;m</strong><small>&#272;&#225;nh c&#249;ng l&#250;c</small></span>
+                            <span class="tt-style-check">&#10003;</span>
+                        </button>
+                        <button class="tt-piano-style-option" type="button" data-style="arpeggio"
+                            onclick="pianoPickAccompStyle('arpeggio')">
+                            <span class="tt-style-copy"><strong>R&#7843;i h&#7907;p &#226;m</strong><small>&#272;&#225;nh l&#7847;n l&#432;&#7907;t</small></span>
+                            <span class="tt-style-check">&#10003;</span>
+                        </button>
+                        <button class="tt-piano-style-option" type="button" data-style="bass_chord"
+                            onclick="pianoPickAccompStyle('bass_chord')">
+                            <span class="tt-style-copy"><strong>Bass + h&#7907;p &#226;m</strong><small>&#272;&#7879;m xen k&#7869;</small></span>
+                            <span class="tt-style-check">&#10003;</span>
+                        </button>
+                    </div>
+                    <div class="tt-piano-style-foot">&#272;&#7893;i c&#225;ch &#273;&#7879;m kh&#244;ng s&#7917;a file GP g&#7889;c</div>
+                </div>
             </div>
             <section id="tt-fretboard-panel" aria-live="off">
                 <div class="tt-fretboard-header">
@@ -521,14 +1050,103 @@ internal fun getAlphaTabHtml(
                     </div>
                     <div class="tt-fretboard-header-actions">
                         <span id="tt-fretboard-chord" aria-live="polite"></span>
+                        <button type="button" id="tt-practice-toggle" onclick="toggleSongPractice()" aria-label="Luyện guitar theo ô nhịp" title="Luyện guitar theo ô nhịp">🎸 Luyện</button>
                         <button type="button" id="tt-fretboard-info" onclick="openSongTechniqueInfo()" aria-label="Kỹ thuật và ký hiệu có trong bài" title="Kỹ thuật và ký hiệu có trong bài">i</button>
-                        <button type="button" id="tt-fretboard-close" onclick="closeFretboardPanel()"></button>
+                        <button type="button" id="tt-fretboard-close" onclick="closeFretboardPanel()"
+                                aria-label="&#272;&#243;ng b&#224;n ph&#237;m" title="&#272;&#243;ng b&#224;n ph&#237;m"></button>
+                    </div>
+                </div>
+                <div id="tt-piano-stage">
+                    <div id="tt-piano-desc"><span><span class="tt-piano-hand-right">●</span> Tay phải (Sol)
+                    &nbsp; <span class="tt-piano-hand-left">●</span> Tay trái (Fa)</span><span id="tt-piano-current">Piano</span></div>
+                    <svg id="tt-piano-keyboard" viewBox="0 0 700 169" role="img" aria-label="Bàn phím piano hai tay"></svg>
+                    <div id="tt-piano-settings" role="group" aria-label="Ch&#7885;n tay v&#224; qu&#227;ng chia">
+                        <div class="tt-piano-hand-tabs">
+                            <button type="button" onclick="pianoSetHand('both')" id="tt-piano-both" class="is-selected">&#9995; Hai tay</button>
+                            <button type="button" onclick="pianoSetHand('right')" id="tt-piano-right">P &#8226; Sol</button>
+                            <button type="button" onclick="pianoSetHand('left')" id="tt-piano-left">T &#8226; Fa</button>
+                        </div>
+                        <div class="tt-piano-split">
+                            <button type="button" onclick="pianoShiftSplit(-1)" aria-label="Gi&#7843;m &#273;i&#7875;m chia tay">&#8722;</button>
+                            <strong id="tt-piano-split-label">Chia C4</strong>
+                            <button type="button" onclick="pianoShiftSplit(1)" aria-label="T&#259;ng &#273;i&#7875;m chia tay">+</button>
+                        </div>
+                    </div>
+                    <div id="tt-piano-accomp-settings">
+                        <span class="tt-piano-accomp-caption">&#272;&#7879;m tr&#225;i</span>
+                        <select id="tt-piano-accomp-style" aria-hidden="true" tabindex="-1" onchange="pianoAccompSetStyle(this.value)">
+                            <option value="original">GP5 g&#7889;c</option>
+                            <option value="bass">Bass</option>
+                            <option value="block">H&#7907;p &#226;m</option>
+                            <option value="arpeggio">R&#7843;i h&#7907;p &#226;m</option>
+                            <option value="bass_chord">Bass + h&#7907;p &#226;m</option>
+                        </select>
+                        <button id="tt-piano-accomp-trigger" type="button"
+                            aria-haspopup="dialog" aria-expanded="false" onclick="pianoOpenAccompChooser()">
+                            <span class="tt-piano-accomp-current">GP5 g&#7889;c</span>
+                            <span class="tt-piano-chevron">&#9662;</span>
+                        </button>
+                        <button id="tt-piano-accomp-audio" type="button" onclick="pianoAccompToggleAudio()">&#9834; &#194;m: T&#7855;t</button>
+                    </div>
+                    <div id="tt-piano-meta">
+                        <span id="tt-piano-accomp-status"></span>
+                        <div id="tt-piano-hint" aria-live="polite">B&#7843;n GP g&#7889;c kh&#244;ng thay &#273;&#7893;i.</div>
                     </div>
                 </div>
                 <div id="tt-fretboard-stage">
                     <svg id="tt-fretboard-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 158" role="img"></svg>
+                    <div id="tt-practice-countdown" aria-live="assertive"></div>
+                </div>
+                <div id="tt-practice-sheet" aria-label="Điều khiển luyện tập">
+                    <div class="tt-practice-sheet-top">
+                        <strong id="tt-practice-heading">🎸 Luyện theo ô nhịp</strong>
+                        <button type="button" id="tt-practice-close" onclick="practiceHideSheet()" aria-label="Đóng bảng luyện" title="Đóng bảng luyện">×</button>
+                    </div>
+                    <div id="tt-practice-message" aria-live="polite"></div>
+                    <div class="tt-practice-line tt-practice-range-row" role="group" aria-label="Ch&#7885;n &#244; nh&#7883;p b&#7855;t &#273;&#7847;u v&#224; k&#7871;t th&#250;c">
+                        <label class="tt-practice-range-choice is-selected" id="tt-practice-from-choice" onclick="practiceSelectTarget('start')">
+                            <span id="tt-practice-from-label">T&#7915; &#244;</span>
+                            <input id="tt-practice-from-input" type="number" inputmode="numeric"
+                                   min="1" step="1" value="1" aria-label="&#212; nh&#7883;p b&#7855;t &#273;&#7847;u"
+                                   onfocus="practiceSelectTarget('start')"
+                                   onchange="practiceCommitBar('start',this.value)"
+                                   onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" />
+                        </label>
+                        <label class="tt-practice-range-choice" id="tt-practice-to-choice" onclick="practiceSelectTarget('end')">
+                            <span id="tt-practice-to-label">&#272;&#7871;n &#244;</span>
+                            <input id="tt-practice-to-input" type="number" inputmode="numeric"
+                                   min="1" step="1" value="1" aria-label="&#212; nh&#7883;p k&#7871;t th&#250;c"
+                                   onfocus="practiceSelectTarget('end')"
+                                   onchange="practiceCommitBar('end',this.value)"
+                                   onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" />
+                        </label>
+                    </div>
+                    <div id="tt-practice-range-summary" aria-live="polite">1 / 1</div>
+                    <div class="tt-practice-line tt-practice-speed-row">
+                        <span id="tt-practice-speed-label">Tốc độ</span>
+                        <input id="tt-practice-speed" type="range" min="50" max="100" step="10" value="60" oninput="practiceSetSpeed(this.value)" aria-label="Tốc độ luyện" />
+                        <strong id="tt-practice-speed-value">60%</strong>
+                    </div>
+                    <label class="tt-practice-comment-option" for="tt-practice-show-notes">
+                        <input id="tt-practice-show-notes" type="checkbox" checked
+                            onchange="practiceSetShowComment(this.checked)" />
+                        <span id="tt-practice-comment-label">Hiện chú thích tên nốt · dây · ngăn</span>
+                    </label>
+                    <div class="tt-practice-line tt-practice-action-row">
+                        <button type="button" onclick="practiceStartSample()" id="tt-practice-sample">♫ Nghe mẫu</button>
+                        <button type="button" class="tt-practice-primary" onclick="practiceStartLoop()" id="tt-practice-loop">▶ Luyện lặp</button>
+                        <button type="button" onclick="practiceEnterStep()" id="tt-practice-step">◎ Từng nốt</button>
+                        <button type="button" class="tt-practice-danger" onclick="practiceStopSession(true)" id="tt-practice-stop">■ Thoát luyện</button>
+                    </div>
                 </div>
                 <div id="tt-fretboard-status"></div>
+                <div id="tt-practice-quicksteps" role="group" aria-label="Chuyển nốt khi tập">
+                    <button type="button" onclick="practiceStep(-1)" id="tt-practice-quick-prev" aria-label="Xem nốt trước">◀ Trước</button>
+                    <span id="tt-practice-quick-progress" aria-live="polite">Nốt 1/1</span>
+                    <button type="button" onclick="practiceStep(1)" id="tt-practice-quick-next" aria-label="Xem nốt sau">Tiếp ▶</button>
+                    <button type="button" onclick="practiceToggleAutoListen()" id="tt-practice-quick-hear"
+                        role="switch" aria-checked="false" aria-label="Tự phát âm khi chuyển nốt">♫ Nghe: Tắt</button>
+                </div>
                 <div id="tt-fretboard-controls-space" aria-hidden="true"></div>
             </section>
             <script>
@@ -554,6 +1172,11 @@ internal fun getAlphaTabHtml(
                 var lastAndroidViewportHeight = 0;
                 var lastSyncedCssViewportWidth = 0;
                 var fretboardEnabled = false;
+                var pianoEnabled = false;
+                var pianoShowScore = true;
+                var pianoShowTab = false;
+                var activeStaveDisplayMode = 'scoretab';
+                var desiredStaveDisplayMode = $quotedInitialDisplayMode;
                 // Zoom phan tram cua toan bo khuong nhac + TAB (khong CSS scale).
                 // -1: chua tuy chinh: S+T+F = 82%, che do khac = 100%.
                 var userScoreZoomPercent = $initialScoreZoomPercent;
@@ -574,7 +1197,7 @@ internal fun getAlphaTabHtml(
                     if (!api || !api.settings || !api.settings.display ||
                         !api.score || isPdfExportMode) return true;
                     clearTimeout(scoreZoomRenderTimer);
-                    var targetScale = scoreZoomScaleForMode(fretboardEnabled);
+                    var targetScale = scoreZoomScaleForMode(fretboardEnabled || pianoEnabled);
                     if (Math.abs(Number(api.settings.display.scale) - targetScale) < .0005) {
                         return true;
                     }
@@ -598,9 +1221,14 @@ internal fun getAlphaTabHtml(
                             cursorTop: cursorTop
                         } : null;
                         try {
-                            api.settings.display.scale = scoreZoomScaleForMode(fretboardEnabled);
+                            api.settings.display.scale = scoreZoomScaleForMode(fretboardEnabled || pianoEnabled);
                             api.updateSettings();
                             api.render();
+                            if (pianoEnabled && pianoShowScore && pianoApi && pianoApi.score) {
+                                pianoApi.settings.display.scale = targetScale;
+                                pianoApi.updateSettings();
+                                pianoApi.render();
+                            }
                             scheduleVisiblePlayheadThickness();
                         } catch (error) {
                             scoreZoomScrollAnchor = null;
@@ -638,7 +1266,7 @@ internal fun getAlphaTabHtml(
                         scorePinch.active = true;
                         scorePinch.startDistance = distance;
                         scorePinch.startPercent = Math.round(
-                            scoreZoomScaleForMode(fretboardEnabled) * 100
+                            scoreZoomScaleForMode(fretboardEnabled || pianoEnabled) * 100
                         );
                         scorePinch.previewPercent = scorePinch.startPercent;
                         clearTimeout(scrollTimeout);
@@ -757,14 +1385,15 @@ internal fun getAlphaTabHtml(
                     wrapper.style.right = 'auto';
                     wrapper.style.bottom = 'auto';
 
-                    var sideBySide = fretboardEnabled && cssWidth >= cssHeight * 1.28;
+                    var pianoOrGuitarPanel = fretboardEnabled || pianoEnabled;
+                    var sideBySide = pianoOrGuitarPanel && cssWidth >= cssHeight * 1.28;
                     var boardWidth = sideBySide
                         ? Math.min(Math.round(cssWidth * .47), Math.max(230, cssWidth - 300))
                         : cssWidth;
                     var boardHeight = 0;
                     var controlsHeight = cssHeight < 560 ? 60 : 66;
 
-                    if (fretboardEnabled && !sideBySide) {
+                    if (pianoOrGuitarPanel && !sideBySide) {
                         // Portrait: gần một nửa chiều cao cho cần đàn. Vùng score vẫn đủ
                         // một hệ khuông/TAB, nhưng con trỏ nằm sát khu vực cần đàn.
                         var minimumScoreHeight = Math.min(
@@ -786,12 +1415,13 @@ internal fun getAlphaTabHtml(
                         '--tt-fretboard-controls-height',
                         controlsHeight + 'px'
                     );
-                    body.classList.toggle('tt-fretboard-open', !!fretboardEnabled);
+                    body.classList.toggle('tt-fretboard-open', !!pianoOrGuitarPanel);
+                    body.classList.toggle('tt-piano-open', !!pianoEnabled);
                     body.classList.toggle('tt-fretboard-side', !!sideBySide);
 
                     var scoreWidth = sideBySide ? cssWidth - boardWidth : cssWidth;
                     var scoreHeight = sideBySide ? cssHeight : cssHeight - boardHeight;
-                    var scoreBottomReserve = fretboardEnabled
+                    var scoreBottomReserve = pianoOrGuitarPanel
                         ? Math.min(440, Math.max(230, Math.round(scoreHeight * .52)))
                         : 0;
                     body.style.setProperty(
@@ -806,7 +1436,7 @@ internal fun getAlphaTabHtml(
                     // đặt sai tọa độ sau khi Compose đổi chiều cao. Luôn gắn panel vào
                     // đúng cạnh của viewport thật.
                     if (panel) {
-                        if (!fretboardEnabled) {
+                        if (!pianoOrGuitarPanel) {
                             panel.style.display = 'none';
                             panel.style.visibility = 'hidden';
                             panel.style.opacity = '0';
@@ -865,6 +1495,9 @@ internal fun getAlphaTabHtml(
                     if (isApiReady) {
                         requestAnimationFrame(updateTabBannerAtScroll);
                         if (fretboardEnabled) requestAnimationFrame(scheduleFretboardRefresh);
+                        if (pianoEnabled && pianoShowScore && pianoApi && pianoApi.score) {
+                            requestAnimationFrame(function() { pianoApi.render(); });
+                        }
                     }
                 }
 
@@ -914,7 +1547,7 @@ internal fun getAlphaTabHtml(
                     var wrapper = document.getElementById('scroll-wrapper');
                     var score = document.getElementById('alphatab-container');
                     if (!wrapper || !score || !api || !api.score ||
-                        isScoreLoading || isPdfExportMode || fretboardEnabled) {
+                        isScoreLoading || isPdfExportMode || fretboardEnabled || pianoEnabled) {
                         notifyTabBannerVisibility(false);
                         return;
                     }
@@ -1234,7 +1867,12 @@ internal fun getAlphaTabHtml(
                     }
 
                     if (fretboardEnabled) scheduleFretboardRefresh();
+                    if (pianoEnabled) {
+                        pianoDrawKeyboard();
+                        pianoApplyVisualPalette(true);
+                    }
                     applyAlphaTabVisualResources(true);
+                    if (normalPausedSeekBeat) normalPositionPausedSeek(normalPausedSeekBeat);
                     scheduleVisiblePlayheadThickness();
                     return true;
                 }
@@ -1252,7 +1890,9 @@ internal fun getAlphaTabHtml(
                     if (!overlay || !cap) return;
                     var width = Math.max(0, Math.min(24,
                         Math.round(Number(currentVisualPreferences.cursorWidth) || 0)));
-                    if (width === 0 || isPdfExportMode) {
+                    if (width === 0 || isPdfExportMode ||
+                        (typeof practiceState !== 'undefined' && practiceState &&
+                            practiceState.active && practiceState.mode === 'step')) {
                         overlay.style.display = 'none';
                         ttPlayheadLastLayout = '';
                         return;
@@ -1959,6 +2599,8 @@ internal fun getAlphaTabHtml(
                             AndroidInterface.onTempoChangeFailed('Bản nhạc chưa sẵn sàng để đổi BPM.');
                             return false;
                         }
+                        // A MIDI rebuild invalidates the old practice range and preview.
+                        practiceResetForNewScore();
 
                         var ratio = targetBpm / originalBaseBpm;
                         for (var i = 0; i < originalTempoEntries.length; i++) {
@@ -3263,6 +3905,927 @@ internal fun getAlphaTabHtml(
                     }
                 }
 
+
+                // PRACTICE: score/masterBars + selected track share the same AlphaTab
+                // clock as playback, so no independent audio engine or data copies.
+                function practiceSavedBool(key, fallback) {
+                    try { var value = localStorage.getItem(key);
+                        return value === null ? fallback : value === '1';
+                    } catch (_) { return fallback; }
+                }
+                function practiceStoreBool(key, enabled) {
+                    try { localStorage.setItem(key, enabled ? '1' : '0'); } catch (_) {}
+                }
+                var practiceState = {
+                    panelOpen: false, active: false, mode: '', startBar: 1,
+                    endBar: 1, endExplicit: false, startExplicit: false, pickTarget: 'start', speed: 60, step: 0, beats: [], saved: null,
+                    timer: 0, countdown: 0, repeats: 0, currentBeatIndex: 0,
+                    autoListen: practiceSavedBool('tt-practice-auto-listen-v1', false),
+                    showNoteComment: practiceSavedBool('tt-practice-note-comment-v1', true),
+                    message: ''
+                };
+                var practiceIsVietnamese = $practiceIsVietnamese;
+                function practiceText(vi, en) { return practiceIsVietnamese ? vi : en; }
+                function practiceTotalBars() {
+                    return api && api.score && api.score.masterBars
+                        ? api.score.masterBars.length : 0;
+                }
+                function practiceClampBar(value) {
+                    return Math.max(1, Math.min(practiceTotalBars() || 1, Math.round(value) || 1));
+                }
+                function practiceFirstBar() {
+                    return Math.min(practiceClampBar(practiceState.startBar),
+                        practiceClampBar(practiceState.endBar));
+                }
+                function practiceEndBar() {
+                    return Math.max(practiceClampBar(practiceState.startBar),
+                        practiceClampBar(practiceState.endBar));
+                }
+                function practiceBarRange() {
+                    var bars = api && api.score && api.score.masterBars;
+                    if (!bars || !bars.length) return null;
+                    var startIndex = practiceFirstBar() - 1;
+                    var endIndex = practiceEndBar() - 1;
+                    var begin = Number(bars[startIndex].start);
+                    var next = bars[endIndex + 1];
+                    var finish = next ? Number(next.start) : NaN;
+                    if (!Number.isFinite(finish) || finish <= begin) {
+                        var last = bars[endIndex];
+                        var length = last && typeof last.calculateDuration === 'function'
+                            ? Number(last.calculateDuration()) : NaN;
+                        finish = Number(last.start) + (Number.isFinite(length) && length > 0 ? length : 3840);
+                    }
+                    var tickShift = Number(api.midiTickShift) || 0;
+                    // MasterBar.start is score ticks; the synth can prepend grace ticks.
+                    begin = Math.max(0, begin + tickShift);
+                    finish = Math.max(begin + 1, finish + tickShift);
+                    var songEnd = Number(api.endTick);
+                    if (Number.isFinite(songEnd) && songEnd > begin) {
+                        finish = Math.min(finish, songEnd);
+                    }
+                    return { startTick: begin, endTick: finish };
+                }
+                function practiceCollectBeats() {
+                    var track = selectedTrackForNoteNames();
+                    if (!track || !track.staves) return [];
+                    var result = [];
+                    var indexed = {};
+                    for (var si = 0; si < track.staves.length; si++) {
+                        var staff = track.staves[si];
+                        if (!staff || !staff.bars) continue;
+                        // Only fretted-string notes can be shown on our fretboard.
+                        if (!staff.tuning || staff.tuning.length < 4) continue;
+                        for (var bi = practiceFirstBar() - 1; bi < practiceEndBar(); bi++) {
+                            var bar = staff.bars[bi];
+                            if (!bar || !bar.voices) continue;
+                            for (var vi = 0; vi < bar.voices.length; vi++) {
+                                var voice = bar.voices[vi];
+                                if (!voice || !voice.beats) continue;
+                                for (var ni = 0; ni < voice.beats.length; ni++) {
+                                    var beat = voice.beats[ni];
+                                    if (!beat || !beat.notes || !beat.notes.length) continue;
+                                    var tick = Number(beat.absolutePlaybackStart);
+                                    if (!Number.isFinite(tick)) continue;
+                                    var key = bi + ':' + vi + ':' + ni + ':' + tick;
+                                    if (indexed[key]) continue;
+                                    indexed[key] = true;
+                                    result.push({ beat: beat, tick: tick, bar: bi + 1 });
+                                }
+                            }
+                        }
+                    }
+                    result.sort(function(a,b) {
+                        return a.tick - b.tick || a.bar - b.bar;
+                    });
+                    return result;
+                }
+                function practiceRememberAudio() {
+                    if (!api || practiceState.saved) return;
+                    practiceState.saved = {
+                        speed: Number(api.playbackSpeed) || 1,
+                        looping: !!api.isLooping,
+                        range: api.playbackRange || null,
+                        tick: Number(api.tickPosition) || 0
+                    };
+                }
+                function practiceCancelCountdown() {
+                    clearInterval(practiceState.timer);
+                    practiceState.timer = 0;
+                    practiceState.countdown = 0;
+                    var badge = document.getElementById('tt-practice-countdown');
+                    if (badge) badge.style.display = 'none';
+                }
+                function practiceUpdateUi() {
+                    var button = document.getElementById('tt-practice-toggle');
+                    var sheet = document.getElementById('tt-practice-sheet');
+                    var parentPanel = document.getElementById('tt-fretboard-panel');
+                    var stepActive = practiceState.active && practiceState.mode === 'step';
+                    document.body.classList.toggle('tt-practice-step-active', !!stepActive);
+                    if (parentPanel) {
+                        parentPanel.classList.toggle('tt-practice-step-mode', stepActive);
+                        parentPanel.classList.toggle('tt-practice-comment-on',
+                            !!stepActive && !!practiceState.showNoteComment);
+                        parentPanel.classList.toggle('tt-practice-sheet-open',
+                            !!practiceState.panelOpen && !!fretboardEnabled);
+                    }
+                    if (button) {
+                        button.classList.toggle('is-active', practiceState.active || practiceState.panelOpen);
+                        button.setAttribute('aria-pressed', practiceState.panelOpen ? 'true' : 'false');
+                        button.textContent = practiceText('🎸 Luyện', '🎸 Practice');
+                    }
+                    if (sheet) sheet.classList.toggle('is-open', !!practiceState.panelOpen && !!fretboardEnabled);
+                    function label(id, value) {
+                        var el = document.getElementById(id);
+                        if (el) el.textContent = value;
+                    }
+                    label('tt-practice-heading', practiceText('🎸 Luyện theo ô nhịp', '🎸 Measure practice'));
+                    label('tt-practice-from-label', practiceText('T\u1eeb \u00f4', 'From'));
+                    label('tt-practice-to-label', practiceText('\u0110\u1ebfn \u00f4', 'To'));
+                    label('tt-practice-speed-label', practiceText('T\u1ed1c \u0111\u1ed9', 'Speed'));
+                    label('tt-practice-range-summary',
+                        practiceFirstBar() + '\u2013' + practiceEndBar() + ' / ' + practiceTotalBars() +
+                        '  \u2022  ' + (practiceEndBar() - practiceFirstBar() + 1) +
+                        practiceText(' \u00f4', ' bars'));
+                    ['start','end'].forEach(function(target) {
+                        var id = target === 'start' ? 'tt-practice-from-input' : 'tt-practice-to-input';
+                        var input = document.getElementById(id);
+                        if (input) {
+                            input.max = String(practiceTotalBars() || 1);
+                            if (document.activeElement !== input) {
+                                input.value = String(target === 'start' ? practiceState.startBar : practiceState.endBar);
+                            }
+                        }
+                        var choice = document.getElementById(target === 'start' ?
+                            'tt-practice-from-choice' : 'tt-practice-to-choice');
+                        if (choice) choice.classList.toggle('is-selected', practiceState.pickTarget === target);
+                    });
+                    label('tt-practice-speed-value', practiceState.speed + '%');
+                    label('tt-practice-sample', practiceText('♫ Nghe mẫu', '♫ Sample'));
+                    label('tt-practice-loop', practiceText('▶ Luyện lặp', '▶ Loop'));
+                    label('tt-practice-step', practiceText('◎ Từng nốt', '◎ Step notes'));
+                    label('tt-practice-prev', practiceText('◀ Nốt', '◀ Note'));
+                    label('tt-practice-next', practiceText('Nốt ▶', 'Note ▶'));
+                    label('tt-practice-hear', practiceText('♪ Nghe nốt', '♪ Hear note'));
+                    label('tt-practice-stop', practiceText('■ Thoát luyện', '■ Exit'));
+                    label('tt-practice-step-count', practiceState.mode === 'step'
+                        ? (practiceState.step + 1) + ' / ' + practiceState.beats.length
+                        : '–');
+                    label('tt-practice-quick-progress',
+                        practiceText('Nốt ', 'Note ') + (practiceState.step + 1) +
+                        '/' + practiceState.beats.length);
+                    label('tt-practice-quick-prev', practiceText('◀ Trước', '◀ Prev'));
+                    label('tt-practice-quick-next', practiceText('Tiếp ▶', 'Next ▶'));
+                    label('tt-practice-quick-hear', practiceState.autoListen
+                        ? practiceText('♫ Nghe: Bật', '♫ Hear: On')
+                        : practiceText('♫ Nghe: Tắt', '♫ Hear: Off'));
+                    label('tt-practice-comment-label', practiceText(
+                        'Hiện chú thích tên nốt · dây · ngăn',
+                        'Show note · string · fret guidance'));
+                    var commentChoice = document.getElementById('tt-practice-show-notes');
+                    if (commentChoice) commentChoice.checked = !!practiceState.showNoteComment;
+                    var hearSwitch = document.getElementById('tt-practice-quick-hear');
+                    if (hearSwitch) {
+                        hearSwitch.classList.toggle('is-on', !!practiceState.autoListen);
+                        hearSwitch.setAttribute('aria-checked', practiceState.autoListen ? 'true' : 'false');
+                    }
+                    label('tt-practice-message', practiceState.message);
+                    var slider = document.getElementById('tt-practice-speed');
+                    if (slider && document.activeElement !== slider) slider.value = String(practiceState.speed);
+                    var canStep = practiceState.active && practiceState.mode === 'step' && !!practiceState.beats.length;
+                    var prev = document.getElementById('tt-practice-prev');
+                    var next = document.getElementById('tt-practice-next');
+                    var hear = document.getElementById('tt-practice-hear');
+                    if (prev) prev.disabled = !canStep || practiceState.step <= 0;
+                    if (next) next.disabled = !canStep || practiceState.step >= practiceState.beats.length - 1;
+                    if (hear) hear.disabled = !canStep;
+                    var quickPrev = document.getElementById('tt-practice-quick-prev');
+                    var quickNext = document.getElementById('tt-practice-quick-next');
+                    if (quickPrev) quickPrev.disabled = !canStep || practiceState.step <= 0;
+                    if (quickNext) quickNext.disabled = !canStep || practiceState.step >= practiceState.beats.length - 1;
+                    practiceUpdateStepComment();
+                    if (!stepActive) practiceClearStepCursor();
+                    practiceDrawMeasureHighlight();
+                    if (practiceState.panelOpen && fretboardEnabled) {
+                        requestAnimationFrame(practiceFitSheet);
+                    }
+                }
+
+                // A tap on an entire score/TAB measure chooses the practice bar.
+                // AlphaTab bounds are in the score container's own coordinates;
+                // using them avoids estimating indices from note position or zoom.
+                var practiceScoreGesture = {
+                    downX: 0, downY: 0, moved: false, multi: false,
+                    tracked: false, blockClicksUntil: 0
+                };
+                function practiceCanPickFromScore() {
+                    return fretboardEnabled && (practiceState.panelOpen || practiceState.active) &&
+                        !!api && !!api.score && !isPdfExportMode && !isScoreLoading;
+                }
+                function practiceBoundsLookup() {
+                    return api ? (api.boundsLookup ||
+                        (api.renderer ? api.renderer.boundsLookup : null)) : null;
+                }
+                function practiceMeasureAtScreenPoint(clientX, clientY) {
+                    if (!practiceCanPickFromScore()) return 0;
+                    var root = document.getElementById('alphatab-container');
+                    var lookup = practiceBoundsLookup();
+                    if (!root || !lookup || !lookup.staffSystems) return 0;
+                    var rect = root.getBoundingClientRect();
+                    var x = clientX - rect.left, y = clientY - rect.top;
+                    if (!Number.isFinite(x) || !Number.isFinite(y) ||
+                        x < 0 || x > rect.width || y < 0) return 0;
+                    function contains(bounds, pad) {
+                        if (!bounds) return false;
+                        var bx = Number(bounds.x), by = Number(bounds.y);
+                        var bw = Number(bounds.w), bh = Number(bounds.h);
+                        return [bx, by, bw, bh].every(Number.isFinite) &&
+                            bw > 0 && bh > 0 &&
+                            x >= bx - pad && x <= bx + bw + pad &&
+                            y >= by - pad && y <= by + bh + pad;
+                    }
+                    var systems = lookup.staffSystems;
+                    for (var si = 0; si < systems.length; si++) {
+                        var system = systems[si];
+                        if (!system || !contains(system.realBounds || system.visualBounds, 5)) continue;
+                        var masters = system.bars || [];
+                        for (var mi = 0; mi < masters.length; mi++) {
+                            var master = masters[mi];
+                            if (!master) continue;
+                            var bounds = master.realBounds || master.lineAlignedBounds || master.visualBounds;
+                            if (!contains(bounds, 1)) continue;
+                            var index = Number(master.index);
+                            if (Number.isInteger(index) && index >= 0 && index < practiceTotalBars()) {
+                                return index + 1;
+                            }
+                        }
+                    }
+                    return 0;
+                }
+                function practiceDrawMeasureHighlight() {
+                    var container = document.getElementById('alphatab-container');
+                    if (!container) return;
+                    container.querySelectorAll('.tt-practice-bar-highlight').forEach(function(el) {
+                        el.remove();
+                    });
+                    if (!practiceCanPickFromScore()) return;
+                    var lookup = practiceBoundsLookup();
+                    if (!lookup || typeof lookup.findMasterBarByIndex !== 'function') return;
+                    var groups = [];
+                    var from = practiceFirstBar(), to = practiceEndBar();
+                    for (var barIndex = from - 1; barIndex < to; barIndex++) {
+                        var item = lookup.findMasterBarByIndex(barIndex);
+                        if (!item) continue;
+                        var b = item.realBounds || item.lineAlignedBounds || item.visualBounds;
+                        if (!b) continue;
+                        var x = Number(b.x), y = Number(b.y);
+                        var w = Number(b.w), h = Number(b.h);
+                        if (![x,y,w,h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
+                        var prev = groups.length ? groups[groups.length - 1] : null;
+                        // Adjacent measures on one staff row share one range outline.
+                        if (prev && Math.abs(y - prev.y) <= 4 &&
+                            Math.abs(h - prev.h) <= 4 &&
+                            x >= prev.x && x <= prev.x + prev.w + 12) {
+                            prev.w = Math.max(prev.w, x + w - prev.x);
+                        } else {
+                            groups.push({x:x, y:y, w:w, h:h});
+                        }
+                    }
+                    var fragment = document.createDocumentFragment();
+                    groups.forEach(function(g) {
+                        var mark = document.createElement('div');
+                        mark.className = 'tt-practice-bar-highlight';
+                        mark.setAttribute('aria-hidden', 'true');
+                        mark.style.left = g.x + 'px';
+                        mark.style.top = g.y + 'px';
+                        mark.style.width = g.w + 'px';
+                        mark.style.height = g.h + 'px';
+                        fragment.appendChild(mark);
+                    });
+                    container.appendChild(fragment);
+                }
+                function practiceChooseBarFromScore(barNumber) {
+                    if (!practiceCanPickFromScore()) return false;
+                    return practiceSetBarBoundary(practiceState.pickTarget, barNumber, true);
+                }
+                function practicePickFromClient(clientX, clientY) {
+                    var bar = practiceMeasureAtScreenPoint(clientX, clientY);
+                    return bar > 0 ? practiceChooseBarFromScore(bar) : false;
+                }
+
+                // Outside practice, a short tap on a score/TAB beat while paused
+                // seeks playback to that beat. In step practice the same tap is
+                // reserved for choosing From/To measure, and pinch/swipes remain
+                // untouched. Do not depend on AlphaTab's native click handler:
+                // Android WebView may swallow synthesized clicks during scrolling.
+                var normalPausedSeekBeat = null;
+                function normalCanSeekOnPausedScore() {
+                    return !!api && !!api.score && !isScoreLoading && !isPdfExportMode &&
+                        lastKnownPlayerState !== 1 &&
+                        !practiceState.panelOpen && !practiceState.active;
+                }
+                function normalClearPausedSeek() {
+                    normalPausedSeekBeat = null;
+                    document.body.classList.remove('tt-normal-seek-paused');
+                    var marker = document.getElementById('tt-normal-seek-cursor');
+                    if (marker) marker.remove();
+                }
+                function normalPositionPausedSeek(beat) {
+                    if (!beat || !normalCanSeekOnPausedScore()) return false;
+                    var root = document.getElementById('alphatab-container');
+                    var lookup = practiceBoundsLookup();
+                    if (!root || !lookup || typeof lookup.findBeat !== 'function') return false;
+                    var b = lookup.findBeat(beat);
+                    if (!b && typeof lookup.findBeats === 'function') {
+                        var choices = lookup.findBeats(beat);
+                        b = choices && choices.length ? choices[0] : null;
+                    }
+                    if (!b) return false;
+                    var x = Number(b.onNotesX);
+                    if (!Number.isFinite(x)) {
+                        var fallback = b.visualBounds || b.realBounds;
+                        x = fallback ? Number(fallback.x) + Number(fallback.w) / 2 : NaN;
+                    }
+                    var master = b.barBounds && b.barBounds.masterBarBounds;
+                    var bounds = (master && (master.realBounds || master.visualBounds)) ||
+                        (b.barBounds && (b.barBounds.realBounds || b.barBounds.visualBounds)) ||
+                        b.realBounds || b.visualBounds;
+                    var y = Number(bounds && bounds.y), h = Number(bounds && bounds.h);
+                    if (![x,y,h].every(Number.isFinite) || h <= 0) return false;
+                    normalPausedSeekBeat = beat;
+                    document.body.classList.add('tt-normal-seek-paused');
+                    var marker = document.getElementById('tt-normal-seek-cursor');
+                    if (!marker) {
+                        marker = document.createElement('div');
+                        marker.id = 'tt-normal-seek-cursor';
+                        marker.setAttribute('aria-hidden','true');
+                        root.appendChild(marker);
+                    }
+                    var ink = currentVisualPreferences.cursorColor || '#DC2626';
+                    var width = Math.max(0, Math.min(24,
+                        Math.round(Number(currentVisualPreferences.cursorWidth) || 0)));
+                    var edge = currentThemeIsDark ? '#ffffff' : '#101828';
+                    marker.style.left = x + 'px';
+                    marker.style.top = y + 'px';
+                    marker.style.height = h + 'px';
+                    marker.style.width = width + 'px';
+                    marker.style.backgroundColor = ink;
+                    marker.style.border = width >= 3 ? '1px solid ' + edge : '0';
+                    marker.style.boxShadow = '0 0 0 1px ' + ink +
+                        ', 0 0 8px ' + visualRgba(ink,.65);
+                    marker.style.display = width === 0 ? 'none' : 'block';
+                    return true;
+                }
+                function normalSeekPausedScoreAt(clientX, clientY) {
+                    if (!normalCanSeekOnPausedScore()) return false;
+                    var root = document.getElementById('alphatab-container');
+                    var lookup = practiceBoundsLookup();
+                    if (!root || !lookup || typeof lookup.getBeatAtPos !== 'function') return false;
+                    var rect = root.getBoundingClientRect();
+                    var x = clientX - rect.left, y = clientY - rect.top;
+                    if (![x,y].every(Number.isFinite) || x < 0 || y < 0 ||
+                        x > rect.width || y > rect.height) return false;
+                    // Disallow a seek from the title/blank margins below the score.
+                    if (lookup.staffSystems && lookup.staffSystems.length) {
+                        var isOnStaff = false;
+                        for (var i=0; i<lookup.staffSystems.length; i++) {
+                            var system = lookup.staffSystems[i];
+                            var box = system && (system.realBounds || system.visualBounds);
+                            if (!box) continue;
+                            var sx=Number(box.x), sy=Number(box.y),
+                                sw=Number(box.w), sh=Number(box.h);
+                            if ([sx,sy,sw,sh].every(Number.isFinite) &&
+                                x>=sx-3 && x<=sx+sw+3 && y>=sy-3 && y<=sy+sh+3) {
+                                isOnStaff=true; break;
+                            }
+                        }
+                        if (!isOnStaff) return false;
+                    }
+                    var beat = lookup.getBeatAtPos(x,y);
+                    if (!beat) return false;
+                    var tick = Number(beat.absolutePlaybackStart);
+                    if (!Number.isFinite(tick)) return false;
+                    tick = Math.max(0, tick + (Number(api.midiTickShift) || 0));
+                    var endTick = Number(api.endTick);
+                    if (Number.isFinite(endTick) && endTick > 0) {
+                        tick = Math.min(tick, endTick - 1);
+                    }
+                    try { api.tickPosition = tick; } catch (error) {
+                        console.warn('Paused score seek failed', error);
+                        return false;
+                    }
+                    normalPositionPausedSeek(beat);
+                    // Keep the fretboard in sync even if the audio engine is paused.
+                    try { updateActiveNoteNameBeat(beat); } catch (_) {}
+                    try { updateFretboardForBeat(beat); } catch (_) {}
+                    scheduleVisiblePlayheadThickness();
+                    return true;
+                }
+                function practiceFitSheet() {
+                    var sheet = document.getElementById('tt-practice-sheet');
+                    var panel = document.getElementById('tt-fretboard-panel');
+                    if (!sheet || !panel || !practiceState.panelOpen || !fretboardEnabled) return;
+                    // Reset to the normal panel height before measuring content.
+                    sheet.classList.remove('tt-practice-condensed');
+                    sheet.style.top = '37px';
+                    var wrapper = document.getElementById('scroll-wrapper');
+                    var panelTop = panel.getBoundingClientRect().top;
+                    var viewTop = wrapper ? wrapper.getBoundingClientRect().top : 0;
+                    // Leave score exposed above the popup so bars remain selectable.
+                    var maxLift = Math.max(0, Math.min(200, panelTop - viewTop - 82));
+                    function expandToContent() {
+                        var required = Math.max(0, sheet.scrollHeight - sheet.clientHeight + 8);
+                        return Math.min(maxLift, required);
+                    }
+                    var lift = expandToContent();
+                    sheet.style.top = (37 - lift) + 'px';
+                    if (sheet.scrollHeight > sheet.clientHeight + 2) {
+                        sheet.classList.add('tt-practice-condensed');
+                        sheet.style.top = '37px';
+                        lift = expandToContent();
+                        sheet.style.top = (37 - lift) + 'px';
+                    }
+                }
+                function practiceInstallScoreSelection(wrapper) {
+                    if (!wrapper) return;
+                    wrapper.addEventListener('touchstart', function(ev) {
+                        var gesture = practiceScoreGesture;
+                        if (!practiceCanPickFromScore() && !normalCanSeekOnPausedScore()) {
+                            gesture.tracked = false; return;
+                        }
+                        if (ev.touches && ev.touches.length > 1) {
+                            gesture.multi = true;
+                            gesture.blockClicksUntil = Date.now() + 650;
+                            return;
+                        }
+                        if (!ev.touches || !ev.touches.length) return;
+                        gesture.tracked = true; gesture.multi = false; gesture.moved = false;
+                        gesture.downX = ev.touches[0].clientX;
+                        gesture.downY = ev.touches[0].clientY;
+                    }, { passive: true });
+                    wrapper.addEventListener('touchmove', function(ev) {
+                        var gesture = practiceScoreGesture;
+                        if (ev.touches && ev.touches.length > 1) {
+                            gesture.multi = true; gesture.blockClicksUntil = Date.now() + 650;
+                        }
+                        if (!gesture.tracked || !ev.touches || !ev.touches.length) return;
+                        if (Math.hypot(ev.touches[0].clientX - gesture.downX,
+                                ev.touches[0].clientY - gesture.downY) > 11) {
+                            gesture.moved = true;
+                            gesture.blockClicksUntil = Date.now() + 400;
+                        }
+                    }, { passive: true });
+                    wrapper.addEventListener('touchend', function(ev) {
+                        var gesture = practiceScoreGesture;
+                        if (!gesture.tracked && !gesture.multi) return;
+                        var stillTouching = !!(ev.touches && ev.touches.length);
+                        if (gesture.multi || gesture.moved || scorePinch.active) {
+                            gesture.blockClicksUntil = Date.now() + 650;
+                            if (!stillTouching) { gesture.tracked = false; gesture.multi = false; }
+                            return;
+                        }
+                        if (!stillTouching &&
+                            (practiceCanPickFromScore() || normalCanSeekOnPausedScore()) &&
+                            ev.changedTouches && ev.changedTouches.length === 1) {
+                            var t = ev.changedTouches[0];
+                            var chosen = practiceCanPickFromScore()
+                                ? practicePickFromClient(t.clientX, t.clientY)
+                                : normalSeekPausedScoreAt(t.clientX, t.clientY);
+                            if (chosen) {
+                                gesture.blockClicksUntil = Date.now() + 650;
+                                if (ev.cancelable) ev.preventDefault();
+                            }
+                        }
+                        if (!stillTouching) { gesture.tracked = false; gesture.multi = false; }
+                    }, { passive: false });
+                    wrapper.addEventListener('touchcancel', function() {
+                        practiceScoreGesture.tracked = false;
+                        practiceScoreGesture.multi = false;
+                        practiceScoreGesture.blockClicksUntil = Date.now() + 650;
+                    }, { passive: true });
+                    wrapper.addEventListener('click', function(ev) {
+                        if (!practiceCanPickFromScore() && !normalCanSeekOnPausedScore()) return;
+                        // Block the synthesized click after a handled touch or pinch.
+                        if (Date.now() < practiceScoreGesture.blockClicksUntil) {
+                            if (ev.cancelable) ev.preventDefault();
+                            ev.stopPropagation();
+                            return;
+                        }
+                        if (!ev.target || !ev.target.closest ||
+                            !ev.target.closest('#alphatab-container')) return;
+                        var selected = practiceCanPickFromScore()
+                            ? practicePickFromClient(ev.clientX, ev.clientY)
+                            : normalSeekPausedScoreAt(ev.clientX, ev.clientY);
+                        if (selected) {
+                            if (ev.cancelable) ev.preventDefault();
+                            ev.stopPropagation();
+                        }
+                    }, true);
+                }
+                function toggleSongPractice() {
+                    if (!fretboardEnabled || !api || !api.score || isPdfExportMode) return;
+                    normalClearPausedSeek();
+                    practiceState.panelOpen = !practiceState.panelOpen;
+                    if (practiceState.panelOpen && !practiceState.active) {
+                        practiceState.message = practiceText(
+                            'Chạm ô nhịp phía trên để chọn nhanh',
+                            'Tap a measure above to select it'
+                        );
+                        var tick = Number(api.tickPosition) || 0;
+                        var bars = api.score.masterBars || [];
+                        if (!practiceState.startExplicit && !practiceState.endExplicit) {
+                            for (var i = 0; i < bars.length; i++) {
+                                var start = Number(bars[i].start);
+                                var next = bars[i + 1] ? Number(bars[i + 1].start) : Number(api.endTick);
+                                if (tick >= start && tick < next) {
+                                    practiceState.startBar = i + 1;
+                                    practiceState.endBar = i + 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    practiceUpdateUi();
+                }
+                function practiceHideSheet() {
+                    practiceState.panelOpen = false;
+                    practiceUpdateUi();
+                }
+                function practiceSelectTarget(target) {
+                    if (target !== 'start' && target !== 'end') return;
+                    practiceState.pickTarget = target;
+                    if (!practiceState.active) {
+                        practiceState.message = target === 'start'
+                            ? practiceText('Ch\u1ecdn \u00f4 b\u1eaft \u0111\u1ea7u tr\u00ean khu\u00f4ng/TAB',
+                                'Tap the first measure in the score/TAB')
+                            : practiceText('Ch\u1ecdn \u00f4 k\u1ebft th\u00fac tr\u00ean khu\u00f4ng/TAB',
+                                'Tap the last measure in the score/TAB');
+                    }
+                    practiceUpdateUi();
+                }
+                function practiceCommitBar(target, value) {
+                    var raw = String(value == null ? '' : value).trim();
+                    var number = Number(raw);
+                    if (!raw || !Number.isInteger(number)) {
+                        practiceUpdateUi();
+                        return false;
+                    }
+                    return practiceSetBarBoundary(target, number, false);
+                }
+                function practiceSetBarBoundary(target, number, pickedFromScore) {
+                    if (!api || !api.score || (target !== 'start' && target !== 'end')) return false;
+                    if (!Number.isFinite(Number(number))) return false;
+                    var chosen = practiceClampBar(Number(number));
+                    if (practiceState.active) practiceStopSession(false);
+                    practiceState.startExplicit = true;
+                    if (target === 'start') {
+                        practiceState.startBar = chosen;
+                        if (!practiceState.endExplicit) practiceState.endBar = chosen;
+                    } else {
+                        practiceState.endBar = chosen;
+                        practiceState.endExplicit = true;
+                    }
+                    // Always present an ascending, inclusive interval.
+                    if (practiceState.endBar < practiceState.startBar) {
+                        var swapped = practiceState.startBar;
+                        practiceState.startBar = practiceState.endBar;
+                        practiceState.endBar = swapped;
+                        practiceState.endExplicit = true;
+                    }
+                    practiceState.pickTarget = target;
+                    practiceState.panelOpen = true;
+                    var focusedInput = document.activeElement;
+                    if (pickedFromScore && focusedInput &&
+                        (focusedInput.id === 'tt-practice-from-input' || focusedInput.id === 'tt-practice-to-input')) {
+                        focusedInput.value = String(chosen);
+                        focusedInput.blur();
+                    }
+                    practiceState.beats = practiceCollectBeats();
+                    // Keep the score at its current scroll position while selecting
+                    // the second endpoint; playback jumps only when it starts.
+                    if (practiceState.beats.length) {
+                        try { updateFretboardForBeat(practiceState.beats[0].beat); } catch (_) {}
+                    }
+                    practiceState.message = practiceText('\u0110o\u1ea1n ' + practiceFirstBar() +
+                        '\u2013' + practiceEndBar() + ' \u0111\u00e3 ch\u1ecdn. Nh\u1ea5n Luy\u1ec7n l\u1eb7p.',
+                        'Selected ' + practiceFirstBar() + '\u2013' + practiceEndBar() + '. Start loop.');
+                    practiceUpdateUi();
+                    return true;
+                }
+                function practiceSetSpeed(percent) {
+                    var value = Number(percent) || 60;
+                    practiceState.speed = Math.max(50, Math.min(100, Math.round(value / 10) * 10));
+                    if (practiceState.active && practiceState.mode === 'loop' && api) {
+                        api.playbackSpeed = practiceState.speed / 100;
+                    }
+                    practiceUpdateUi();
+                }
+                function practiceSetShowComment(enabled) {
+                    practiceState.showNoteComment = !!enabled;
+                    practiceStoreBool('tt-practice-note-comment-v1', !!enabled);
+                    practiceUpdateUi();
+                }
+                function practiceToggleAutoListen() {
+                    practiceState.autoListen = !practiceState.autoListen;
+                    practiceStoreBool('tt-practice-auto-listen-v1', practiceState.autoListen);
+                    practiceUpdateUi();
+                    // The toggle is an explicit tap: preview the current beat once.
+                    if (practiceState.autoListen) practiceListenStep();
+                }
+                function practiceStepCommentText(item) {
+                    if (!item || !item.beat || !item.beat.notes) return '';
+                    var notes = [];
+                    var staff = fretboardStaffForTrack();
+                    var tuning = staff && staff.tuning ? staff.tuning : [];
+                    var flats = beatUsesFlatNoteNames(item.beat);
+                    for (var i = 0; i < item.beat.notes.length; i++) {
+                        var note = item.beat.notes[i];
+                        if (!note || note.isVisible === false) continue;
+                        var string = Math.round(Number(note.string));
+                        var fret = Math.round(Number(note.fret));
+                        if (!Number.isFinite(string) || string < 1 ||
+                            string > tuning.length) continue;
+                        if (note.isDead === true && (!Number.isFinite(fret) || fret < 0)) fret = 0;
+                        if (!Number.isFinite(fret) || fret < 0) continue;
+                        var pitch = notePitchForName(note);
+                        if (!Number.isFinite(pitch)) {
+                            pitch = Number(tuning[tuning.length - string]) + fret + Number(staff.capo || 0);
+                        }
+                        var name = note.isDead ? '×' : fretboardNoteLabel(pitch, flats);
+                        notes.push(practiceIsVietnamese
+                            ? (name + ': dây ' + string + ', ngăn ' + fret)
+                            : (name + ': string ' + string + ', fret ' + fret));
+                    }
+                    return (practiceIsVietnamese ? 'Ô ' : 'Bar ') + item.bar +
+                        ' • ' + (notes.length ? notes.join('  •  ') : practiceText('Không có nốt', 'No notes'));
+                }
+                function practiceUpdateStepComment() {
+                    if (!practiceState.active || practiceState.mode !== 'step' ||
+                        !practiceState.showNoteComment) return;
+                    var label = document.getElementById('tt-fretboard-status');
+                    var item = practiceState.beats[practiceState.step];
+                    if (label && item) label.textContent = practiceStepCommentText(item);
+                }
+                function practiceClearStepCursor() {
+                    var marker = document.getElementById('tt-practice-note-cursor');
+                    if (marker) marker.remove();
+                }
+                function practicePositionStepCursor(scrollToBeat) {
+                    if (!practiceState.active || practiceState.mode !== 'step' ||
+                        !fretboardEnabled || isPdfExportMode || !api) {
+                        practiceClearStepCursor(); return false;
+                    }
+                    var item = practiceState.beats[practiceState.step];
+                    var root = document.getElementById('alphatab-container');
+                    var wrapper = document.getElementById('scroll-wrapper');
+                    var lookup = practiceBoundsLookup();
+                    if (!item || !root || !wrapper || !lookup ||
+                        typeof lookup.findBeat !== 'function') {
+                        practiceClearStepCursor(); return false;
+                    }
+                    var bounds = lookup.findBeat(item.beat);
+                    if (!bounds && typeof lookup.findBeats === 'function') {
+                        var alternatives = lookup.findBeats(item.beat);
+                        bounds = alternatives && alternatives.length ? alternatives[0] : null;
+                    }
+                    if (!bounds) { practiceClearStepCursor(); return false; }
+                    // onNotesX is AlphaTab's exact horizontal note/cursor position.
+                    var x = Number(bounds.onNotesX);
+                    if (!Number.isFinite(x)) {
+                        var visible = bounds.visualBounds || bounds.realBounds;
+                        x = visible ? Number(visible.x) + Number(visible.w) / 2 : NaN;
+                    }
+                    var master = bounds.barBounds && bounds.barBounds.masterBarBounds;
+                    if (!master && typeof lookup.findMasterBarByIndex === 'function') {
+                        master = lookup.findMasterBarByIndex(item.bar - 1);
+                    }
+                    var targetBounds = master && (master.realBounds || master.visualBounds);
+                    if (!targetBounds) targetBounds = bounds.barBounds &&
+                        (bounds.barBounds.realBounds || bounds.barBounds.visualBounds);
+                    if (!targetBounds) targetBounds = bounds.realBounds || bounds.visualBounds;
+                    var y = Number(targetBounds && targetBounds.y);
+                    var height = Number(targetBounds && targetBounds.h);
+                    if (![x, y, height].every(Number.isFinite) || height <= 0) {
+                        practiceClearStepCursor(); return false;
+                    }
+                    var width = Math.max(0, Math.min(24,
+                        Math.round(Number(currentVisualPreferences.cursorWidth) || 0)));
+                    var marker = document.getElementById('tt-practice-note-cursor');
+                    if (!marker) {
+                        marker = document.createElement('div');
+                        marker.id = 'tt-practice-note-cursor';
+                        marker.setAttribute('aria-hidden', 'true');
+                        root.appendChild(marker);
+                    }
+                    var ink = currentVisualPreferences.cursorColor || '#DC2626';
+                    var edge = currentThemeIsDark ? '#ffffff' : '#101828';
+                    marker.style.left = x + 'px';
+                    marker.style.top = y + 'px';
+                    marker.style.height = height + 'px';
+                    marker.style.width = Math.max(3, width) + 'px';
+                    marker.style.backgroundColor = ink;
+                    marker.style.border = '1px solid ' + edge;
+                    marker.style.boxShadow = '0 0 0 1px ' + ink + ',0 0 8px ' + visualRgba(ink,.7);
+                    marker.style.display = width === 0 ? 'none' : 'block';
+                    if (scrollToBeat) {
+                        // Scroll the active staff into view, without scrolling the fretboard.
+                        var wrapperRect = wrapper.getBoundingClientRect();
+                        var rootRect = root.getBoundingClientRect();
+                        var visibleBottom = wrapperRect.bottom;
+                        var panel = document.getElementById('tt-fretboard-panel');
+                        if (panel && fretboardEnabled) {
+                            visibleBottom = Math.min(visibleBottom, panel.getBoundingClientRect().top);
+                        }
+                        var scoreTop = rootRect.top + y;
+                        var scoreBottom = scoreTop + height;
+                        var available = Math.max(40, visibleBottom - wrapperRect.top);
+                        var desiredTop = wrapperRect.top + 15;
+                        var delta = 0;
+                        if (scoreTop < desiredTop || height > available - 30) {
+                            delta = scoreTop - desiredTop;
+                        } else if (scoreBottom > visibleBottom - 15) {
+                            delta = scoreBottom - (visibleBottom - 15);
+                        }
+                        if (Math.abs(delta) > 2) wrapper.scrollTop += delta;
+                    }
+                    scheduleVisiblePlayheadThickness();
+                    return true;
+                }
+                function practiceStopSession(keepPanel) {
+                    practiceCancelCountdown();
+                    practiceClearStepCursor();
+                    if (practiceState.saved && api) {
+                        try { api.pause(); } catch (_) {}
+                        try { api.playbackRange = practiceState.saved.range; } catch (_) {}
+                        try { api.isLooping = practiceState.saved.looping; } catch (_) {}
+                        try { api.playbackSpeed = practiceState.saved.speed; } catch (_) {}
+                        try { api.tickPosition = practiceState.saved.tick; } catch (_) {}
+                    }
+                    practiceState.saved = null;
+                    practiceState.active = false;
+                    practiceState.mode = '';
+                    practiceState.beats = [];
+                    practiceState.step = 0;
+                    practiceState.currentBeatIndex = 0;
+                    practiceState.repeats = 0;
+                    practiceState.message = practiceText('Chọn ô và bắt đầu luyện', 'Choose measures to practice');
+                    if (!keepPanel) practiceState.panelOpen = true;
+                    practiceUpdateUi();
+                    if (fretboardEnabled) scheduleFretboardRefresh();
+                }
+                function practiceResetForNewScore() {
+                    practiceStopSession(true);
+                    practiceState.panelOpen = false;
+                    practiceState.startBar = 1;
+                    practiceState.endBar = 1;
+                    practiceState.endExplicit = false;
+                    practiceState.startExplicit = false;
+                    practiceState.pickTarget = 'start';
+                    practiceUpdateUi();
+                }
+                function practiceStartPlayback(loop) {
+                    if (!api || !api.score || !api.isReadyForPlayback || isSoundFontLoading) {
+                        practiceState.message = practiceText('Đang tải âm thanh', 'Audio is loading');
+                        practiceUpdateUi();
+                        return false;
+                    }
+                    var range = practiceBarRange();
+                    if (!range || !(range.endTick > range.startTick)) return false;
+                    if (practiceState.active) practiceStopSession(true);
+                    practiceRememberAudio();
+                    practiceState.beats = practiceCollectBeats();
+                    if (!practiceState.beats.length) {
+                        practiceStopSession(true);
+                        practiceState.message = practiceText('Đoạn này không có nốt TAB', 'No playable TAB notes in this range');
+                        practiceUpdateUi();
+                        return false;
+                    }
+                    api.pause();
+                    api.playbackRange = range;
+                    api.isLooping = !!loop;
+                    api.playbackSpeed = loop ? practiceState.speed / 100 : 1;
+                    api.tickPosition = range.startTick;
+                    practiceState.active = true;
+                    practiceState.mode = loop ? 'loop' : 'sample';
+                    practiceState.repeats = 0;
+                    practiceState.currentBeatIndex = 0;
+                    practiceState.message = loop ? practiceText('Đang luyện lặp', 'Looping') :
+                        practiceText('Đang nghe mẫu', 'Playing sample');
+                    practiceHideSheet();
+                    updateFretboardForBeat(practiceState.beats[0].beat);
+                    if (loop) {
+                        var counter = 3;
+                        var badge = document.getElementById('tt-practice-countdown');
+                        if (badge) { badge.textContent = String(counter); badge.style.display = 'block'; }
+                        practiceState.countdown = counter;
+                        practiceState.timer = setInterval(function() {
+                            if (!practiceState.active || practiceState.mode !== 'loop') {
+                                practiceCancelCountdown(); return;
+                            }
+                            counter--;
+                            practiceState.countdown = counter;
+                            if (counter > 0) {
+                                if (badge) badge.textContent = String(counter);
+                            } else {
+                                practiceCancelCountdown();
+                                if (api && practiceState.active && practiceState.mode === 'loop') api.play();
+                            }
+                        }, 1000);
+                    } else {
+                        api.play();
+                    }
+                    return true;
+                }
+                function practiceStartSample() { return practiceStartPlayback(false); }
+                function practiceStartLoop() { return practiceStartPlayback(true); }
+                function practiceEnterStep() {
+                    if (!api || !api.score) return;
+                    if (practiceState.active) practiceStopSession(true);
+                    practiceState.beats = practiceCollectBeats();
+                    if (!practiceState.beats.length) {
+                        practiceState.message = practiceText('Không có nốt trong đoạn', 'No notes in selected bars');
+                        practiceUpdateUi(); return;
+                    }
+                    practiceRememberAudio();
+                    api.pause();
+                    practiceState.mode = 'step';
+                    practiceState.active = true;
+                    practiceState.step = 0;
+                    practiceState.message = practiceText('Xem vị trí và nhấn Nốt ▶', 'Follow notes, then tap Note ▶');
+                    practiceShowStep();
+                    // Collapse the setup panel: the compact previous/next note row
+                    // remains underneath the fretboard without covering any string.
+                    practiceHideSheet();
+                }
+                function practiceShowStep() {
+                    if (!practiceState.active || practiceState.mode !== 'step') return;
+                    var beat = practiceState.beats[practiceState.step];
+                    if (!beat) return;
+                    if (api) {
+                        api.pause();
+                        try { api.tickPosition = beat.tick + (Number(api.midiTickShift) || 0); } catch (_) {}
+                        // Do not call AlphaTab.scrollToCursor() here: while paused
+                        // it can scroll to the old playback beat instead of the
+                        // note selected with Next/Previous. The step cursor below
+                        // uses BoundsLookup.findBeat() and scrolls to that beat.
+                    }
+                    updateFretboardForBeat(beat.beat);
+                    practiceUpdateUi();
+                    practicePositionStepCursor(true);
+                    // The score and TAB may finish scrolling after the next animation frame.
+                    requestAnimationFrame(function() { practicePositionStepCursor(false); });
+                }
+                function practiceStep(direction) {
+                    if (!practiceState.active || practiceState.mode !== 'step') return;
+                    var previous = practiceState.step;
+                    practiceState.step = Math.max(0, Math.min(practiceState.beats.length - 1,
+                        practiceState.step + Number(direction)));
+                    if (practiceState.step === previous) return;
+                    practiceShowStep();
+                    if (practiceState.autoListen) practiceListenStep();
+                }
+                function practiceListenStep() {
+                    if (!practiceState.active || practiceState.mode !== 'step' || !api) return;
+                    var item = practiceState.beats[practiceState.step];
+                    if (!item || !api.isReadyForPlayback) return;
+                    if (typeof api.playBeat === 'function') api.playBeat(item.beat);
+                    // A separate playBeat does not require a backing track or loop timer.
+                }
+                function practiceUpcomingBeat(currentBeat) {
+                    if (!practiceState.active || !practiceState.beats.length) return null;
+                    if (practiceState.mode === 'step') {
+                        return practiceState.beats[Math.min(practiceState.step + 1, practiceState.beats.length - 1)].beat;
+                    }
+                    if (currentBeat) {
+                        for (var i = 0; i < practiceState.beats.length; i++) {
+                            if (practiceState.beats[i].beat === currentBeat) {
+                                practiceState.currentBeatIndex = i;
+                                break;
+                            }
+                        }
+                    }
+                    var nextIndex = Math.min(practiceState.currentBeatIndex + 1, practiceState.beats.length - 1);
+                    return practiceState.beats[nextIndex] ? practiceState.beats[nextIndex].beat : null;
+                }
+                function practiceOnPlayedBeat(beat) {
+                    if (!practiceState.active || practiceState.mode === 'step') return;
+                    for (var i = 0; i < practiceState.beats.length; i++) {
+                        if (practiceState.beats[i].beat === beat) {
+                            practiceState.currentBeatIndex = i;
+                            break;
+                        }
+                    }
+                }
+                function practiceOnPlayerFinished() {
+                    if (!practiceState.active) return;
+                    if (practiceState.mode === 'sample') {
+                        practiceStopSession(true);
+                    } else if (practiceState.mode === 'loop') {
+                        practiceState.repeats++;
+                        practiceState.currentBeatIndex = 0;
+                        practiceUpdateUi();
+                    }
+                }
+
                 var fretboardRefreshTimer = null;
 
                 function scheduleFretboardRefresh() {
@@ -3395,7 +4958,7 @@ internal fun getAlphaTabHtml(
                     panel.style.opacity = '1';
                     panel.style.pointerEvents = 'auto';
                     header.textContent = fretboardLabels.title;
-                    close.textContent = '×';
+                    close.textContent = ''; // X is always drawn by CSS in Guitar and Piano.
                     close.setAttribute('aria-label', fretboardLabels.close);
                     chordBadge.textContent = '';
                     chordBadge.classList.remove('is-visible');
@@ -3755,6 +5318,28 @@ internal fun getAlphaTabHtml(
                         if (!Number.isFinite(row) || row < 0 || row >= count) return null;
                         return topY + (bottomY - topY) *
                             (count === 1 ? 0 : row / (count - 1));
+                    }
+
+                    // A dashed ring previews the next position; never illuminates its string.
+                    if (practiceState.active) {
+                        var upcoming = practiceUpcomingBeat(currentBeat);
+                        if (upcoming && upcoming.notes && upcoming !== currentBeat) {
+                            for (var upi = 0; upi < upcoming.notes.length; upi++) {
+                                var un = upcoming.notes[upi];
+                                var uf = Number(un.fret);
+                                var us = Number(un.string);
+                                if (un.isVisible === false || un.isDead === true ||
+                                    !Number.isFinite(uf) || !Number.isFinite(us) ||
+                                    (uf > 0 && (uf < firstFret || uf > lastFret))) continue;
+                                var uy = fretboardYForString(us);
+                                if (uy == null) continue;
+                                fretboardSvgElement(svg, 'circle', {
+                                    cx: fretboardXForFret(uf), cy: uy, r: 10,
+                                    fill: 'none', stroke: secondaryInk,
+                                    'stroke-width': 2, 'stroke-dasharray': '3 3', opacity: .8
+                                });
+                            }
+                        }
                     }
 
                     var techniqueLabelBoxes = [];
@@ -4334,6 +5919,22 @@ internal fun getAlphaTabHtml(
                         status.textContent = fretboardLabels.active + ' • ' +
                             highlighted.length + ' ' + fretboardLabels.notes;
                     }
+                    if (practiceState.active) {
+                        var practicePrefix = practiceText('Luyện ô ', 'Practicing bar ') +
+                            practiceState.startBar + '–' + practiceEndBar();
+                        if (practiceState.mode === 'step') {
+                            status.textContent = practiceState.showNoteComment
+                                ? practiceStepCommentText(practiceState.beats[practiceState.step])
+                                : '';
+                        } else {
+                            status.textContent = practicePrefix + ' • ' +
+                                (practiceState.mode === 'sample' ? '100' : practiceState.speed) + '%';
+                            if (practiceState.mode === 'loop' && practiceState.repeats > 0) {
+                                status.textContent += ' • ' +
+                                    practiceText('Lượt ', 'Repeat ') + (practiceState.repeats + 1);
+                            }
+                        }
+                    }
                 }
 
                 function updateFretboardForBeat(beat) {
@@ -4351,141 +5952,1127 @@ internal fun getAlphaTabHtml(
                 }
 
                 function closeFretboardPanel() {
+                    practiceResetForNewScore();
                     if (setStaveDisplayMode('scoretab') && window.AndroidInterface &&
                         typeof window.AndroidInterface.onFretboardClosed === 'function') {
                         window.AndroidInterface.onFretboardClosed();
                     }
                 }
 
-                function setStaveDisplayMode(mode) {
+                // --- Piano S+P: display-only score derived from original GP3/4/5 notes. ---
+                // Never mutate the imported guitar Score, MIDI, original track or fretted notes.
+                var pianoApi = null;
+                var pianoReady = false;
+                var pianoSplitMidi = 60; // C4 is the initial suggestion, NOT a fixed hand rule.
+                var pianoHandFilter = 'both';
+                var pianoCurrentBeat = null;
+                var pianoPitchGroups = { left: [], right: [] };
+                var pianoIndexedNotes = {};
+                var pianoGeneratedText = '';
+                var pianoPendingToken = 0;
+                var pianoKeyboardBase = 48; // C3..B4; move only when necessary.
+                var pianoScoreMessage = '';
+                // Piano left-hand arranger. Preserve the imported GP file and the original player.
+                // The arranger only adds derived notation/events when harmony is unambiguous.
+                var pianoAccompStyle = 'original';
+                var pianoAccompAudioEnabled = false;
+                var pianoAccompBars = [];
+                var pianoAccompEvents = [];
+                var pianoAccompEventCursor = 0;
+                var pianoAccompLastTick = null;
+                var pianoAccompActiveKey = '';
+                var pianoAccompAudioContext = null;
+                var pianoAccompVoices = [];
+                var pianoAccompSourceIdentity = null;
+                var pianoAccompStyleLabels = {
+                    original: 'GP5', bass: 'Bass', block: 'Block chord',
+                    arpeggio: 'Arpeggio', bass_chord: 'Bass + chord'
+                };
+                try {
+                    var savedPianoAccompStyle = window.localStorage.getItem('tt_piano_accomp_style_v1');
+                    if (Object.prototype.hasOwnProperty.call(pianoAccompStyleLabels, savedPianoAccompStyle)) {
+                        pianoAccompStyle = savedPianoAccompStyle;
+                    }
+                    pianoAccompAudioEnabled = window.localStorage.getItem('tt_piano_accomp_audio_v1') === '1';
+                } catch (ignored) {}
+                function pianoAccompSave() {
+                    try {
+                        window.localStorage.setItem('tt_piano_accomp_style_v1', pianoAccompStyle);
+                        window.localStorage.setItem('tt_piano_accomp_audio_v1', pianoAccompAudioEnabled ? '1' : '0');
+                    } catch (ignored) {}
+                }
+                function pianoAccompMod(n) { return ((n % 12) + 12) % 12; }
+                function pianoAccompPitchNear(pc, low, high, target) {
+                    var best = low, difference = 1e9;
+                    for (var p = low; p <= high; p++) {
+                        if (pianoAccompMod(p) !== pianoAccompMod(pc)) continue;
+                        var score = Math.abs(p-target);
+                        if (score < difference) { best=p; difference=score; }
+                    }
+                    return best;
+                }
+                function pianoAccompChordFromLabel(label) {
+                    var str = String(label || '').trim().replace(/\u266d/g,'b').replace(/\u266f/g,'#');
+                    var match = /^([A-Ga-g])([#b]?)(maj7|maj|min7|m7|m6|m|7|6|dim|aug|sus2|sus4|add9)?(?:\/([A-Ga-g])([#b]?))?$/i.exec(str);
+                    if (!match) return null;
+                    var base = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+                    var root = pianoAccompMod(base[match[1].toUpperCase()] + (match[2]==='#'?1:match[2]==='b'?-1:0));
+                    var type = (match[3] || '').toLowerCase();
+                    var intervals = {
+                        '':[0,4,7], maj:[0,4,7], m:[0,3,7], '7':[0,4,7,10],
+                        maj7:[0,4,7,11], min7:[0,3,7,10], m7:[0,3,7,10],
+                        dim:[0,3,6], aug:[0,4,8], sus2:[0,2,7], sus4:[0,5,7],
+                        '6':[0,4,7,9], m6:[0,3,7,9], add9:[0,4,7,14]
+                    }[type];
+                    if (!intervals) return null;
+                    var bass = match[4] ? pianoAccompMod(base[match[4].toUpperCase()] +
+                        (match[5]==='#'?1:match[5]==='b'?-1:0)) : root;
+                    return {root:root,bass:bass,intervals:intervals.slice(),name:str,source:'label'};
+                }
+                function pianoAccompAnalyzeBar(track, barIndex) {
+                    if (!track || !track.staves || track.isPercussion) return null;
+                    var seen = {}, bassMidi = 127, explicit = null, conflictingLabels = false, count=0;
+                    for (var si=0;si<track.staves.length;si++) {
+                        var staff = track.staves[si], bar = staff && staff.bars && staff.bars[barIndex];
+                        if (!bar || !bar.voices) continue;
+                        for (var vi=0;vi<bar.voices.length;vi++) {
+                            var beats = bar.voices[vi] && bar.voices[vi].beats || [];
+                            for (var j=0;j<beats.length;j++) {
+                                var beat=beats[j];
+                                if (!beat) continue;
+                                var annotated = pianoAccompChordFromLabel(
+                                    beat.chord && (beat.chord.name || beat.chord.id) || beat.chordId);
+                                if (annotated) {
+                                    if (explicit && (explicit.root !== annotated.root ||
+                                        explicit.intervals.join(',') !== annotated.intervals.join(','))) {
+                                        conflictingLabels=true;
+                                    }
+                                    if (!explicit) explicit=annotated;
+                                }
+                                if (!beat.notes || beat.isRest) continue;
+                                for (var k=0;k<beat.notes.length;k++) {
+                                    var midi=pianoNoteMidi(beat.notes[k]);
+                                    if (midi===null) continue;
+                                    var pc=pianoAccompMod(midi);
+                                    seen[pc]=(seen[pc]||0)+1;
+                                    bassMidi=Math.min(bassMidi,midi);count++;
+                                }
+                            }
+                        }
+                    }
+                    if (conflictingLabels) return null; // multiple chords in one bar: preserve GP notes
+                    if (explicit) return explicit;
+                    var pcs=Object.keys(seen).map(Number);
+                    if (pcs.length<3 || pcs.length>5 || count<3) return null;
+                    // No automatic accompaniment from a single uncertain melody or highly chromatic bar.
+                    var patterns = [
+                        {name:'',intervals:[0,4,7]}, {name:'m',intervals:[0,3,7]},
+                        {name:'dim',intervals:[0,3,6]}, {name:'aug',intervals:[0,4,8]},
+                        {name:'sus2',intervals:[0,2,7]}, {name:'sus4',intervals:[0,5,7]},
+                        {name:'7',intervals:[0,4,7,10]}, {name:'maj7',intervals:[0,4,7,11]},
+                        {name:'m7',intervals:[0,3,7,10]}
+                    ];
+                    var best=null, bestScore=-1e9, runner=-1e9;
+                    var bassPc=pianoAccompMod(bassMidi);
+                    for (var root=0;root<12;root++) for (var p=0;p<patterns.length;p++) {
+                        var shape=patterns[p], expected=shape.intervals.map(function(i){return pianoAccompMod(root+i);});
+                        if (!expected.every(function(pc){return pcs.indexOf(pc)>=0;})) continue;
+                        var outsiders=pcs.filter(function(pc){return expected.indexOf(pc)<0;}).length;
+                        if (outsiders>0) continue; // exact pitch class matches only, no guessing from passing notes
+                        var score=expected.length*5 + (bassPc===root?2:0) + (seen[root]||0)*.1;
+                        if (score>bestScore) {
+                            runner=bestScore;bestScore=score;
+                            best={root:root,bass:bassPc,intervals:shape.intervals.slice(),
+                                name:pianoMidiName(root+60,false).replace(/\d+$/,'')+shape.name,source:'inferred'};
+                        } else {runner=Math.max(runner,score);}
+                    }
+                    // If two equally good harmonic interpretations are plausible, keep original GP notes.
+                    if (!best || bestScore-runner<.1) return null;
+                    // An apparent seventh chord with a non-root bass can also be a sixth chord.
+                    if (best.intervals.length>=4 && bassPc!==best.root) return null;
+                    return best;
+                }
+                function pianoAccompVoicing(chord) {
+                    var bass=pianoAccompPitchNear(chord.bass,36,52,43);
+                    var root=pianoAccompPitchNear(chord.root,43,53,48);
+                    var top=[];
+                    for (var i=1;i<chord.intervals.length;i++) {
+                        var pc=pianoAccompMod(chord.root+chord.intervals[i]);
+                        var v=pianoAccompPitchNear(pc,root+1,64,root+chord.intervals[i]);
+                        if (top.indexOf(v)<0 && v>=root+1) top.push(v);
+                    }
+                    top.sort(function(a,b){return a-b;});
+                    if (top.length>3) top=top.slice(0,3);
+                    return {bass:bass,root:root,upper:top,
+                        chord:[root].concat(top).filter(function(v,i,a){return a.indexOf(v)===i;})};
+                }
+                function pianoAccompBarPattern(chord,barIndex,master) {
+                    if (!chord || !master) return null;
+                    var n=Math.round(Number(master.timeSignatureNumerator)||4);
+                    var d=Math.round(Number(master.timeSignatureDenominator)||4);
+                    if (n<1 || n>12 || [2,4,8,16].indexOf(d)<0 || master.isFreeTime || master.isAnacrusis) return null;
+                    var barStart=Number(master.start);
+                    if (!Number.isFinite(barStart)) return null;
+                    var unit=960*4/d;
+                    var voicing=pianoAccompVoicing(chord);
+                    var steps=[], events=[];
+                    var half=Math.max(1,Math.floor(n/2));
+                    var run=[voicing.bass].concat(voicing.upper);
+                    if (run.length<3) run=voicing.chord;
+                    for (var k=0;k<n;k++) {
+                        var notes=[];
+                        if (pianoAccompStyle==='bass') {
+                            if (k===0) notes=[voicing.bass];
+                            else if (k===half && n>2) notes=[pianoAccompPitchNear(chord.root+7,35,52,voicing.bass-2)];
+                        } else if (pianoAccompStyle==='block') {
+                            if (k===0 || k===half && n>2) notes=voicing.chord.slice(0,4);
+                        } else if (pianoAccompStyle==='arpeggio') {
+                            var wave=[0,1,2,1,0,1];
+                            notes=[run[wave[k%wave.length]%run.length]];
+                        } else if (pianoAccompStyle==='bass_chord') {
+                            if (k%2===0) notes=[k===half && n>2
+                                ? pianoAccompPitchNear(chord.root+7,35,52,voicing.bass-2)
+                                : voicing.bass];
+                            else notes=voicing.upper.length ? voicing.upper.slice(0,3) : voicing.chord.slice(1);
+                        }
+                        steps.push(notes);
+                        if (notes.length) events.push({tick:barStart+k*unit, durationTicks:unit*.86,
+                            notes:notes,bar:barIndex,label:chord.name});
+                    }
+                    return {chord:chord,steps:steps,events:events,unit:unit,denominator:d,
+                        bar:barIndex,start:barStart,end:barStart+n*unit};
+                }
+                function pianoAccompRebuild(track) {
+                    pianoAccompBars=[];pianoAccompEvents=[];
+                    pianoAccompLastTick=null;pianoAccompActiveKey='';pianoAccompEventCursor=0;
+                    if (!track || !api || !api.score || pianoAccompStyle==='original') return;
+                    var masterBars=api.score.masterBars || [];
+                    for (var bi=0;bi<masterBars.length;bi++) {
+                        var harmony=pianoAccompAnalyzeBar(track,bi);
+                        var plan=pianoAccompBarPattern(harmony,bi,masterBars[bi]);
+                        pianoAccompBars.push(plan);
+                        if (plan) pianoAccompEvents.push.apply(pianoAccompEvents,plan.events);
+                    }
+                    pianoAccompEvents.sort(function(a,b){return a.tick-b.tick;});
+                    pianoAccompSourceIdentity=track;
+                }
+                function pianoAccompCopyOriginalBar(sourceStaff,bi,vi,hand,explicit) {
+                    var b=sourceStaff && sourceStaff.bars && sourceStaff.bars[bi];
+                    var beats=b && b.voices && b.voices[vi] && b.voices[vi].beats || [];
+                    var written=[];
+                    for (var j=0;j<beats.length;j++) {
+                        var beat=beats[j];if (!beat || beat.isEmpty) continue;
+                        var group=pianoHandsForBeat(beat,explicit?hand:'auto')[hand];
+                        var length=pianoBeatDuration(beat);
+                        var label=group.length===0?'r':group.length===1?pianoMidiName(group[0],false)
+                            :'('+group.map(function(m){return pianoMidiName(m,false);}).join(' ')+')';
+                        var fx=[];
+                        if (Number(beat.dots)>=2) fx.push('dd'); else if (Number(beat.dots)>=1) fx.push('d');
+                        var tn=Number(beat.tupletNumerator),td=Number(beat.tupletDenominator);
+                        if (tn>1 && td>0 && tn!==td) fx.push('tu '+tn+' '+td);
+                        written.push(':'+length+' '+label+(fx.length?' {'+fx.join(' ')+'}':''));
+                    }
+                    return written.join(' ') || 'r.1';
+                }
+                function pianoAccompEmitStaff(track,explicit) {
+                    var source=track.staves[explicit?1:0];
+                    var masters=api.score.masterBars||[];
+                    if (!source || !source.bars) return 'r.1';
+                    var maxVoices=1;
+                    for (var i=0;i<masters.length;i++) {
+                        var bar=source.bars[i];
+                        if (bar && bar.voices) maxVoices=Math.max(maxVoices,bar.voices.length);
+                    }
+                    maxVoices=Math.min(4,maxVoices);
+                    var voices=[],keys=['cb','gb','db','ab','eb','bb','f','c','g','d','a','e','b','f#','c#'];
+                    for (var vi=0;vi<maxVoices;vi++) {
+                        var chunks=[],priorTS='',priorKey='';
+                        for (var bi=0;bi<masters.length;bi++) {
+                            var m=masters[bi],head=[];
+                            var num=Math.round(Number(m.timeSignatureNumerator)||4);
+                            var den=Math.round(Number(m.timeSignatureDenominator)||4);
+                            var ts=num+'/'+den;
+                            if (vi===0 && (bi===0 || ts!==priorTS)) head.push('\\ts '+num+' '+den);
+                            priorTS=ts;
+                            var ks=Number(m.keySignature), key=Number.isFinite(ks)&&ks>=-7&&ks<=7?keys[ks+7]:null;
+                            if (vi===0 && key && (bi===0 || key!==priorKey)) head.push('\\ks '+key);
+                            priorKey=key;
+                            var pattern=pianoAccompBars[bi], body;
+                            if (pattern) {
+                                if (vi===0) body=pattern.steps.map(function(ns){
+                                    var name=!ns.length?'r':ns.length===1?pianoMidiName(ns[0],ks<0)
+                                        :'('+ns.map(function(p){return pianoMidiName(p,ks<0);}).join(' ')+')';
+                                    return ':'+pattern.denominator+' '+name;
+                                }).join(' ');
+                                else body='r.1';
+                            } else {
+                                body=pianoAccompCopyOriginalBar(source,bi,vi,'left',explicit);
+                            }
+                            chunks.push((head.length?head.join(' ')+' ':'')+body);
+                        }
+                        voices.push(chunks.join(' | '));
+                    }
+                    return '\\voice '+voices.join(' \\voice ');
+                }
+                function pianoOpenAccompChooser() {
+                    if (!pianoEnabled) return;
+                    var modal=document.getElementById('tt-piano-style-modal');
+                    if (!modal) return;
+                    pianoAccompStyleInfo();
+                    modal.classList.add('is-open');
+                    var trigger=document.getElementById('tt-piano-accomp-trigger');
+                    if (trigger) trigger.setAttribute('aria-expanded','true');
+                }
+                function pianoCloseAccompChooser(restoreFocus) {
+                    var modal=document.getElementById('tt-piano-style-modal');
+                    if (modal) modal.classList.remove('is-open');
+                    var trigger=document.getElementById('tt-piano-accomp-trigger');
+                    if (trigger) {
+                        trigger.setAttribute('aria-expanded','false');
+                        if (restoreFocus !== false && pianoEnabled &&
+                            typeof trigger.focus==='function') trigger.focus();
+                    }
+                }
+                function pianoPickAccompStyle(style) {
+                    pianoAccompSetStyle(style);
+                    pianoCloseAccompChooser();
+                }
+                document.addEventListener('keydown',function(event){
+                    if (event.key==='Escape') pianoCloseAccompChooser(false);
+                });
+                function pianoAccompStyleInfo() {
+                    var select=document.getElementById('tt-piano-accomp-style');
+                    if (select && select.value!==pianoAccompStyle) select.value=pianoAccompStyle;
+                    var trigger=document.getElementById('tt-piano-accomp-trigger');
+                    if (trigger) {
+                        var current=trigger.querySelector('.tt-piano-accomp-current');
+                        if (current && select && select.selectedIndex>=0)
+                            current.textContent=select.options[select.selectedIndex].textContent;
+                    }
+                    var modal=document.getElementById('tt-piano-style-modal');
+                    if (modal) modal.querySelectorAll('[data-style]').forEach(function(option){
+                        var selected=option.getAttribute('data-style')===pianoAccompStyle;
+                        option.classList.toggle('is-active',selected);
+                        option.setAttribute('aria-pressed',selected?'true':'false');
+                    });
+                    var audio=document.getElementById('tt-piano-accomp-audio');
+                    if (audio) {
+                        audio.textContent=(pianoAccompAudioEnabled?'\u266a \u00c2m: B\u1eadt':'\u266a \u00c2m: T\u1eaft');
+                        audio.classList.toggle('is-selected',pianoAccompAudioEnabled);
+                        audio.disabled=pianoAccompStyle==='original';
+                    }
+                    var status=document.getElementById('tt-piano-accomp-status');
+                    if (status) {
+                        var valid=pianoAccompBars.filter(function(p){return !!p;}).length;
+                        status.textContent=pianoAccompStyle==='original'
+                            ? '\u0110ang gi\u1eef nguy\u00ean GP5'
+                            : valid+' / '+pianoAccompBars.length+' \u00f4 c\u00f3 h\u1ee3p \u00e2m r\u00f5 r\u00e0ng';
+                    }
+                }
+                function pianoAccompResetAudio() {
+                    for (var i=0;i<pianoAccompVoices.length;i++) {
+                        var voice=pianoAccompVoices[i];
+                        try {
+                            var at=voice.ctx.currentTime;
+                            voice.gain.gain.cancelScheduledValues(at);
+                            voice.gain.gain.setTargetAtTime(.00001,at,.01);
+                            voice.osc.stop(at+.055);
+                        } catch (ignored) {}
+                    }
+                    pianoAccompVoices=[];
+                }
+                function pianoAccompEnsureAudio() {
+                    try {
+                        if (!pianoAccompAudioContext) {
+                            var AC=window.AudioContext || window.webkitAudioContext;
+                            if (!AC) return false;
+                            pianoAccompAudioContext=new AC();
+                        }
+                        if (pianoAccompAudioContext.state==='suspended') {
+                            var result=pianoAccompAudioContext.resume();
+                            if (result && typeof result.catch==='function') result.catch(function(){});
+                        }
+                        return true;
+                    } catch (ignored) { return false; }
+                }
+                function pianoAccompTone(pitch,durationSeconds) {
+                    if (!pianoAccompAudioContext || pianoAccompAudioContext.state!=='running') return;
+                    var ctx=pianoAccompAudioContext,now=ctx.currentTime+.01;
+                    var osc=ctx.createOscillator(),gain=ctx.createGain();
+                    var freq=440*Math.pow(2,(pitch-69)/12);
+                    osc.type='triangle';osc.frequency.setValueAtTime(freq,now);
+                    var end=now+Math.max(.10,Math.min(2,durationSeconds));
+                    gain.gain.setValueAtTime(.00001,now);
+                    gain.gain.exponentialRampToValueAtTime(.026,now+.012);
+                    gain.gain.exponentialRampToValueAtTime(.009,Math.min(end,now+.18));
+                    gain.gain.exponentialRampToValueAtTime(.00001,end+.085);
+                    osc.connect(gain);gain.connect(ctx.destination);
+                    osc.start(now);osc.stop(end+.095);
+                    var voice={osc:osc,gain:gain,ctx:ctx};
+                    pianoAccompVoices.push(voice);
+                    osc.onended=function(){
+                        try {osc.disconnect();gain.disconnect();} catch (_) {}
+                        var i=pianoAccompVoices.indexOf(voice);
+                        if (i>=0) pianoAccompVoices.splice(i,1);
+                    };
+                }
+                function pianoAccompEventTimeSec(event) {
+                    var tempo=Number(api && api.score && api.score.tempo)||120;
+                    var bars=api && api.score && api.score.masterBars || [];
+                    var master=bars[event.bar];
+                    if (master && master.tempoAutomation) {
+                        var value=Number(master.tempoAutomation.value);
+                        if (Number.isFinite(value) && value>=20 && value<=400) tempo=value;
+                    }
+                    var speed=Number(api && api.playbackSpeed)||1;
+                    return event.durationTicks/960*60/tempo/Math.max(.25,speed);
+                }
+                function pianoAccompLowerBound(tick) {
+                    var lo=0,hi=pianoAccompEvents.length;
+                    while (lo<hi) {
+                        var mid=(lo+hi)>>1;
+                        if (pianoAccompEvents[mid].tick<tick) lo=mid+1;else hi=mid;
+                    }
+                    return lo;
+                }
+                function pianoAccompActiveAtTick(tick) {
+                    var index=pianoAccompLowerBound(tick+0.1)-1;
+                    if (index<0) return [];
+                    var event=pianoAccompEvents[index];
+                    return tick>=event.tick && tick<event.tick+event.durationTicks
+                        ? event.notes.slice() : [];
+                }
+                function pianoAccompTick(rawTick) {
+                    if (!pianoEnabled || pianoAccompStyle==='original' || !Number.isFinite(Number(rawTick))) return;
+                    var tick=Number(rawTick)-(Number(api && api.midiTickShift)||0);
+                    if (tick<0) tick=0;
+                    var hasJump=pianoAccompLastTick===null || tick<pianoAccompLastTick-30 || tick>pianoAccompLastTick+6000;
+                    if (hasJump) {
+                        pianoAccompEventCursor=pianoAccompLowerBound(tick-75);
+                        pianoAccompResetAudio();
+                    }
+                    if (lastKnownPlayerState===1 && pianoAccompAudioEnabled && pianoHandFilter!=='right') {
+                        while (pianoAccompEventCursor<pianoAccompEvents.length) {
+                            var event=pianoAccompEvents[pianoAccompEventCursor];
+                            if (event.tick>tick+20) break;
+                            pianoAccompEventCursor++;
+                            if (event.tick<tick-110) continue; // skip stale events after seeking/jumps
+                            if (pianoAccompEnsureAudio() && pianoAccompAudioContext.state==='running') {
+                                var dur=pianoAccompEventTimeSec(event);
+                                event.notes.slice(0,4).forEach(function(midi){pianoAccompTone(midi,dur);});
+                            }
+                        }
+                    }
+                    pianoAccompLastTick=tick;
+                    var masterBars=api && api.score && api.score.masterBars || [];
+                    var barIndex=-1;
+                    for (var bi=masterBars.length-1;bi>=0;bi--) {
+                        if (Number(masterBars[bi].start)<=tick) {barIndex=bi;break;}
+                    }
+                    if (barIndex>=0 && !pianoAccompBars[barIndex]) {
+                        pianoAccompActiveKey='';
+                        return; // fallback GP left-hand notes are driven by playedBeatChanged
+                    }
+                    var active=pianoAccompActiveAtTick(tick);
+                    var signature=active.join(',');
+                    if (signature!==pianoAccompActiveKey) {
+                        pianoAccompActiveKey=signature;
+                        pianoPitchGroups.left=active;
+                        pianoDrawKeyboard();
+                    }
+                }
+                function pianoAccompSetStyle(style) {
+                    if (!Object.prototype.hasOwnProperty.call(pianoAccompStyleLabels,style)) return;
+                    if (style===pianoAccompStyle) return;
+                    pianoAccompResetAudio();
+                    pianoAccompStyle=style;
+                    pianoAccompAudioEnabled=false; // user must explicitly opt in to add piano audio
+                    pianoAccompSave();
+                    if (pianoEnabled) {
+                        if (pianoShowScore) pianoRebuildFromSource();
+                        else {
+                            pianoIndexSourceBeats(pianoSourceTrack());
+                            pianoAccompRebuild(pianoSourceTrack());
+                            pianoDrawKeyboard();
+                        }
+                        pianoAccompTick(Number(api && api.tickPosition)||0);
+                    }
+                    pianoAccompStyleInfo();
+                }
+                function pianoAccompToggleAudio() {
+                    if (pianoAccompStyle==='original') return;
+                    pianoAccompAudioEnabled=!pianoAccompAudioEnabled;
+                    if (pianoAccompAudioEnabled && !pianoAccompEnsureAudio()) {
+                        pianoAccompAudioEnabled=false;
+                        pianoSetHint('AudioContext unavailable: left-hand notation stays visible.');
+                    }
+                    if (!pianoAccompAudioEnabled) pianoAccompResetAudio();
+                    pianoAccompSave();pianoAccompStyleInfo();
+                }
+                function pianoSourceTrack() {
+                    return currentTracks && currentTracks.length > selectedTrackForPlayback
+                        ? currentTracks[selectedTrackForPlayback] : null;
+                }
+                function pianoNoteMidi(note) {
+                    if (!note || note.isDead || note.isPercussion || note.isVisible === false) return null;
+                    var midi = NaN;
+                    try {
+                        if (typeof note.calculateRealValue === 'function') {
+                            midi = Number(note.calculateRealValue(false, true));
+                        }
+                    } catch (ignored) {}
+                    if (!Number.isFinite(midi)) midi = Number(note.realValue);
+                    if (!Number.isFinite(midi)) return null;
+                    midi = Math.round(midi);
+                    return midi >= 21 && midi <= 108 ? midi : null;
+                }
+                function pianoMidiName(midi, flats) {
+                    var sharp = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+                    var flat = ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+                    var pitch = Math.round(Number(midi));
+                    return (flats ? flat : sharp)[((pitch % 12) + 12) % 12] +
+                        String(Math.floor(pitch / 12) - 1);
+                }
+                function pianoCleanLabel(label) {
+                    return String(label || 'Piano').replace(/["\\\r\n\t]/g, ' ').slice(0, 64);
+                }
+                function pianoSourceIsTwoStaves(track) {
+                    if (!track || !track.staves || track.staves.length < 2) return false;
+                    // Existing authentic piano staves have no fretted string tuning.
+                    var first = track.staves[0];
+                    var second = track.staves[1];
+                    return !(first && first.tuning && first.tuning.length > 0) &&
+                        !(second && second.tuning && second.tuning.length > 0);
+                }
+                function pianoHandsForBeat(beat, sourceHand) {
+                    var hands = { left: [], right: [] };
+                    if (!beat || !beat.notes || beat.isRest || beat.isEmpty) return hands;
+                    for (var n = 0; n < beat.notes.length; n++) {
+                        var pitch = pianoNoteMidi(beat.notes[n]);
+                        if (pitch === null) continue;
+                        var target = sourceHand === 'left' || sourceHand === 'right'
+                            ? sourceHand : (pitch < pianoSplitMidi ? 'left' : 'right');
+                        if (hands[target].indexOf(pitch) < 0) hands[target].push(pitch);
+                    }
+                    hands.left.sort(function(a,b) { return a-b; });
+                    hands.right.sort(function(a,b) { return a-b; });
+                    return hands;
+                }
+                function pianoTickKey(tick) { return String(Math.round(Number(tick) || 0)); }
+                function pianoIndexSourceBeats(track) {
+                    pianoIndexedNotes = {};
+                    var explicit = pianoSourceIsTwoStaves(track);
+                    var staffLimit = explicit ? Math.min(2, track.staves.length) : 1;
+                    for (var si = 0; si < staffLimit; si++) {
+                        var staff = track.staves[si];
+                        if (!staff || !staff.bars) continue;
+                        for (var bi = 0; bi < staff.bars.length; bi++) {
+                            var bar = staff.bars[bi];
+                            if (!bar || !bar.voices) continue;
+                            for (var vi = 0; vi < bar.voices.length; vi++) {
+                                var voice = bar.voices[vi];
+                                if (!voice || !voice.beats) continue;
+                                for (var ei = 0; ei < voice.beats.length; ei++) {
+                                    var beat = voice.beats[ei];
+                                    if (!beat || !beat.notes || !beat.notes.length) continue;
+                                    var key = pianoTickKey(beat.absolutePlaybackStart);
+                                    var entry = pianoIndexedNotes[key];
+                                    if (!entry) entry = pianoIndexedNotes[key] = {left:[],right:[],bar:bi};
+                                    var pair = pianoHandsForBeat(beat, explicit ? (si === 0 ? 'right' : 'left') : 'auto');
+                                    for (var side of ['left','right']) {
+                                        for (var j = 0; j < pair[side].length; j++) {
+                                            if (entry[side].indexOf(pair[side][j]) < 0) entry[side].push(pair[side][j]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                function pianoBeatDuration(beat) {
+                    var candidate = Number(beat && beat.duration);
+                    return [1,2,4,8,16,32,64,128].indexOf(candidate) >= 0 ? candidate : 4;
+                }
+                function pianoEmitStaff(track, hand, twoStaves) {
+                    if (hand === 'left' && pianoAccompStyle !== 'original') return pianoAccompEmitStaff(track, twoStaves);
+                    var sourceStaff = track.staves[twoStaves ? (hand === 'right' ? 0 : 1) : 0];
+                    var count = api && api.score && api.score.masterBars ? api.score.masterBars.length : 0;
+                    if (!sourceStaff || !sourceStaff.bars || !count) return '';
+                    var maxVoices = 1;
+                    for (var q = 0; q < count; q++) {
+                        var barVoices = sourceStaff.bars[q] && sourceStaff.bars[q].voices;
+                        if (barVoices) maxVoices = Math.max(maxVoices, barVoices.length);
+                    }
+                    // AlphaTex supports explicit voices. Keep the source voices distinct instead
+                    // of silently dropping accompaniment from Guitar Pro's second voice.
+                    maxVoices = Math.min(4, maxVoices);
+                    var allVoices = [];
+                    var keys = ['cb','gb','db','ab','eb','bb','f','c','g','d','a','e','b','f#','c#'];
+                    for (var vi = 0; vi < maxVoices; vi++) {
+                        var parts = [];
+                        var lastTS = '';
+                        var lastKey = '';
+                        for (var bi = 0; bi < count; bi++) {
+                            var bar = sourceStaff.bars[bi];
+                            var master = api.score.masterBars[bi];
+                            var prefix = [];
+                            var numerator = Math.round(Number(master && master.timeSignatureNumerator) || 4);
+                            var denominator = Math.round(Number(master && master.timeSignatureDenominator) || 4);
+                            var ts = numerator + '/' + denominator;
+                            if (vi === 0 && ts !== lastTS && (bi === 0 || hand === 'right')) {
+                                prefix.push('\\ts ' + numerator + ' ' + denominator);
+                                lastTS = ts;
+                            }
+                            var keySign = Number(master && master.keySignature);
+                            if (Number.isFinite(keySign) && keySign >= -7 && keySign <= 7) {
+                                var key = keys[keySign + 7];
+                                if (vi === 0 && key !== lastKey && (hand === 'right' || bi === 0)) {
+                                    prefix.push('\\ks ' + key);
+                                    lastKey = key;
+                                }
+                            }
+                            var beats = bar && bar.voices && bar.voices[vi] && bar.voices[vi].beats
+                                ? bar.voices[vi].beats : [];
+                            var written = [];
+                            for (var j = 0; j < beats.length; j++) {
+                                var beat = beats[j];
+                                if (!beat || beat.isEmpty) continue;
+                                var group = pianoHandsForBeat(beat, twoStaves ? hand : 'auto')[hand];
+                                var duration = pianoBeatDuration(beat);
+                                var effects = [];
+                                if (Number(beat.dots) >= 2) effects.push('dd');
+                                else if (Number(beat.dots) >= 1) effects.push('d');
+                                var tupletNumerator = Number(beat.tupletNumerator);
+                                var tupletDenominator = Number(beat.tupletDenominator);
+                                if (tupletNumerator > 1 && tupletDenominator > 0 &&
+                                    tupletNumerator !== tupletDenominator) {
+                                    effects.push('tu ' + tupletNumerator + ' ' + tupletDenominator);
+                                }
+                                var notes = group.map(function(v) {
+                                    return pianoMidiName(v, keySign < 0);
+                                });
+                                var chord = notes.length === 0 ? 'r' : notes.length === 1
+                                    ? notes[0] : '(' + notes.join(' ') + ')';
+                                // Keep source rhythm, even when a hand rests during a beat.
+                                written.push(':' + duration + ' ' + chord + (effects.length ? ' {' + effects.join(' ') + '}' : ''));
+                            }
+                            if (!written.length) written.push('r.1');
+                            parts.push((prefix.length ? prefix.join(' ') + ' ' : '') + written.join(' '));
+                        }
+                        allVoices.push(parts.join(' | '));
+                    }
+                    return '\\voice ' + allVoices.join(' \\voice ');
+                }
+                function pianoGenerateScore(track) {
+                    if (!track || track.isPercussion || !track.staves || !track.staves.length) return null;
+                    var explicit = pianoSourceIsTwoStaves(track);
+                    pianoIndexSourceBeats(track);
+                    pianoAccompRebuild(track);
+                    var songTitle = pianoCleanLabel(api && api.score && api.score.title || 'TunerTools Piano');
+                    return '\\title "' + songTitle + '" \\track "Piano" "Pno."' +
+                        ' \\staff{score} \\tuning piano \\instrument acousticgrandpiano \\clef G2 ' +
+                        pianoEmitStaff(track, 'right', explicit) +
+                        ' \\staff{score} \\tuning piano \\clef F4 ' +
+                        pianoEmitStaff(track, 'left', explicit);
+                }
+                function pianoApplyVisualPalette(render) {
+                    if (!pianoApi || !pianoApi.settings) return;
+                    var ink = currentThemeIsDark ? '#F2F4F7' : '#172033';
+                    var secondary = currentThemeIsDark ? '#C7CFDC' : '#475467';
+                    var line = currentThemeIsDark ? '#718096' : '#9AA4B2';
+                    try {
+                        pianoApi.settings.fillFromJson({display:{ resources:{
+                            mainGlyphColor: ink,
+                            secondaryGlyphColor: secondary,
+                            staffLineColor: line,
+                            barSeparatorColor: line,
+                            barNumberColor: ink,
+                            scoreInfoColor: ink
+                        }}});
+                        pianoApi.updateSettings();
+                        if (render && pianoApi.score) pianoApi.render();
+                    } catch (ignored) {}
+                }
+                function pianoEnsureRenderer() {
+                    if (pianoApi) return true;
+                    var el = document.getElementById('tt-piano-score-container');
+                    if (!el || typeof alphaTab === 'undefined' || !alphaTab.AlphaTabApi) return false;
+                    try {
+                        pianoApi = new alphaTab.AlphaTabApi(el, {
+                            core: { engine: 'svg', useWorkers: false, enableLazyLoading: false },
+                            display: { staveProfile: 'score', layoutMode: 'page',
+                                scale: scoreZoomScaleForMode(true), stretchForce: 1,
+                                padding: [8,10,8,12] },
+                            player: { enablePlayer: false, enableCursor: false }
+                        });
+                        pianoApplyVisualPalette(false);
+                        var complete = pianoApi.postRenderFinished || pianoApi.renderFinished;
+                        if (complete && typeof complete.on === 'function') {
+                            complete.on(function() {
+                                pianoReady = true;
+                                pianoPositionCursor(pianoCurrentBeat, false);
+                            });
+                        }
+                        if (pianoApi.error && typeof pianoApi.error.on === 'function') {
+                            pianoApi.error.on(function(error) {
+                                pianoReady = false;
+                                pianoScoreMessage = error && error.message ? error.message : String(error);
+                                pianoSetHint('Chưa dựng được khuông Piano cho bản này: ' + pianoScoreMessage);
+                            });
+                        }
+                        return true;
+                    } catch (err) {
+                        pianoApi = null;
+                        pianoSetHint('Không thể khởi tạo ký âm Piano: ' + String(err));
+                        return false;
+                    }
+                }
+                function pianoSetHint(message) {
+                    var el = document.getElementById('tt-piano-hint');
+                    if (el) el.textContent = String(message || '');
+                }
+                function pianoSetHeader() {
+                    var title = document.getElementById('tt-fretboard-title');
+                    var track = document.getElementById('tt-fretboard-track');
+                    if (title) title.textContent = pianoEnabled ? 'Piano' : fretboardLabels.title;
+                    if (track && pianoEnabled) track.textContent = pianoShowScore ? 'Sol + Fa' : 'TAB gốc';
+                    var label = document.getElementById('tt-piano-split-label');
+                    if (label) label.textContent = 'Chia ' + pianoMidiName(pianoSplitMidi, false);
+                    for (var choice of ['both','left','right']) {
+                        var btn = document.getElementById('tt-piano-' + choice);
+                        if (btn) btn.classList.toggle('is-selected', pianoHandFilter === choice);
+                    }
+                    pianoAccompStyleInfo();
+                }
+                function pianoSetHand(hand) {
+                    if (['both','left','right'].indexOf(hand) < 0) return;
+                    pianoHandFilter = hand;
+                    if (hand === 'right') pianoAccompResetAudio();
+                    pianoSetHeader();
+                    pianoDrawKeyboard();
+                }
+                function pianoShiftSplit(delta) {
+                    pianoSplitMidi = Math.max(48, Math.min(72, pianoSplitMidi + Number(delta) * 2));
+                    pianoSetHeader();
+                    if (pianoEnabled && pianoShowScore) pianoRebuildFromSource();
+                    else if (pianoEnabled) {
+                        pianoIndexSourceBeats(pianoSourceTrack());
+                        pianoAccompRebuild(pianoSourceTrack());
+                        pianoDrawKeyboard();pianoAccompStyleInfo();
+                    }
+                }
+                function pianoRebuildFromSource() {
+                    if (!pianoEnabled || !api || !api.score) return false;
+                    var track = pianoSourceTrack();
+                    var tex = pianoGenerateScore(track);
+                    if (!tex) {
+                        pianoSetHint('Track này không có nốt có cao độ để hiển thị Piano.');
+                        return false;
+                    }
+                    pianoGeneratedText = tex;
+                    if (!pianoEnsureRenderer()) return false;
+                    pianoReady = false;
+                    try {
+                        pianoApi.tex(tex);
+                        pianoSetHint('Hai tay được gợi ý theo cao độ. Chạm +/− để đổi điểm chia; file GP vẫn giữ nguyên.');
+                        pianoSetHeader();
+                        pianoDrawKeyboard();
+                        pianoAccompStyleInfo();
+                        return true;
+                    } catch (err) {
+                        pianoSetHint('Không chuyển được dữ liệu Piano: ' + String(err));
+                        return false;
+                    }
+                }
+                // The original GP source provides playback and, optionally, a visible TAB.
+                // The second AlphaTab instance renders the derived Grand Staff ONLY.
+                function pianoEnterMode(showScore, showTab) {
+                    var track = pianoSourceTrack();
+                    if (!track || track.isPercussion || (!showScore && !showTab)) return false;
+                    var previousGuitar = fretboardEnabled;
+                    var priorPianoEnabled = pianoEnabled;
+                    var priorScore = pianoShowScore;
+                    var priorTab = pianoShowTab;
+                    if (practiceState && practiceState.active) practiceStopSession(true);
+                    pianoEnabled = true;
+                    pianoShowScore = !!showScore;
+                    pianoShowTab = !!showTab;
+                    fretboardEnabled = false;
+                    pianoCurrentBeat = null;
+                    pianoAccompResetAudio();
+                    document.body.classList.add('tt-piano-open');
+                    document.body.classList.toggle('tt-piano-with-score', pianoShowScore);
+                    document.body.classList.toggle('tt-piano-with-tab', pianoShowTab);
+                    document.body.classList.remove('tt-practice-step-mode');
+                    syncWebViewViewportBox(lastAndroidViewportWidth, lastAndroidViewportHeight);
+                    pianoSetHeader();
+                    try {
+                        // Use the source as a TAB-only renderer when selected, without
+                        // rewriting the GP score or changing its player/track.
+                        if (api.settings && typeof api.settings.fillFromJson === 'function') {
+                            api.settings.fillFromJson({
+                                display: {
+                                    staveProfile:'tab',
+                                    scale: scoreZoomScaleForMode(true),
+                                    systemPaddingBottom: noteNamesVisible ? noteNameSystemPaddingBottom : defaultSystemPaddingBottom,
+                                    lastSystemPaddingBottom: noteNamesVisible ? noteNameLastSystemPaddingBottom : defaultLastSystemPaddingBottom
+                                },
+                                notation: {
+                                    rhythmMode:'ShowWithBars', rhythmHeight:25,
+                                    elements:{scoreTitle:!pianoShowScore}
+                                }
+                            });
+                        } else if (api.settings && api.settings.display) {
+                            api.settings.display.staveProfile = alphaTab.StaveProfile.Tab;
+                            api.settings.display.scale = scoreZoomScaleForMode(true);
+                        }
+                        api.updateSettings();
+                        applySelectedTrackSolo(true);
+                    } catch(err) {
+                        console.warn('Could not prepare original GP TAB for piano combination',err);
+                        pianoEnabled = priorPianoEnabled;
+                        pianoShowScore = priorScore;
+                        pianoShowTab = priorTab;
+                        fretboardEnabled = previousGuitar;
+                        document.body.classList.toggle('tt-piano-open', pianoEnabled);
+                        document.body.classList.toggle('tt-piano-with-score', pianoEnabled && pianoShowScore);
+                        document.body.classList.toggle('tt-piano-with-tab', pianoEnabled && pianoShowTab);
+                        syncWebViewViewportBox(lastAndroidViewportWidth, lastAndroidViewportHeight);
+                        return false;
+                    }
+                    if (!pianoShowScore) {
+                        pianoReady = false;
+                        pianoIndexSourceBeats(track);
+                        pianoAccompRebuild(track);
+                        var hiddenCursor = document.getElementById('tt-piano-cursor');
+                        if (hiddenCursor) hiddenCursor.style.display = 'none';
+                    }
+                    if (pianoShowScore && !pianoRebuildFromSource()) {
+                        pianoEnabled = priorPianoEnabled;
+                        pianoShowScore = priorScore;
+                        pianoShowTab = priorTab;
+                        fretboardEnabled = previousGuitar;
+                        document.body.classList.toggle('tt-piano-open', pianoEnabled);
+                        document.body.classList.toggle('tt-piano-with-score', pianoEnabled && pianoShowScore);
+                        document.body.classList.toggle('tt-piano-with-tab', pianoEnabled && pianoShowTab);
+                        syncWebViewViewportBox(lastAndroidViewportWidth, lastAndroidViewportHeight);
+                        return false;
+                    }
+                    pianoDrawKeyboard();
+                    pianoAccompStyleInfo();
+                    var staff = track.staves && track.staves[0];
+                    if (staff && staff.bars) {
+                        outer: for (var bi = 0; bi < staff.bars.length; bi++) {
+                            var bar = staff.bars[bi];
+                            if (!bar || !bar.voices) continue;
+                            for (var vi = 0; vi < bar.voices.length; vi++) {
+                                var beats = bar.voices[vi] && bar.voices[vi].beats || [];
+                                for (var ei = 0; ei < beats.length; ei++) {
+                                    if (beats[ei].notes && beats[ei].notes.length) {
+                                        pianoUpdateFromBeat(beats[ei]); break outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    notifyTabBannerVisibility(false);
+                    return true;
+                }
+                function pianoLeaveMode() {
+                    if (!pianoEnabled) return;
+                    pianoEnabled = false;
+                    pianoAccompResetAudio();
+                    pianoCloseAccompChooser(false);
+                    pianoAccompLastTick=null;
+                    pianoCurrentBeat = null;
+                    pianoReady = false;
+                    document.body.classList.remove('tt-piano-open');
+                    document.body.classList.remove('tt-piano-with-score');
+                    document.body.classList.remove('tt-piano-with-tab');
+                    var cursor = document.getElementById('tt-piano-cursor');
+                    if (cursor) cursor.style.display = 'none';
+                    syncWebViewViewportBox(lastAndroidViewportWidth, lastAndroidViewportHeight);
+                    pianoSetHeader();
+                }
+                function pianoGroupForBeat(beat) {
+                    if (!beat) return {left:[],right:[]};
+                    var key = pianoTickKey(beat.absolutePlaybackStart);
+                    var indexed = pianoIndexedNotes[key];
+                    if (indexed) return indexed;
+                    return pianoHandsForBeat(beat, 'auto');
+                }
+                function pianoDrawKeyboard() {
+                    var svg = document.getElementById('tt-piano-keyboard');
+                    if (!svg) return;
+                    var activeLeft = pianoPitchGroups.left;
+                    var activeRight = pianoPitchGroups.right;
+                    var all = activeLeft.concat(activeRight);
+                    if (all.length) {
+                        var lowest = Math.min.apply(null, all), highest = Math.max.apply(null, all);
+                        if (lowest < pianoKeyboardBase || highest >= pianoKeyboardBase + 24) {
+                            var base = Math.floor((lowest - 12) / 12) * 12;
+                            base = Math.max(24, Math.min(72, base));
+                            if (highest < base + 24) pianoKeyboardBase = base;
+                            else pianoKeyboardBase = Math.max(24, Math.min(72,
+                                Math.floor(lowest / 12) * 12));
+                        }
+                    }
+                    var octaves = all.length
+                        ? Math.max(2, Math.min(5,
+                            Math.ceil((Math.max.apply(null, all)-pianoKeyboardBase+1)/12)))
+                        : 2;
+                    var blackSet = [1,3,6,8,10];
+                    var whiteKeys = [], blackKeys = [], dots = [];
+                    var whiteIndex = 0;
+                    var whiteWidth = 700 / (octaves * 7);
+                    var bg = currentThemeIsDark ? '#0b1320' : '#e4e7ed';
+                    var white = '#f8fafc', black = '#1e2533';
+                    for (var midi = pianoKeyboardBase; midi < pianoKeyboardBase + octaves * 12; midi++) {
+                        var pc = ((midi % 12) + 12) % 12;
+                        var isBlack = blackSet.indexOf(pc) >= 0;
+                        var left = activeLeft.indexOf(midi) >= 0;
+                        var right = activeRight.indexOf(midi) >= 0;
+                        var fill = left && right ? '#e8bb42' : left ? '#16a69e' : right ? '#9771ee' : '';
+                        if (!isBlack) {
+                            var x = whiteIndex * whiteWidth;
+                            whiteKeys.push('<rect x="' + (x+1) + '" y="4" width="' + (whiteWidth-2) + '" height="148" rx="3" fill="' +
+                                (fill && (pianoHandFilter === 'both' || pianoHandFilter === 'left' && left || pianoHandFilter === 'right' && right) ? fill : white) +
+                                '" stroke="#748093" stroke-width="1.3"/>');
+                            if (pc === 0) whiteKeys.push('<text x="' + (x+whiteWidth/2) + '" y="143" font-size="12" font-weight="bold" text-anchor="middle" fill="#475467">' + pianoMidiName(midi, false) + '</text>');
+                            if (fill && (pianoHandFilter === 'both' || pianoHandFilter === 'left' && left || pianoHandFilter === 'right' && right)) {
+                                dots.push('<circle cx="' + (x+whiteWidth/2) + '" cy="117" r="13" fill="' + (left && right ? '#7659d9' : left ? '#087c78' : '#6541c7') + '" stroke="white" stroke-width="2"/>');
+                            }
+                            whiteIndex++;
+                        } else {
+                            var bx = whiteIndex * whiteWidth - whiteWidth * .31;
+                            blackKeys.push('<rect x="' + bx + '" y="4" width="' + whiteWidth*.62 + '" height="88" rx="3" fill="' +
+                                (fill && (pianoHandFilter === 'both' || pianoHandFilter === 'left' && left || pianoHandFilter === 'right' && right) ? fill : black) + '" stroke="#0f172a" stroke-width="1.5"/>');
+                        }
+                    }
+                    svg.innerHTML = '<rect width="700" height="169" rx="10" fill="' + bg + '"/>' +
+                        whiteKeys.join('') + blackKeys.join('') + dots.join('');
+                    var status = document.getElementById('tt-piano-current');
+                    if (status) {
+                        var titles = [];
+                        if (activeLeft.length) titles.push('L: ' + activeLeft.map(function(m){return pianoMidiName(m,false);}).join(' '));
+                        if (activeRight.length) titles.push('R: ' + activeRight.map(function(m){return pianoMidiName(m,false);}).join(' '));
+                        status.textContent = titles.length ? titles.join(' | ').slice(0,46) : pianoMidiName(pianoKeyboardBase,false) + '–' + pianoMidiName(pianoKeyboardBase+octaves*12-1,false);
+                    }
+                }
+                function pianoPositionCursor(beat, shouldScroll) {
+                    if (!pianoEnabled || !pianoReady || !beat || !pianoApi || !pianoApi.score) return;
+                    var overlay = document.getElementById('tt-piano-cursor');
+                    var pianoDiv = document.getElementById('tt-piano-score-container');
+                    var wrapper = document.getElementById('scroll-wrapper');
+                    if (!overlay || !pianoDiv || !wrapper) return;
+                    var idx = Number(beat.voice && beat.voice.bar && beat.voice.bar.index);
+                    if (!Number.isInteger(idx) || idx < 0) return;
+                    var lookup = pianoApi.boundsLookup || (pianoApi.renderer && pianoApi.renderer.boundsLookup);
+                    if (!lookup || !lookup.staffSystems) return;
+                    var target = null;
+                    for (var s = 0; s < lookup.staffSystems.length && !target; s++) {
+                        var system = lookup.staffSystems[s];
+                        var bars = system && system.bars ? system.bars : [];
+                        for (var j = 0; j < bars.length; j++) {
+                            if (Number(bars[j] && bars[j].index) === idx) { target = bars[j]; break; }
+                        }
+                    }
+                    if (!target) return;
+                    var bounds = target.realBounds || target.lineAlignedBounds || target.visualBounds;
+                    if (!bounds) return;
+                    var x = Number(bounds.x), y = Number(bounds.y), w = Number(bounds.w), h = Number(bounds.h);
+                    if (![x,y,w,h].every(Number.isFinite) || w <= 0) return;
+                    // Prefer the exact aligned beat x of the generated RH/LH staff.
+                    var score = pianoApi.score;
+                    var sourceIndex = beat.voice && beat.voice.beats ? beat.voice.beats.indexOf(beat) : -1;
+                    var sourceBar = beat.voice && beat.voice.bar;
+                    var sourceVoiceIndex = sourceBar && sourceBar.voices
+                        ? sourceBar.voices.indexOf(beat.voice) : 0;
+                    if (sourceVoiceIndex < 0) sourceVoiceIndex = 0;
+                    var pianoTrack = score.tracks && score.tracks[0];
+                    var exactBeatFound = false;
+                    if (pianoTrack && sourceIndex >= 0 && typeof lookup.findBeat === 'function') {
+                        for (var hand of [0,1]) {
+                            var st = pianoTrack.staves && pianoTrack.staves[hand];
+                            var b = st && st.bars && st.bars[idx];
+                            var voice = b && b.voices && b.voices[sourceVoiceIndex];
+                            var translated = voice && voice.beats && voice.beats[sourceIndex];
+                            if (!translated) continue;
+                            var bb = lookup.findBeat(translated);
+                            if (bb && Number.isFinite(Number(bb.onNotesX))) {
+                                x = Number(bb.onNotesX);
+                                exactBeatFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!exactBeatFound) {
+                        var total = beat.voice && beat.voice.beats ? beat.voice.beats.length : 1;
+                        x = Number(bounds.x) + Number(bounds.w) *
+                            ((Math.max(0, sourceIndex) + 0.5) / Math.max(1,total));
+                    }
+                    if (x < bounds.x || x > bounds.x + bounds.w) x = bounds.x + bounds.w / 2;
+                    overlay.style.display = 'block';
+                    overlay.style.left = Math.round(x) + 'px';
+                    overlay.style.top = Math.max(0, Math.round(y)) + 'px';
+                    overlay.style.height = Math.max(50, Math.round(h)) + 'px';
+                    overlay.style.background = currentVisualPreferences.cursorColor || '#8b5cf6';
+                    if (shouldScroll && !isUserScrolling && lastKnownPlayerState === 1) {
+                        var relY = y - wrapper.scrollTop;
+                        if (relY > wrapper.clientHeight * .62 || relY < wrapper.clientHeight * .08) {
+                            wrapper.scrollTop = Math.max(0, y - wrapper.clientHeight * .18);
+                        }
+                    }
+                }
+                function pianoUpdateFromBeat(beat) {
+                    if (!pianoEnabled || !beat || !beatBelongsToSelectedTrack(beat, pianoSourceTrack())) return;
+                    pianoCurrentBeat = beat;
+                    var data = pianoGroupForBeat(beat);
+                    var activeLeft = pianoAccompStyle === 'original' ? data.left.slice()
+                        : pianoAccompActiveAtTick(Number(beat.absolutePlaybackStart));
+                    if (pianoAccompStyle !== 'original' && !pianoAccompBars[Number(beat.voice && beat.voice.bar && beat.voice.bar.index)]) {
+                        activeLeft = data.left.slice();
+                    }
+                    pianoPitchGroups = {left: activeLeft,right:data.right.slice()};
+                    pianoDrawKeyboard();
+                    if (pianoShowScore) pianoPositionCursor(beat, true);
+                }
+                function pianoInstallTapSeek() {
+                    var root = document.getElementById('tt-piano-score-container');
+                    if (!root || root.__pianoTapInstalled) return;
+                    root.__pianoTapInstalled = true;
+                    root.addEventListener('click', function(ev) {
+                        if (!pianoEnabled || !api || !api.score || lastKnownPlayerState === 1) return;
+                        ev.stopPropagation();
+                        var lookup = pianoApi && (pianoApi.boundsLookup || pianoApi.renderer && pianoApi.renderer.boundsLookup);
+                        if (!lookup || !lookup.staffSystems) return;
+                        var box = root.getBoundingClientRect();
+                        var x = ev.clientX - box.left, y = ev.clientY - box.top;
+                        for (var si = 0; si < lookup.staffSystems.length; si++) {
+                            var bars = lookup.staffSystems[si].bars || [];
+                            for (var bi = 0; bi < bars.length; bi++) {
+                                var m = bars[bi]; var b = m.realBounds || m.visualBounds;
+                                if (!b || x < b.x || x > b.x + b.w || y < b.y || y > b.y+b.h) continue;
+                                var source = pianoSourceTrack(), sb = source && source.staves && source.staves[0] && source.staves[0].bars[m.index];
+                                var beats = sb && sb.voices && sb.voices[0] && sb.voices[0].beats;
+                                if (!beats || !beats.length) return;
+                                var fraction = Math.max(0, Math.min(0.999, (x-b.x)/Math.max(1,b.w)));
+                                var pick = beats[Math.min(beats.length-1,Math.floor(fraction*beats.length))];
+                                if (pick) {
+                                    api.tickPosition = Number(pick.absolutePlaybackStart) + (Number(api.midiTickShift)||0);
+                                    pianoUpdateFromBeat(pick);
+                                    pianoPositionCursor(pick,false);
+                                }
+                                return;
+                            }
+                        }
+                    });
+                }
+
+                // Apply complete notation + instrument + names configuration once.
+                // Switching modes does not recreate the audio player or mutate the GP file.
+                function setStaveDisplayMode(mode, showNames) {
                     if (!api || !api.score || isPdfExportMode) return false;
                     clearTimeout(scoreZoomRenderTimer);
                     scoreZoomScrollAnchor = null;
-
                     var normalizedMode = String(mode || 'scoretab').toLowerCase();
-                    if (
-                        normalizedMode !== 'scoretab' &&
-                        normalizedMode !== 'scoretab_fretboard' &&
-                        normalizedMode !== 'tab' &&
-                        normalizedMode !== 'score'
-                    ) {
-                        normalizedMode = 'scoretab';
+                    var valid = [
+                        'scoretab','score','tab',
+                        'scoretab_fretboard','score_fretboard','tab_fretboard',
+                        'piano','piano_tab','tab_piano'
+                    ];
+                    if (valid.indexOf(normalizedMode) < 0) return false;
+                    var priorNames = noteNamesVisible;
+                    if (typeof showNames === 'boolean') {
+                        noteNamesVisible = showNames;
+                        if (!noteNamesVisible) {
+                            clearNoteNameOverlay();
+                            lastPlayedNoteNameBeatId = '';
+                        }
                     }
-
-                    // TAB-only dùng từng ký hiệu trường độ riêng ở phía dưới khuông.
-                    // Phần thân nốt sẽ được rút ngắn bằng custom renderer bên dưới,
-                    // nhờ đó không còn đường dọc chạy xuyên qua dây và số ngăn đàn.
-                    // Ở chế độ có khuông nhạc, dùng Automatic để tránh lặp ký hiệu tiết tấu.
-                    var tabRhythmMode = normalizedMode === 'tab'
-                        ? 'ShowWithBars'
-                        : 'Automatic';
-                    var tabRhythmHeight = 25;
-                    var nextFretboardEnabled = normalizedMode === 'scoretab_fretboard';
-                    var staveMode = nextFretboardEnabled ? 'scoretab' : normalizedMode;
-                    var previousFretboardEnabled = fretboardEnabled;
-
-                    try {
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        var previousScrollTop = wrapper ? wrapper.scrollTop : 0;
-
-                        if (
-                            api.settings &&
-                            typeof api.settings.fillFromJson === 'function'
-                        ) {
-                            api.settings.fillFromJson({
-                                display: {
-                                    staveProfile: staveMode,
-                                    scale: scoreZoomScaleForMode(nextFretboardEnabled),
-                                    systemPaddingBottom: noteNamesVisible
-                                        ? noteNameSystemPaddingBottom
-                                        : defaultSystemPaddingBottom,
-                                    lastSystemPaddingBottom: noteNamesVisible
-                                        ? noteNameLastSystemPaddingBottom
-                                        : defaultLastSystemPaddingBottom
-                                },
-                                notation: {
-                                    rhythmMode: tabRhythmMode,
-                                    rhythmHeight: tabRhythmHeight,
-                                    elements: { scoreTitle: true }
-                                }
-                            });
-                        } else if (
-                            api.settings &&
-                            api.settings.display &&
-                            typeof alphaTab !== 'undefined' &&
-                            alphaTab.StaveProfile
-                        ) {
-                            api.settings.display.staveProfile =
-                                staveMode === 'tab'
-                                    ? alphaTab.StaveProfile.Tab
-                                    : staveMode === 'score'
-                                        ? alphaTab.StaveProfile.Score
-                                        : alphaTab.StaveProfile.ScoreTab;
-                            api.settings.display.scale = scoreZoomScaleForMode(nextFretboardEnabled);
-                            api.settings.display.systemPaddingBottom = noteNamesVisible
-                                ? noteNameSystemPaddingBottom
-                                : defaultSystemPaddingBottom;
-                            api.settings.display.lastSystemPaddingBottom = noteNamesVisible
-                                ? noteNameLastSystemPaddingBottom
-                                : defaultLastSystemPaddingBottom;
-
-                            if (api.settings.notation) {
-                                ensureScoreTitleSettingVisible();
-                                if (alphaTab.TabRhythmMode) {
-                                    api.settings.notation.rhythmMode =
-                                        normalizedMode === 'tab'
-                                            ? alphaTab.TabRhythmMode.ShowWithBars
-                                            : alphaTab.TabRhythmMode.Automatic;
-                                } else {
-                                    api.settings.notation.rhythmMode = tabRhythmMode;
-                                }
-                                api.settings.notation.rhythmHeight = tabRhythmHeight;
-                            }
-                        } else {
+                    var previousPiano = pianoEnabled;
+                    var previousFretboard = fretboardEnabled;
+                    var priorMode = activeStaveDisplayMode;
+                    var isPiano = ['piano','piano_tab','tab_piano'].indexOf(normalizedMode) >= 0;
+                    var nextGuitar = ['scoretab_fretboard','score_fretboard','tab_fretboard'].indexOf(normalizedMode) >= 0;
+                    var wantScore = ['scoretab','score','scoretab_fretboard','score_fretboard','piano','piano_tab'].indexOf(normalizedMode) >= 0;
+                    var wantTab = ['scoretab','tab','scoretab_fretboard','tab_fretboard','piano_tab','tab_piano'].indexOf(normalizedMode) >= 0;
+                    var wrapper = document.getElementById('scroll-wrapper');
+                    var previousScrollTop = wrapper ? wrapper.scrollTop : 0;
+                    if (isPiano) {
+                        if (!pianoEnterMode(wantScore, wantTab)) {
+                            noteNamesVisible = priorNames;
                             return false;
                         }
-
-                        if (nextFretboardEnabled && !previousFretboardEnabled) {
-                            fretboardWindowStart = 1;
+                        activeStaveDisplayMode = normalizedMode;
+                        desiredStaveDisplayMode = normalizedMode;
+                        return true;
+                    }
+                    if (pianoEnabled) pianoLeaveMode();
+                    if (!nextGuitar && fretboardEnabled) practiceResetForNewScore();
+                    var baseMode = wantScore ? (wantTab ? 'scoretab' : 'score') : 'tab';
+                    var tabRhythmMode = baseMode === 'tab' ? 'ShowWithBars' : 'Automatic';
+                    try {
+                        if (api.settings && typeof api.settings.fillFromJson === 'function') {
+                            api.settings.fillFromJson({
+                                display: {
+                                    staveProfile: baseMode,
+                                    scale: scoreZoomScaleForMode(nextGuitar),
+                                    systemPaddingBottom: noteNamesVisible ? noteNameSystemPaddingBottom : defaultSystemPaddingBottom,
+                                    lastSystemPaddingBottom: noteNamesVisible ? noteNameLastSystemPaddingBottom : defaultLastSystemPaddingBottom
+                                },
+                                notation: {
+                                    rhythmMode:tabRhythmMode, rhythmHeight:25,
+                                    elements:{scoreTitle:true}
+                                }
+                            });
+                        } else if (api.settings && api.settings.display && alphaTab.StaveProfile) {
+                            api.settings.display.staveProfile = baseMode === 'tab'
+                                ? alphaTab.StaveProfile.Tab
+                                : baseMode === 'score'
+                                    ? alphaTab.StaveProfile.Score
+                                    : alphaTab.StaveProfile.ScoreTab;
+                            api.settings.display.scale = scoreZoomScaleForMode(nextGuitar);
+                            api.settings.display.systemPaddingBottom = noteNamesVisible ? noteNameSystemPaddingBottom : defaultSystemPaddingBottom;
+                            api.settings.display.lastSystemPaddingBottom = noteNamesVisible ? noteNameLastSystemPaddingBottom : defaultLastSystemPaddingBottom;
+                            if (api.settings.notation) {
+                                ensureScoreTitleSettingVisible();
+                                api.settings.notation.rhythmMode = alphaTab.TabRhythmMode
+                                    ? (baseMode === 'tab' ? alphaTab.TabRhythmMode.ShowWithBars : alphaTab.TabRhythmMode.Automatic)
+                                    : tabRhythmMode;
+                                api.settings.notation.rhythmHeight = 25;
+                            }
+                        } else {
+                            noteNamesVisible = priorNames;
+                            return false;
                         }
-                        fretboardEnabled = nextFretboardEnabled;
-                        syncWebViewViewportBox(
-                            lastAndroidViewportWidth,
-                            lastAndroidViewportHeight
-                        );
+                        if (nextGuitar && !previousFretboard) fretboardWindowStart = 1;
+                        fretboardEnabled = nextGuitar;
+                        syncWebViewViewportBox(lastAndroidViewportWidth,lastAndroidViewportHeight);
                         api.updateSettings();
                         applySelectedTrackSolo(true);
+                        notifyTabBannerVisibility(false);
                         if (fretboardEnabled) {
-                            notifyTabBannerVisibility(false);
                             scheduleFretboardRefresh();
-                            setTimeout(function() {
-                                keepScoreCursorNearFretboard(true);
-                            }, 360);
-                        } else {
-                            notifyTabBannerVisibility(false);
+                            setTimeout(function(){keepScoreCursorNearFretboard(true);},360);
                         }
-
-                        // Sau khi render lại, giữ vị trí cuộn gần nhất để người dùng
-                        // không bị đưa đột ngột về đầu bản nhạc.
                         setTimeout(function() {
                             var currentWrapper = document.getElementById('scroll-wrapper');
                             if (currentWrapper) {
-                                var maxScroll = Math.max(
-                                    0,
-                                    currentWrapper.scrollHeight - currentWrapper.clientHeight
-                                );
-                                currentWrapper.scrollTop = Math.min(previousScrollTop, maxScroll);
+                                var maxScroll = Math.max(0,currentWrapper.scrollHeight-currentWrapper.clientHeight);
+                                currentWrapper.scrollTop = Math.min(previousScrollTop,maxScroll);
                             }
-                        }, 300);
-
+                        },300);
+                        activeStaveDisplayMode = normalizedMode;
+                        desiredStaveDisplayMode = normalizedMode;
                         return true;
-                    } catch (error) {
-                        fretboardEnabled = previousFretboardEnabled;
-                        syncWebViewViewportBox(
-                            lastAndroidViewportWidth,
-                            lastAndroidViewportHeight
-                        );
-                        console.warn('Could not change stave display mode', error);
+                    } catch(error) {
+                        noteNamesVisible = priorNames;
+                        fretboardEnabled = previousFretboard;
+                        // Best effort restoration when a custom GP cannot engrave a mode.
+                        if (previousPiano && !pianoEnabled) pianoEnterMode(priorMode !== 'tab_piano',priorMode !== 'piano');
+                        syncWebViewViewportBox(lastAndroidViewportWidth,lastAndroidViewportHeight);
+                        console.warn('Could not change stave display mode',error);
                         return false;
                     }
                 }
@@ -4733,6 +7320,7 @@ internal fun getAlphaTabHtml(
                             return;
                         }
                         if (isPdfExportMode) return;
+                        practiceResetForNewScore();
 
                         var wrapper = document.getElementById('scroll-wrapper');
                         pdfExportOriginalState = {
@@ -4829,6 +7417,7 @@ internal fun getAlphaTabHtml(
                     if (!api || !soundFontUrl) return false;
 
                     try {
+                        practiceResetForNewScore();
                         api.stop();
                         resetSoundFontCompatibilityState();
                         pendingSoundFontMode = String(mode || 'standard');
@@ -5052,6 +7641,8 @@ internal fun getAlphaTabHtml(
                         { passive: false });
                     wrapper.addEventListener('touchcancel', finishScorePinch,
                         { passive: false });
+                    practiceInstallScoreSelection(wrapper);
+                    pianoInstallTapSeek();
 
                     wrapper.addEventListener('touchstart', function(event) {
                         if (scorePinch.active ||
@@ -5171,11 +7762,19 @@ internal fun getAlphaTabHtml(
                     });
                     api.playerStateChanged.on(function(e) {
                         lastKnownPlayerState = Number(e && e.state ? e.state : 0);
+                        if (lastKnownPlayerState !== 1) {
+                            pianoAccompResetAudio();
+                            pianoAccompLastTick = null;
+                        } else {
+                            pianoAccompLastTick = null;
+                            if (pianoAccompAudioEnabled) pianoAccompEnsureAudio();
+                        }
                         if (e && e.stopped === true) {
                             updateActiveNoteNameBeat(null);
                             updateFretboardForBeat(null);
                         }
                         if (lastKnownPlayerState === 1) {
+                            normalClearPausedSeek();
                             scheduleVisiblePlayheadThickness();
                         } else {
                             stopVisiblePlayheadTracking();
@@ -5185,9 +7784,18 @@ internal fun getAlphaTabHtml(
                     if (api.playedBeatChanged && typeof api.playedBeatChanged.on === 'function') {
                         api.playedBeatChanged.on(function(beat) {
                             updateActiveNoteNameBeat(beat);
+                            practiceOnPlayedBeat(beat);
                             updateFretboardForBeat(beat);
+                            if (pianoEnabled) pianoUpdateFromBeat(beat);
                             // Playhead may appear only after the first playback beat.
                             scheduleVisiblePlayheadThickness();
+                        });
+                    }
+                    if (api.playerFinished && typeof api.playerFinished.on === 'function') {
+                        api.playerFinished.on(function(e) {
+                            pianoAccompResetAudio();
+                            pianoAccompLastTick = null;
+                            practiceOnPlayerFinished(e);
                         });
                     }
                     api.midiLoaded.on(function() {
@@ -5196,12 +7804,17 @@ internal fun getAlphaTabHtml(
                     });
 
                     api.playerPositionChanged.on(function(e) {
+                        if (pianoEnabled && e) pianoAccompTick(Number(e.currentTick));
                         // Sự kiện này cũng phát sinh khi MIDI/cursor vừa khởi tạo.
                         // Chỉ tự cuộn khi người dùng đã thật sự bấm Play.
                         if (isUserScrolling || lastKnownPlayerState !== 1) return;
 
                         if (fretboardEnabled) {
                             keepScoreCursorNearFretboard(false);
+                            return;
+                        }
+                        if (pianoEnabled) {
+                            pianoPositionCursor(pianoCurrentBeat, true);
                             return;
                         }
 
@@ -5254,6 +7867,9 @@ internal fun getAlphaTabHtml(
                             scheduleVisiblePlayheadThickness();
                             verifyRenderedTitleFits();
                             renderNoteNameOverlay();
+                            practiceDrawMeasureHighlight();
+                            practicePositionStepCursor(false);
+                            if (normalPausedSeekBeat) normalPositionPausedSeek(normalPausedSeekBeat);
                             if (fretboardEnabled) {
                                 scheduleFretboardRefresh();
                                 setTimeout(function() {
@@ -5285,11 +7901,16 @@ internal fun getAlphaTabHtml(
                     }
 
                     api.scoreLoaded.on(function(score) {
+                        pianoAccompResetAudio();
+                        pianoAccompLastTick = null;
+                        pianoAccompBars=[];pianoAccompEvents=[];
+                        normalClearPausedSeek();
                         isScoreLoading = false;
                         soundFontCompatibilityScoreGeneration++;
                         resetSoundFontCompatibilityState();
                         autoFallbackInProgress = false;
                         autoPlayAfterSoundFontReady = false;
+                        practiceResetForNewScore();
                         currentTracks = score.tracks;
                         songTechniqueCatalogCache = {};
                         fretboardLatestBeat = null;
@@ -5311,7 +7932,27 @@ internal fun getAlphaTabHtml(
                             applySelectedTrackSolo(true);
                         }
                         if (fretboardEnabled) scheduleFretboardRefresh();
-                        
+                        if (pianoEnabled) {
+                            pianoAccompSourceIdentity = null;
+                            pianoCurrentBeat = null;
+                            pianoPitchGroups = {left:[],right:[]};
+                            if (pianoShowScore) requestAnimationFrame(function() { pianoRebuildFromSource(); });
+                            else {pianoIndexSourceBeats(pianoSourceTrack());pianoAccompRebuild(pianoSourceTrack());}
+                        }
+                        // Restore the user's applied combination on the first loaded GP.
+                        if (desiredStaveDisplayMode !== 'scoretab' &&
+                            activeStaveDisplayMode === 'scoretab') {
+                            var restored = setStaveDisplayMode(desiredStaveDisplayMode, noteNamesVisible);
+                            if (!restored) {
+                                desiredStaveDisplayMode = 'scoretab';
+                                setStaveDisplayMode('scoretab', noteNamesVisible);
+                                if (window.AndroidInterface &&
+                                    typeof window.AndroidInterface.onDisplayModeRestoreFailed === 'function') {
+                                    window.AndroidInterface.onDisplayModeRestoreFailed();
+                                }
+                            }
+                        }
+
                         var title = String(currentScoreTitle || score.title || 'Bản nhạc').trim();
                         AndroidInterface.onScoreLoaded(JSON.stringify(tracksData), title);
 
@@ -5339,6 +7980,8 @@ internal fun getAlphaTabHtml(
                 }
                 
                 async function loadScoreFromUrl(fileUrl, fallbackTitle) {
+                    normalClearPausedSeek();
+                    practiceResetForNewScore();
                     if (!isApiReady || !api) {
                         setTimeout(function() {
                             loadScoreFromUrl(fileUrl, fallbackTitle);
@@ -5379,17 +8022,29 @@ internal fun getAlphaTabHtml(
                 
                 function selectTrackSolo(index) {
                     if (!currentTracks || index < 0 || index >= currentTracks.length) return;
+                    normalClearPausedSeek();
+                    practiceResetForNewScore();
                     selectedTrackForPlayback = index;
+                    pianoAccompResetAudio();
+                    pianoAccompLastTick = null;
                     fretboardLatestBeat = null;
                     fretboardWindowStart = 1;
                     lastPlayedNoteNameBeatId = '';
                     clearNoteNameOverlay();
                     resetSoundFontCompatibilityState();
                     applySelectedTrackSolo(true);
+                    if (pianoEnabled && pianoShowScore) pianoRebuildFromSource();
+                    else if (pianoEnabled) {pianoIndexSourceBeats(pianoSourceTrack());pianoAccompRebuild(pianoSourceTrack());}
                 }
 
                 async function playPause() {
                     if (!api) return false;
+                    if (pianoEnabled && pianoAccompAudioEnabled) pianoAccompEnsureAudio();
+                    // Main Play button can interrupt a visible 3-2-1 count-in.
+                    if (practiceState.timer) {
+                        practiceCancelCountdown();
+                        return api.play();
+                    }
 
                     if (lastKnownPlayerState === 1) {
                         api.pause();
@@ -5414,6 +8069,9 @@ internal fun getAlphaTabHtml(
                     return api.play();
                 }
                 function stopPlayer() {
+                    pianoAccompResetAudio();
+                    pianoAccompLastTick=null;
+                    practiceResetForNewScore();
                     resetSoundFontCompatibilityState();
                     if (api) api.stop();
                     updateFretboardForBeat(null);
