@@ -1,3 +1,6 @@
+SHOW FULL COLUMNS FROM songs;
+
+
 SELECT
     id,
     title,
