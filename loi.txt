@@ -1,19 +1,39 @@
-Write-Host "=== KIEM TRA AI ==="
+$folders = @(
+    "C:\inetpub\wwwroot\guitar_HD",
+    "C:\inetpub\wwwroot\img_sys",
+    "C:\inetpub\wwwroot\libs"
+)
 
-try {
-    $result = Invoke-RestMethod `
-        "http://127.0.0.1:5000/" `
-        -TimeoutSec 15
+foreach ($folder in $folders) {
+    Write-Host "`n=== $folder ===" -ForegroundColor Cyan
 
-    Write-Host "AI SERVER ONLINE" -ForegroundColor Green
-    Write-Host $result
+    if (Test-Path -LiteralPath $folder) {
+        Get-ChildItem -LiteralPath $folder -Force |
+            Select-Object -First 15 Name, Mode |
+            Format-Table -AutoSize
+    }
+    else {
+        Write-Host "KHONG TON TAI"
+    }
 }
-catch {
-    Write-Host "AI SERVER ERROR: $($_.Exception.Message)" -ForegroundColor Red
-}
 
-Write-Host "`n=== KIEM TRA CONG 5000 ==="
+Write-Host "`n=== KIEM TRA TASK AI ===" -ForegroundColor Cyan
 
-Get-NetTCPConnection -LocalPort 5000 -State Listen `
-    -ErrorAction SilentlyContinue |
-Select-Object LocalAddress, LocalPort, State, OwningProcess
+Get-ScheduledTask -TaskName "AutoStart_Python_API" |
+    Select-Object -ExpandProperty Actions |
+    Select-Object Execute, Arguments, WorkingDirectory |
+    Format-Table -AutoSize -Wrap
+
+Write-Host "`n=== KIEM TRA DU LIEU CON LAI ===" -ForegroundColor Cyan
+
+@(
+    "C:\AI_Music",
+    "C:\inetpub\wwwroot\tunertools",
+    "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE",
+    "C:\inetpub\wwwroot\support_chat_uploads"
+) | ForEach-Object {
+    [PSCustomObject]@{
+        Path = $_
+        Exists = Test-Path -LiteralPath $_
+    }
+} | Format-Table -AutoSize
