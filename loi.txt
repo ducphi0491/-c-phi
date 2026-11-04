@@ -1,1 +1,2 @@
 dir *.ps1
+cd C:\TunerTools_Diagnostic
