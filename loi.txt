@@ -1,114 +1,57 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $root = "C:\inetpub\wwwroot"
->> $api = "C:\TunerTools\Web\API"
->>
->> Write-Host "`n=== KIEM TRA TAI NGUYEN ===" -ForegroundColor Cyan
->>
->> $paths = @(
->>     "$root\firebase-service-account.json",
->>     "$root\google-services.json",
->>     "$root\support_chat_uploads"
->> )
->>
->> foreach ($path in $paths) {
->>     $exists = Test-Path -LiteralPath $path
->>
->>     [PSCustomObject]@{
->>         Name   = Split-Path $path -Leaf
->>         Exists = $exists
->>         Type   = if ($exists) {
->>             if (Test-Path -LiteralPath $path -PathType Container) {
->>                 "Folder"
->>             } else {
->>                 "File"
->>             }
->>         } else {
->>             "Missing"
->>         }
->>     }
->> }
->>
->> Write-Host "`n=== KIEM TRA THU MUC UPLOAD ===" -ForegroundColor Cyan
->>
->> $upload = "$root\support_chat_uploads"
->>
->> if (Test-Path -LiteralPath $upload -PathType Container) {
->>     $stats = Get-ChildItem -LiteralPath $upload -Recurse -File |
->>         Measure-Object -Property Length -Sum
->>
->>     Write-Host "SO FILE: $($stats.Count)"
->>     Write-Host "DUNG LUONG MB: $([math]::Round($stats.Sum / 1MB, 2))"
->> }
->>
->> Write-Host "`n=== KIEM TRA THAM CHIEU TRONG PHP ===" -ForegroundColor Cyan
->>
->> $files = @(
->>     "$api\api_gp_search.php",
->>     "$api\api_songs.php",
->>     "$root\api_documents.php"
->> )
->>
->> $patterns = @(
->>     'firebase-service-account.json',
->>     'google-services.json',
->>     'support_chat_uploads',
->>     'tuner_images_'
->> )
->>
->> Select-String -Path $files -SimpleMatch -Pattern $patterns |
->>     Select-Object @{
->>         Name = 'File'
->>         Expression = { Split-Path $_.Path -Leaf }
->>     }, LineNumber, Pattern |
->>     Format-Table -AutoSize
->>
->> Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
+$source = "C:\inetpub\wwwroot\support_chat_uploads"
+$target = "C:\TunerTools\Data\support_chat_uploads"
 
-=== KIEM TRA TAI NGUYEN ===
+if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+    throw "Khong tim thay thu muc upload goc."
+}
 
+New-Item -ItemType Directory -Path $target -Force | Out-Null
 
-=== KIEM TRA THU MUC UPLOAD ===
-SO FILE: 4
-DUNG LUONG MB: 0.21
+Write-Host "`n=== SAO CHEP DU LIEU ===" -ForegroundColor Cyan
 
-=== KIEM TRA THAM CHIEU TRONG PHP ===
-Name                          Exists Type
-----                          ------ ----
-firebase-service-account.json  False Missing
-google-services.json           False Missing
-support_chat_uploads            True Folder
+& robocopy.exe $source $target /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
 
+if ($LASTEXITCODE -ge 8) {
+    throw "Robocopy that bai."
+}
 
+Write-Host "`n=== KIEM TRA FILE ===" -ForegroundColor Cyan
 
-File              LineNumber Pattern
-----              ---------- -------
-api_gp_search.php       1259 firebase-service-account.json
-api_gp_search.php       1328 google-services.json
-api_gp_search.php       1339 google-services.json
-api_gp_search.php       1500 firebase-service-account.json
-api_gp_search.php       1510 firebase-service-account.json
-api_gp_search.php       1778 firebase-service-account.json
-api_gp_search.php       2148 tuner_images_
-api_gp_search.php       3051 support_chat_uploads
-api_gp_search.php       3057 support_chat_uploads
-api_gp_search.php       3081 support_chat_uploads
-api_gp_search.php       3094 support_chat_uploads
-api_songs.php             59 firebase-service-account.json
-api_songs.php            231 google-services.json
-api_songs.php            242 google-services.json
-api_songs.php            403 firebase-service-account.json
-api_songs.php            413 firebase-service-account.json
-api_songs.php            717 firebase-service-account.json
-api_songs.php           1574 tuner_images_
-api_songs.php           2804 support_chat_uploads
-api_songs.php           2810 support_chat_uploads
-api_songs.php           2834 support_chat_uploads
-api_songs.php           2847 support_chat_uploads
+$files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
+$targetFiles = @(Get-ChildItem -LiteralPath $target -Recurse -File)
 
+if ($files.Count -ne $targetFiles.Count) {
+    throw "So file khong trung khop."
+}
 
+foreach ($f in $files) {
+    $relative = $f.FullName.Substring($source.Length).TrimStart('\')
+    $dest = Join-Path $target $relative
 
-KIEM TRA HOAN TAT
-PS C:\Users\Administrator>
+    if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
+        throw "Thieu file: $relative"
+    }
 
+    if ((Get-FileHash -LiteralPath $f.FullName).Hash -ne
+        (Get-FileHash -LiteralPath $dest).Hash) {
+        throw "Hash khong khop: $relative"
+    }
+}
+
+Write-Host "UPLOAD COPY VERIFIED: $($files.Count) FILES" -ForegroundColor Green
+
+Write-Host "`n=== KIEM TRA DUONG DAN PHP ===" -ForegroundColor Cyan
+
+foreach ($name in @("api_gp_search.php", "api_songs.php")) {
+    $file = "C:\TunerTools\Web\API\$name"
+
+    Select-String -LiteralPath $file -SimpleMatch -Pattern "support_chat_uploads" |
+    Where-Object { $_.Line -match '\$baseDir\s*=' } |
+    ForEach-Object {
+        Write-Host "$name : $($_.Line.Trim())"
+    }
+}
+
+Write-Host "`nHOAN THANH BUOC CHUAN BI" -ForegroundColor Green
