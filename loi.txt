@@ -1,3 +1,13 @@
-robocopy "C:\inetpub\wwwroot\tunertools" "C:\TunerTools\Web\tunertools" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:4 /TEE /LOG:"C:\TunerTools\Logs\copy_tunertools_web.log"
+Get-Content "C:\TunerTools\Logs\copy_tunertools_web.log" -Tail 18
+
+
+2............
+Get-PSDrive C |
+Select-Object Name,
+@{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
+
+robocopy "C:\inetpub\wwwroot\tab" "C:\TunerTools\Data\GuitarPro" /L /E /XJ /NFL /NDL /NP /BYTES /R:0 /W:0
+3.............
+robocopy "C:\inetpub\wwwroot\tab" "C:\TunerTools\Data\GuitarPro" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:8 /NFL /NDL /NP /TEE /LOG:"C:\TunerTools\Logs\copy_guitarpro.log"
 
 Write-Host "Robocopy exit code: $LASTEXITCODE"
