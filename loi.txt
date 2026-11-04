@@ -1,21 +1,16 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> & "$env:windir\System32\inetsrv\appcmd.exe" list vdir
-VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
-PS C:\Users\Administrator> Get-ScheduledTask |
->> Where-Object {
->>     $task = $_
->>     $task.Actions | Where-Object {
->>         ($_.Execute + " " + $_.Arguments + " " + $_.WorkingDirectory) -match "TunerToolsGP_Fresh|AI_Music|tunertools"
->>     }
->> } |
->> Select-Object TaskName, TaskPath, State
-
-TaskName             TaskPath State
---------             -------- -----
-AutoStart_Python_API \        Ready
+Get-ScheduledTask -TaskName "AutoStart_Python_API" |
+Select-Object -ExpandProperty Actions |
+Format-List Execute, Arguments, WorkingDirectory
 
 
-PS C:\Users\Administrator>
 
+Get-ScheduledTaskInfo -TaskName "AutoStart_Python_API" |
+Format-List LastRunTime, LastTaskResult, NextRunTime
+
+
+Get-CimInstance Win32_Process |
+Where-Object {
+    $_.Name -match "python|php|cloudflared"
+} |
+Select-Object Name, ProcessId, CommandLine |
+Format-List
