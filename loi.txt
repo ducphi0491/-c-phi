@@ -1,153 +1,168 @@
-$ErrorActionPreference = "Stop"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$source = "C:\inetpub\wwwroot\tunertools"
-$target = "C:\TunerTools\Web\tunertools"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
+>>
+>> $source = "C:\inetpub\wwwroot\tunertools"
+>> $target = "C:\TunerTools\Web\tunertools"
+>> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+>>
+>> # Kiem tra thu muc
+>> if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+>>     throw "Thieu thu muc website goc."
+>> }
+>>
+>> if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+>>     throw "Thieu thu muc website moi."
+>> }
+>>
+>> # Kiem tra SHA256 cua tat ca file
+>> $files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
+>> $targetCount = @(Get-ChildItem -LiteralPath $target -Recurse -File).Count
+>>
+>> if ($files.Count -ne $targetCount) {
+>>     throw "So file nguon va dich khong khop."
+>> }
+>>
+>> foreach ($f in $files) {
+>>     $relative = $f.FullName.Substring($source.Length).TrimStart('\')
+>>     $destFile = Join-Path $target $relative
+>>
+>>     if (-not (Test-Path -LiteralPath $destFile -PathType Leaf)) {
+>>         throw "Thieu file: $relative"
+>>     }
+>>
+>>     $hash1 = (Get-FileHash -LiteralPath $f.FullName).Hash
+>>     $hash2 = (Get-FileHash -LiteralPath $destFile).Hash
+>>
+>>     if ($hash1 -ne $hash2) {
+>>         throw "File khac nhau: $relative"
+>>     }
+>> }
+>>
+>> Write-Host "HASH VERIFIED: $($files.Count) FILES" -ForegroundColor Green
+>>
+>> # Kiem tra IIS chua co /tunertools
+>> $vdirs = (& $appcmd list vdirs | Out-String)
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>     throw "Khong doc duoc IIS."
+>> }
+>>
+>> if ($vdirs -match 'VDIR "Default Web Site/tunertools"') {
+>>     throw "Virtual Directory /tunertools da ton tai."
+>> }
+>>
+>> # Chon anh tinh de test website
+>> $sample = $files |
+>>     Where-Object { $_.Name -ieq "thumbnail.jpg" } |
+>>     Select-Object -First 1
+>>
+>> if (-not $sample) {
+>>     $sample = $files |
+>>         Where-Object { $_.Extension -in ".jpg", ".jpeg", ".png" } |
+>>         Select-Object -First 1
+>> }
+>>
+>> if (-not $sample) {
+>>     throw "Khong tim thay anh tinh de kiem tra website."
+>> }
+>>
+>> $relative = $sample.FullName.Substring($source.Length).TrimStart('\')
+>>
+>> $encoded = (($relative -split '\\') |
+>>     ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+>>
+>> $url = "http://127.0.0.1/tunertools/$encoded"
+>>
+>> function Test-TTUrl {
+>>     param([string]$TestUrl)
+>>
+>>     $result = (& curl.exe --path-as-is -sS --max-time 20 `
+>>         -r 0-0 -o NUL `
+>>         -H "Host: tunertools.top" `
+>>         -w "%{http_code}" `
+>>         "$TestUrl" | Out-String).Trim()
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "Khong ket noi duoc: $TestUrl"
+>>     }
+>>
+>>     return $result
+>> }
+>>
+>> # Test truoc khi chuyen
+>> $before = Test-TTUrl $url
+>> Write-Host "HTTP BEFORE: $before"
+>>
+>> if ($before -notin @("200", "206")) {
+>>     throw "Website goc chua tra ve 200/206. Khong thay doi IIS."
+>> }
+>>
+>> # Sao luu IIS
+>> $backup = "TT_WEB_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+>>
+>> & $appcmd add backup $backup | Out-Host
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>     throw "Khong sao luu duoc IIS."
+>> }
+>>
+>> $created = $false
+>>
+>> try {
+>>     # Chuyen anh xa /tunertools sang thu muc moi
+>>     & $appcmd add vdir `
+>>         '/app.name:Default Web Site/' `
+>>         '/path:/tunertools' `
+>>         "/physicalPath:$target" | Out-Host
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "Khong tao duoc Virtual Directory."
+>>     }
+>>
+>>     $created = $true
+>>
+>>     # Kiem tra sau khi chuyen
+>>     $after = Test-TTUrl $url
+>>
+>>     Write-Host "HTTP AFTER: $after"
+>>
+>>     if ($after -notin @("200", "206")) {
+>>         throw "Website moi khong hoat dong."
+>>     }
+>>
+>>     Write-Host "`nWEBSITE TUNERTOOLS CHUYEN THANH CONG" -ForegroundColor Green
+>>
+>>     # Kiem tra URL app-guides o cap goc
+>>     if ($encoded -like "app-guides/*") {
+>>         $guideUrl = "http://127.0.0.1/$encoded"
+>>         $guideStatus = Test-TTUrl $guideUrl
+>>
+>>         Write-Host "ROOT APP-GUIDES HTTP: $guideStatus"
+>>     }
+>>
+>>     & $appcmd list vdirs
+>> }
+>> catch {
+>>     Write-Host "LOI: $($_.Exception.Message)" -ForegroundColor Red
+>>
+>>     if ($created) {
+>>         & $appcmd delete vdir "Default Web Site/tunertools" | Out-Host
+>>         Write-Host "DA KHOI PHUC ANH XA IIS CU" -ForegroundColor Yellow
+>>     }
+>>
+>>     throw
+>> }
+HASH VERIFIED: 194 FILES
+HTTP BEFORE: 206
+BACKUP object "TT_WEB_20261105_012538" added
+VDIR object "Default Web Site/tunertools" added
+HTTP AFTER: 206
 
-# Kiem tra thu muc
-if (-not (Test-Path -LiteralPath $source -PathType Container)) {
-    throw "Thieu thu muc website goc."
-}
-
-if (-not (Test-Path -LiteralPath $target -PathType Container)) {
-    throw "Thieu thu muc website moi."
-}
-
-# Kiem tra SHA256 cua tat ca file
-$files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
-$targetCount = @(Get-ChildItem -LiteralPath $target -Recurse -File).Count
-
-if ($files.Count -ne $targetCount) {
-    throw "So file nguon va dich khong khop."
-}
-
-foreach ($f in $files) {
-    $relative = $f.FullName.Substring($source.Length).TrimStart('\')
-    $destFile = Join-Path $target $relative
-
-    if (-not (Test-Path -LiteralPath $destFile -PathType Leaf)) {
-        throw "Thieu file: $relative"
-    }
-
-    $hash1 = (Get-FileHash -LiteralPath $f.FullName).Hash
-    $hash2 = (Get-FileHash -LiteralPath $destFile).Hash
-
-    if ($hash1 -ne $hash2) {
-        throw "File khac nhau: $relative"
-    }
-}
-
-Write-Host "HASH VERIFIED: $($files.Count) FILES" -ForegroundColor Green
-
-# Kiem tra IIS chua co /tunertools
-$vdirs = (& $appcmd list vdirs | Out-String)
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong doc duoc IIS."
-}
-
-if ($vdirs -match 'VDIR "Default Web Site/tunertools"') {
-    throw "Virtual Directory /tunertools da ton tai."
-}
-
-# Chon anh tinh de test website
-$sample = $files |
-    Where-Object { $_.Name -ieq "thumbnail.jpg" } |
-    Select-Object -First 1
-
-if (-not $sample) {
-    $sample = $files |
-        Where-Object { $_.Extension -in ".jpg", ".jpeg", ".png" } |
-        Select-Object -First 1
-}
-
-if (-not $sample) {
-    throw "Khong tim thay anh tinh de kiem tra website."
-}
-
-$relative = $sample.FullName.Substring($source.Length).TrimStart('\')
-
-$encoded = (($relative -split '\\') |
-    ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-
-$url = "http://127.0.0.1/tunertools/$encoded"
-
-function Test-TTUrl {
-    param([string]$TestUrl)
-
-    $result = (& curl.exe --path-as-is -sS --max-time 20 `
-        -r 0-0 -o NUL `
-        -H "Host: tunertools.top" `
-        -w "%{http_code}" `
-        "$TestUrl" | Out-String).Trim()
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong ket noi duoc: $TestUrl"
-    }
-
-    return $result
-}
-
-# Test truoc khi chuyen
-$before = Test-TTUrl $url
-Write-Host "HTTP BEFORE: $before"
-
-if ($before -notin @("200", "206")) {
-    throw "Website goc chua tra ve 200/206. Khong thay doi IIS."
-}
-
-# Sao luu IIS
-$backup = "TT_WEB_" + (Get-Date -Format "yyyyMMdd_HHmmss")
-
-& $appcmd add backup $backup | Out-Host
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Khong sao luu duoc IIS."
-}
-
-$created = $false
-
-try {
-    # Chuyen anh xa /tunertools sang thu muc moi
-    & $appcmd add vdir `
-        '/app.name:Default Web Site/' `
-        '/path:/tunertools' `
-        "/physicalPath:$target" | Out-Host
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong tao duoc Virtual Directory."
-    }
-
-    $created = $true
-
-    # Kiem tra sau khi chuyen
-    $after = Test-TTUrl $url
-
-    Write-Host "HTTP AFTER: $after"
-
-    if ($after -notin @("200", "206")) {
-        throw "Website moi khong hoat dong."
-    }
-
-    Write-Host "`nWEBSITE TUNERTOOLS CHUYEN THANH CONG" -ForegroundColor Green
-
-    # Kiem tra URL app-guides o cap goc
-    if ($encoded -like "app-guides/*") {
-        $guideUrl = "http://127.0.0.1/$encoded"
-        $guideStatus = Test-TTUrl $guideUrl
-
-        Write-Host "ROOT APP-GUIDES HTTP: $guideStatus"
-    }
-
-    & $appcmd list vdirs
-}
-catch {
-    Write-Host "LOI: $($_.Exception.Message)" -ForegroundColor Red
-
-    if ($created) {
-        & $appcmd delete vdir "Default Web Site/tunertools" | Out-Host
-        Write-Host "DA KHOI PHUC ANH XA IIS CU" -ForegroundColor Yellow
-    }
-
-    throw
-}
+WEBSITE TUNERTOOLS CHUYEN THANH CONG
+ROOT APP-GUIDES HTTP: 404
+VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
+VDIR "Default Web Site/tab" (physicalPath:C:\TunerTools\Data\GuitarPro)
+VDIR "Default Web Site/tunertools" (physicalPath:C:\TunerTools\Web\tunertools)
+PS C:\Users\Administrator>
