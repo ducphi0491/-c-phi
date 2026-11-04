@@ -1,6 +1,69 @@
-robocopy "C:\TunerToolsGP_Fresh" "C:\TunerTools\Tools\GP_Fresh" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:4 /TEE /LOG:"C:\TunerTools\Logs\copy_gp_fresh.log"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Write-Host "Robocopy exit code: $LASTEXITCODE"
+PS C:\Users\Administrator> robocopy "C:\TunerToolsGP_Fresh" "C:\TunerTools\Tools\GP_Fresh" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:4 /TEE /LOG:"C:\TunerTools\Logs\copy_gp_fresh.log"
+>>
+>> Write-Host "Robocopy exit code: $LASTEXITCODE"
+
+ Log File : C:\TunerTools\Logs\copy_gp_fresh.log
+
+-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows
+-------------------------------------------------------------------------------
+
+  Started : Wednesday, November 4, 2026 23:24:47
+   Source : C:\TunerToolsGP_Fresh\
+     Dest : C:\TunerTools\Tools\GP_Fresh\
+
+    Files : *.*
+
+  Options : *.* /TEE /S /E /DCOPY:DAT /COPY:DAT /Z /XJ /MT:4 /R:2 /W:2
+
+------------------------------------------------------------------------------
+
+100%        New File               39678        C:\TunerToolsGP_Fresh\api_gp_drive_onefile_v2.php
+100%        New File               39678        C:\TunerToolsGP_Fresh\api_gp_drive_onefile_v2.txt
+100%        New File                3447        C:\TunerToolsGP_Fresh\check_db.py
+100%        New File                6159        C:\TunerToolsGP_Fresh\Check_GitHub_Sheet_ReadOnly.ps1
+100%        New File                5080        C:\TunerToolsGP_Fresh\Check_TunerTools_IIS_Update_HTTP50x.ps1
+100%        New File                 405        C:\TunerToolsGP_Fresh\credentials.json
+100%        New File                 740        C:\TunerToolsGP_Fresh\drive_token.json
+100%        New File                 740        C:\TunerToolsGP_Fresh\drive_token_before_production.json
+100%        New File                 726        C:\TunerToolsGP_Fresh\drive_token_old_20261028.json
+100%        New File                 749        C:\TunerToolsGP_Fresh\drive_token_old_20261104.json
+100%        New File             673.0 m        C:\TunerToolsGP_Fresh\gp_fresh_1600000.db
+100%        New File               32768        C:\TunerToolsGP_Fresh\gp_fresh_1600000.db-shm
+100%        New File                   0        C:\TunerToolsGP_Fresh\gp_fresh_1600000.db-wal
+100%        New File             596.1 m        C:\TunerToolsGP_Fresh\gp_fresh_1600000_backup.db
+100%        New File                  43        C:\TunerToolsGP_Fresh\gp_kiem_tra_thieu_file.csv
+100%        New File               79997        C:\TunerToolsGP_Fresh\gp_sections.json
+100%        New File                2503        C:\TunerToolsGP_Fresh\HUONG_DAN_1_PHP_20261104.txt
+100%        New File               11519        C:\TunerToolsGP_Fresh\import_songsterr.py
+100%        New File                6255        C:\TunerToolsGP_Fresh\kiem_tra_file_truoc_upload.py
+100%        New File                   0        C:\TunerToolsGP_Fresh\py
+100%        New File                1512        C:\TunerToolsGP_Fresh\README_VI.txt
+100%        New File                  91        C:\TunerToolsGP_Fresh\requirements.txt
+100%        New File                5653        C:\TunerToolsGP_Fresh\songsterr_import_missing_samples.csv
+100%        New File               51549        C:\TunerToolsGP_Fresh\tt_gp_bulk.py
+100%        New File               28936        C:\TunerToolsGP_Fresh\tt_gp_bulk_old.py
+100%        New File               14273        C:\TunerToolsGP_Fresh\tt_gp_sections.py
+100%        New File               14273        C:\TunerToolsGP_Fresh\tt_gp_sections.txt
+100%        New File                 922        C:\TunerToolsGP_Fresh\TunerTools_HTTP50x_IIS_20261104_215315.txt
+100%        New File               44506        C:\TunerToolsGP_Fresh\__pycache__\tt_gp_bulk.cpython-311.pyc
+
+------------------------------------------------------------------------------
+
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Dirs :         2         2         1         0         0         0
+   Files :        29        29         0         0         0         0
+   Bytes :   1.239 g   1.239 g         0         0         0         0
+   Times :   0:00:02   0:00:00                       0:00:00   0:00:00
 
 
-C:\AI_Music\ChayNgam.vbs
+   Speed :           2820319478 Bytes/sec.
+   Speed :           161379.975 MegaBytes/min.
+   Ended : Wednesday, November 4, 2026 23:24:48
+
+Robocopy exit code: 1
+PS C:\Users\Administrator> C:\AI_Music\ChayNgam.vbs
+PS C:\Users\Administrator>
