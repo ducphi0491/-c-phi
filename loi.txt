@@ -1,16 +1,27 @@
-foreach ($profile in @("fluidr3", "musescore")) {
-    try {
-        $url = "https://tunertools.top/api_gp_search.php?action=soundfont_info&profile=$profile"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-        $result = Invoke-RestMethod -Uri $url -TimeoutSec 30
+PS C:\Users\Administrator> foreach ($profile in @("fluidr3", "musescore")) {
+>>     try {
+>>         $url = "https://tunertools.top/api_gp_search.php?action=soundfont_info&profile=$profile"
+>>
+>>         $result = Invoke-RestMethod -Uri $url -TimeoutSec 30
+>>
+>>         [PSCustomObject]@{
+>>             Profile = $profile
+>>             Success = $result.success
+>>             File    = $result.data.file_name
+>>         }
+>>     }
+>>     catch {
+>>         Write-Host "ERROR $profile : $($_.Exception.Message)"
+>>     }
+>> }
 
-        [PSCustomObject]@{
-            Profile = $profile
-            Success = $result.success
-            File    = $result.data.file_name
-        }
-    }
-    catch {
-        Write-Host "ERROR $profile : $($_.Exception.Message)"
-    }
-}
+Profile   Success File
+-------   ------- ----
+fluidr3      True FluidR3_GM.sf2
+musescore    True MuseScore_General.sf3
+
+
+PS C:\Users\Administrator>
