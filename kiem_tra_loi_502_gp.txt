@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Tuner Tools - non-destructive Google Drive API download diagnostic.
+
+Checks the public PHP health/search/file flow without changing SQLite,
+Google Drive files, OAuth tokens or Android app code. Prints only sanitized
+error labels, not OAuth secrets or entire server responses.
+
+Python 3.11+; standard library only.
+"""
+import argparse
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from urllib.parse import urlparse
+
+MAX_ERROR_BYTES = 8192
+MAX_SUCCESS_BYTES = 128
+
+
+def request(url, binary=False):
+    req = urllib.request.Request(
+        url,
+        headers={
+            'User-Agent': 'TunerTools-GP-502-Diagnostic/1.0',
+            'Accept': 'application/octet-stream' if binary else 'application/json',
+        },
+        method='GET',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=35) as response:
+            status = response.status
+            content_type = response.headers.get('Content-Type', '')
+            content = response.read(MAX_SUCCESS_BYTES if binary else 2_000_000)
+            return status, content_type, content
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get('Content-Type', ''), exc.read(MAX_ERROR_BYTES)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print('Network error:', type(exc).__name__, str(exc)[:220])
+        return 0, '', b''
+
+
+def safe_json(payload):
+    try:
+        return json.loads(payload.decode('utf-8-sig'))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def report_error(status, payload):
+    print('HTTP status:', status)
+    obj = safe_json(payload)
+    if isinstance(obj, dict):
+        for field in ('error', 'message', 'http_code'):
+            value = obj.get(field)
+            if isinstance(value, (str, int, float)):
+                print('PHP', field + ':', str(value)[:220])
+        # The current PHP API returns Google errors as encoded JSON text.
+        upstream = obj.get('google_response')
+        if isinstance(upstream, str):
+            gj = safe_json(upstream.encode('utf-8'))
+            if isinstance(gj, dict):
+                gerr = gj.get('error')
+                if isinstance(gerr, str):
+                    print('Google OAuth error:', gerr[:120])
+                elif isinstance(gerr, dict):
+                    print('Google API code:', gerr.get('code', '?'))
+                    # Reason is safe diagnostic metadata, no token or user info.
+                    errors = gerr.get('errors')
+                    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                        print('Google API reason:', str(errors[0].get('reason', '?'))[:120])
+                    if gerr.get('status'):
+                        print('Google API status:', str(gerr['status'])[:120])
+            # Never print raw Google response, it may contain private details.
+    else:
+        print('Error body is not JSON; the 502 may come from the hosting proxy/server.')
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Diagnose HTTP 502 when downloading GP files from a PHP API.')
+    ap.add_argument('--base-url', default='https://tuner.alwaysdata.net/api_gp_drive.php',
+                    help='Public api_gp_drive.php URL, without action= parameter')
+    ap.add_argument('--query', default='nightwish', help='Song keyword for a read-only search')
+    ap.add_argument('--file-url', default='', help='Optional exact file_url from the search result')
+    ap.add_argument('--primary', action='store_true', help='Use tunertools.top primary API format (q and section; no action=search)')
+    args = ap.parse_args()
+
+    base = args.base_url.split('?')[0].strip()
+    if not base.startswith('https://') and not base.startswith('http://'):
+        print('Invalid --base-url (must start with http:// or https://)')
+        return 2
+    host = urlparse(base).hostname
+    print('SERVER:', host)
+
+    print('\n=== 1. HEALTH ===')
+    health_url = base + '?action=health'
+    status, ctype, body = request(health_url)
+    health = safe_json(body)
+    if status == 200 and isinstance(health, dict):
+        for field in ('ok', 'database', 'songs_total', 'drive_ready', 'drive_pending',
+                      'token_file_exists', 'pdo_sqlite', 'curl'):
+            if field in health:
+                print(field + ':', health[field])
+        print('Note: health does NOT test whether the OAuth token can download a file.')
+    else:
+        report_error(status, body)
+        print('Stop: PHP health did not return an expected JSON object.')
+        return 1
+
+    file_url = args.file_url.strip()
+    if not file_url:
+        print('\n=== 2. SEARCH ===')
+        params = ({'q':args.query,'section':'quoc_te'} if args.primary
+                  else {'action':'search','q':args.query,'limit':3})
+        query = urllib.parse.urlencode(params)
+        status, ctype, body = request(base + '?' + query)
+        data = safe_json(body)
+        if status != 200 or not isinstance(data, (dict, list)):
+            report_error(status, body)
+            print('Stop: search failed.')
+            return 1
+        songs = (data if isinstance(data, list) else
+                 data.get('data') or data.get('songs') or data.get('results') or [])
+        print('results returned:', len(songs))
+        if not songs:
+            print('No results. Try --query with a different keyword.')
+            return 1
+        first = songs[0]
+        print('song ID:', first.get('id', '(missing)'))
+        print('format:', first.get('format', '(missing)'))
+        file_url = str(first.get('file_url') or '')
+        if not file_url:
+            file_url = str(first.get('download_url') or first.get('url') or '')
+        if not file_url:
+            print('Error: search result lacks file_url/download_url/url.')
+            return 1
+        file_url = urllib.parse.urljoin(base, file_url)
+
+    # Never print any query other than host and path: private parameters may exist.
+    parsed = urlparse(file_url)
+    if parsed.scheme not in ('http', 'https'):
+        print('Invalid file_url scheme.')
+        return 2
+    print('\n=== 3. DOWNLOAD ONE GP FILE ===')
+    print('Request destination:', parsed.netloc + parsed.path)
+    status, ctype, body = request(file_url, binary=True)
+    if status in (200, 206):
+        if body.startswith(b'<?xml') or body.startswith(b'{') or b'<html' in body[:80].lower():
+            print('HTTP', status, 'but response appears to be XML/JSON/HTML, not raw GP bytes.')
+            print('Content type:', ctype)
+            return 1
+        print('SUCCESS HTTP', status, '| content type:', ctype)
+        print('Received binary sample:', len(body), 'bytes')
+        print('This proves a sample API download works (not all songs).')
+        return 0
+    report_error(status, body)
+    if status == 502:
+        print('Likely PHP OAuth refresh failure or upstream Google Drive download failure.')
+    print('No tokens or credentials have been printed. Share this output if necessary.')
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
