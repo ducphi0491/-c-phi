@@ -1,16 +1,10 @@
-SELECT id, title, singerNames, slug, image_count
+SELECT id, title, slug, image_count, updatedAt
 FROM songs
-WHERE title LIKE '%Người Tình Mùa Đông%'
+WHERE title = 'Người Tình Mùa Đông'
   AND singerNames LIKE '%Hà Anh Tuấn%';
 
 
-cd C:\TunerToolsGP_Fresh
-
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_GitHub_Sheet_ReadOnly.ps1
-
-
-
-cd C:\TunerToolsGP_Fresh
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_GitHub_Sheet_ReadOnly.ps1
-
-aaa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
+SELECT change_id, song_id, operation, changed_at
+FROM song_sync_changes
+ORDER BY change_id DESC
+LIMIT 5;
