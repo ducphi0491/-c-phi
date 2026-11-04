@@ -1,94 +1,18 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$file = "C:\inetpub\wwwroot\api_gp_search.php"
 
-PS C:\Users\Administrator> Windows PowerShell
->> Copyright (C) Microsoft Corporation. All rights reserved.
->>
->> PS C:\Users\Administrator> $root = 'C:\inetpub\wwwroot'
->> >>
->> >> $files = @(
->> >>     Get-ChildItem $root -File |
->> >>     Where-Object { $_.Extension -in '.php', '.config', '.bat' }
->> >> )
->> >>
->> >> $files += @(
->> >>     Get-ChildItem "$root\tunertools" -Recurse -File |
->> >>     Where-Object { $_.Extension -in '.php', '.js', '.json', '.config' }
->> >> )
->> >>
->> >> $patterns = @(
->> >>     'C:\inetpub\wwwroot',
->> >>     'C:\\inetpub\\wwwroot',
->> >>     'tab/',
->> >>     'MuseScore_General.sf3',
->> >>     'FluidR3_GM.sf2'
->> >> )
->> >>
->> >> $matches = @($files | Select-String -SimpleMatch -Pattern $patterns)
->> >>
->> >> $matches |
->> >> Select-Object Path, LineNumber, Pattern |
->> >> Format-Table -AutoSize
->> >>
->> >> Write-Host "TONG SO VI TRI: $($matches.Count)"
->>
->> Path                                 LineNumber Pattern
->> ----                                 ---------- -------
->> C:\inetpub\wwwroot\api_documents.php          6 C:\inetpub\wwwroot
->> C:\inetpub\wwwroot\api_documents.php          9 C:\inetpub\wwwroot
->> C:\inetpub\wwwroot\api_documents.php         12 C:\inetpub\wwwroot
->> C:\inetpub\wwwroot\api_documents.php       2386 C:\\inetpub\\wwwroot
->> C:\inetpub\wwwroot\api_gp_search.php        415 FluidR3_GM.sf2
->> C:\inetpub\wwwroot\api_gp_search.php        420 MuseScore_General.sf3
->> C:\inetpub\wwwroot\api_gp_search.php        766 tab/
->> C:\inetpub\wwwroot\api_gp_search.php        853 tab/
->>
->>
->> TONG SO VI TRI: 8
->> PS C:\Users\Administrator>
-At line:17 char:29
-+ >>     'C:\inetpub\wwwroot',
-+                             ~
-Missing expression after ',' in pipeline element.
-At line:18 char:30
-+ >>     'C:\\inetpub\\wwwroot',
-+                              ~
-Missing argument in parameter list.
-At line:19 char:1
-+ >>     'tab/',
-+ ~~~~~~~~~~~~~
-The output stream for this command is already redirected.
-At line:19 char:14
-+ >>     'tab/',
-+              ~
-Missing argument in parameter list.
-At line:20 char:1
-+ >>     'MuseScore_General.sf3',
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The output stream for this command is already redirected.
-At line:20 char:31
-+ >>     'MuseScore_General.sf3',
-+                               ~
-Missing argument in parameter list.
-At line:21 char:1
-+ >>     'FluidR3_GM.sf2'
-+ ~~~~~~~~~~~~~~~~~~~~~~~
-The output stream for this command is already redirected.
-At line:33 char:56
-+ ----                                 ---------- -------
-+                                                        ~
-Missing expression after unary operator '-'.
-At line:34 char:1
-+ C:\inetpub\wwwroot\api_documents.php          6 C:\inetpub\wwwroot
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Unexpected token 'C:\inetpub\wwwroot\api_documents.php' in expression or statement.
-At line:33 char:3
-+ ----                                 ---------- -------
-+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The '--' operator works only on variables or on properties.
-Not all parse errors were reported.  Correct the reported errors and try again.
-    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
-    + FullyQualifiedErrorId : MissingExpression
-
-PS C:\Users\Administrator>
-
+Select-String -Path $file -SimpleMatch -Pattern @(
+    '__DIR__',
+    'DOCUMENT_ROOT',
+    'realpath',
+    'dirname(',
+    'file_name',
+    'soundfont',
+    'tabRoot',
+    'tabDir'
+) |
+Where-Object {
+    $_.Line -notmatch '(?i)password|token|secret|api_key|authorization'
+} |
+Select-Object LineNumber,
+@{Name="Code";Expression={$_.Line.Trim()}} |
+Format-Table -AutoSize -Wrap
