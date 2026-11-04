@@ -10,14 +10,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_GitHub_Sheet_ReadOnl
 
 
 
-
-PS C:\TunerToolsGP_Fresh> cd C:\TunerToolsGP_Fresh
->>
->> powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_GitHub_Sheet_ReadOnly.ps1
-TunerTools - GitHub sheet READ-ONLY check
-Time: 2026-11-04 22:12:37
-PHP: C:\inetpub\wwwroot\api_songs.php
-Repository: ducphi0491/sheet_images branch=main
-GitHub token is never shown or saved.
-Repo GET: HTTP=401 message=Bad credentials network=
-Enter FULL slug from MySQL for the song (Enter to skip image check):
+cd C:\TunerToolsGP_Fresh
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Check_GitHub_Sheet_ReadOnly.ps1
