@@ -18,3 +18,8 @@ alwaysdata.net
 
 	https://tunertools.top/
 
+
+
+cd /d C:\TunerToolsGP_Fresh
+ren drive_token.json drive_token_before_production.json
+py tt_gp_bulk.py auth
