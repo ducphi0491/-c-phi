@@ -15,3 +15,10 @@ foreach ($name in $names) {
         Identical = ($hash1 -eq $hash2)
     }
 }
+
+
+Get-Content "C:\AI_Music\ChayNgam.vbs"
+
+
+Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue |
+Select-Object LocalAddress, LocalPort, OwningProcess
