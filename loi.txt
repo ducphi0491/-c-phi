@@ -1,62 +1,29 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$files = @(
+    "C:\inetpub\wwwroot\api_gp_search.php",
+    "C:\inetpub\wwwroot\api_songs.php"
+)
 
-PS C:\Users\Administrator> $file = "C:\inetpub\wwwroot\api_gp_search.php"
->> $lines = Get-Content -LiteralPath $file
->>
->> $positions = @(415, 420, 766, 853)
->>
->> foreach ($n in $positions) {
->>     Write-Host "`n========== DONG $n ==========" -ForegroundColor Cyan
->>
->>     $start = [Math]::Max(1, $n - 3)
->>     $end = [Math]::Min($lines.Count, $n + 3)
->>
->>     for ($i = $start; $i -le $end; $i++) {
->>         $content = $lines[$i - 1]
->>
->>         if ($content -match '(?i)token|password|secret|api_key|authorization') {
->>             $content = "[DA AN DONG NHAY CAM]"
->>         }
->>
->>         Write-Host "${i}: $content"
->>     }
->> }
+foreach ($file in $files) {
+    Write-Host "`nFILE: $file" -ForegroundColor Cyan
 
-========== DONG 415 ==========
-412:         'fluidr3' => [
-413:             'id' => 'fluidr3_gm',
-414:             'display_name' => 'FluidR3 GM',
-415:             'file_name' => 'FluidR3_GM.sf2'
-416:         ],
-417:         'musescore' => [
-418:             'id' => 'musescore_general',
-
-========== DONG 420 ==========
-417:         'musescore' => [
-418:             'id' => 'musescore_general',
-419:             'display_name' => 'MuseScore General',
-420:             'file_name' => 'MuseScore_General.sf3'
-421:         ]
-422:     ];
-423: }
-
-========== DONG 766 ==========
-763:         ttgp_json_exit([
-764:             'data' => [],
-765:             'meta' => ['section' => 'nhac_viet', 'view' => 'folder', 'count' => 0],
-766:             'error' => 'KhÃ´ng tÃ¬m tháº¥y thÆ° má»¥c tab/Vietnam trÃªn mÃ¡y chá»§.'
-767:         ], 404);
-768:     }
-769:
-
-========== DONG 853 ==========
-850:         ttgp_json_exit([
-851:             'data' => [],
-852:             'meta' => ['section' => 'dieu_nhac', 'view' => $rhythmName === '' ? 'folders' : 'files', 'count' => 0],
-853:             'error' => 'KhÃ´ng tÃ¬m tháº¥y thÆ° má»¥c tab/dieu_dem_nhac trÃªn mÃ¡y chá»§.'
-854:         ], 404);
-855:     }
-856:
-PS C:\Users\Administrator>
-
+    Select-String -Path $file -Pattern `
+        '__DIR__',
+        'DOCUMENT_ROOT',
+        'realpath',
+        'file_name',
+        'DIRECTORY_SEPARATOR',
+        'Vietnam',
+        'dieu_dem_nhac',
+        'SoundFont' |
+    Select-Object LineNumber, @{
+        Name = 'Code'
+        Expression = {
+            if ($_.Line -match '(?i)password|token|secret|api.?key|authorization') {
+                '[HIDDEN]'
+            } else {
+                $_.Line.Trim()
+            }
+        }
+    } |
+    Format-Table -AutoSize -Wrap
+}
