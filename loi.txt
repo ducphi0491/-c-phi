@@ -1,92 +1,26 @@
->>         Write-Host "`n========================================" -ForegroundColor Cyan
->>         Write-Host "THU MUC: $path" -ForegroundColor Yellow
->>         Write-Host "========================================"
->>
->>         $folders = @(Get-ChildItem -LiteralPath $path -Directory -Force -ErrorAction SilentlyContinue)
->>
->>         $folders |
->>             Sort-Object Name |
->>             Select-Object Name, FullName |
->>             Format-Table -AutoSize
->>
->>         Write-Host "TONG SO THU MUC CAP 1: $($folders.Count)" -ForegroundColor Green
->>     }
->> }
+$root = "C:\TunerTools"
 
-========================================
-THU MUC: C:\
-========================================
+$folders = @(
+    "Web",
+    "Data",
+    "Data\GuitarPro",
+    "Audio",
+    "Audio\METRONOME",
+    "Audio\DRUM",
+    "Audio\CHORD_AI",
+    "Audio\AI_MODELS",
+    "Tools",
+    "Tools\GP_Fresh",
+    "Cache",
+    "Backups",
+    "Logs"
+)
 
-Name                      FullName
-----                      --------
-$Recycle.Bin              C:\$Recycle.Bin
-AI_Music                  C:\AI_Music
-AudioSheet-Demucs-Toolkit C:\AudioSheet-Demucs-Toolkit
-AudioSheetStudio          C:\AudioSheetStudio
-audio-sheet-studio        C:\audio-sheet-studio
-Boot                      C:\Boot
-Cloudflared               C:\Cloudflared
-Documents and Settings    C:\Documents and Settings
-ffmpeg                    C:\ffmpeg
-inetpub                   C:\inetpub
-MeloWareTURN              C:\MeloWareTURN
-MSOCache                  C:\MSOCache
-OKDOS                     C:\OKDOS
-PerfLogs                  C:\PerfLogs
-php                       C:\php
-Program Files             C:\Program Files
-Program Files (x86)       C:\Program Files (x86)
-ProgramData               C:\ProgramData
-Recovery                  C:\Recovery
-System Volume Information C:\System Volume Information
-tmp                       C:\tmp
-TunerToolsGP_Fresh        C:\TunerToolsGP_Fresh
-Uninstall..               C:\Uninstall..
-Users                     C:\Users
-Windows                   C:\Windows
+foreach ($folder in $folders) {
+    $path = Join-Path $root $folder
+    New-Item -Path $path -ItemType Directory -Force |
+        Out-Null
+}
 
-
-TONG SO THU MUC CAP 1: 25
-
-========================================
-THU MUC: C:\inetpub\wwwroot
-========================================
-
-Name                 FullName
-----                 --------
-aspnet_client        C:\inetpub\wwwroot\aspnet_client
-document             C:\inetpub\wwwroot\document
-document_cache       C:\inetpub\wwwroot\document_cache
-guitar_HD            C:\inetpub\wwwroot\guitar_HD
-hall                 C:\inetpub\wwwroot\hall
-img_sys              C:\inetpub\wwwroot\img_sys
-libs                 C:\inetpub\wwwroot\libs
-melowave             C:\inetpub\wwwroot\melowave
-support_chat_uploads C:\inetpub\wwwroot\support_chat_uploads
-tab                  C:\inetpub\wwwroot\tab
-tunertools           C:\inetpub\wwwroot\tunertools
-
-
-TONG SO THU MUC CAP 1: 11
-
-========================================
-THU MUC: C:\AI_Music
-========================================
-
-Name          FullName
-----          --------
-AI_MODELS     C:\AI_Music\AI_MODELS
-audio_cache   C:\AI_Music\audio_cache
-CHORD_AI      C:\AI_Music\CHORD_AI
-DRUM          C:\AI_Music\DRUM
-MDX_TEMP      C:\AI_Music\MDX_TEMP
-METRONOME     C:\AI_Music\METRONOME
-VR_TEMP       C:\AI_Music\VR_TEMP
-YOUTUBE_CACHE C:\AI_Music\YOUTUBE_CACHE
-ZING_AUDIO    C:\AI_Music\ZING_AUDIO
-ZING_JSON     C:\AI_Music\ZING_JSON
-
-
-TONG SO THU MUC CAP 1: 10
-PS C:\Users\Administrator>
-
+Get-ChildItem $root -Directory -Recurse |
+    Select-Object FullName
