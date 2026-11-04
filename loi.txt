@@ -1,57 +1,59 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
-PS C:\Users\Administrator> # Kiem tra file GP da chon co ton tai hay khong
->> Test-Path -LiteralPath $file.FullName
->>
->> # Thu tai file bang GET thay vi HEAD
->> curl.exe -sS -L -r 0-0 -o NUL `
->>     -w "GET HTTP STATUS: %{http_code}`n" `
->>     "$url"
->>
->> # Doc nhat ky IIS
->> $log = Get-ChildItem "C:\inetpub\logs\LogFiles" `
->>     -Recurse -File -Filter "*.log" |
->>     Sort-Object LastWriteTime -Descending |
->>     Select-Object -First 1
->>
->> Write-Host "IIS LOG: $($log.FullName)"
->>
->> Get-Content $log.FullName -Tail 5000 |
->>     Where-Object { $_ -match '\s(HEAD|GET)\s/tab/' } |
->>     Select-Object -Last 10
-Test-Path : Cannot bind argument to parameter 'LiteralPath' because it is null.
-At line:2 char:24
-+ Test-Path -LiteralPath $file.FullName
-+                        ~~~~~~~~~~~~~~
-    + CategoryInfo          : InvalidData: (:) [Test-Path], ParameterBindingValidationException
-    + FullyQualifiedErrorId : ParameterArgumentValidationErrorNullNotAllowed,Microsoft.PowerShell.Commands.TestPathCom
-   mand
+$backup = "TT_TAB_40411_" + (Get-Date -Format "yyyyMMdd_HHmmss")
 
-curl: (2) no URL specified
-curl: try 'curl --help' for more information
-IIS LOG: C:\inetpub\logs\LogFiles\W3SVC1\u_ex261104.log
-2026-11-04 18:08:08 192.168.1.179 HEAD /tab/+/+caro/+caro+-+Todo+Es+Por+Nada.gp4 - 80 - 192.168.1.179 Mozilla/5.0+(Windows+NT;+Windows+NT+10.0;+en-US)+WindowsPowerShell/5.1.17763.8385 - 404 11 0 219 551 3
-PS C:\Users\Administrator> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
->>
->> & $appcmd set config "Default Web Site/tab" `
->>     /section:system.webServer/staticContent `
->>     "/+[fileExtension='.gp3',mimeType='application/octet-stream']"
->>
->> & $appcmd set config "Default Web Site/tab" `
->>     /section:system.webServer/staticContent `
->>     "/+[fileExtension='.gp4',mimeType='application/octet-stream']"
->>
->> & $appcmd set config "Default Web Site/tab" `
->>     /section:system.webServer/staticContent `
->>     "/+[fileExtension='.gp5',mimeType='application/octet-stream']"
->>
->> & $appcmd set config "Default Web Site/tab" `
->>     /section:system.webServer/staticContent `
->>     "/+[fileExtension='.gpx',mimeType='application/octet-stream']"
-Applied configuration changes to section "system.webServer/staticContent" for "MACHINE/WEBROOT/APPHOST/Default Web Site/tab" at configuration commit path "MACHINE/WEBROOT/APPHOST/Default Web Site/tab"
-Applied configuration changes to section "system.webServer/staticContent" for "MACHINE/WEBROOT/APPHOST/Default Web Site/tab" at configuration commit path "MACHINE/WEBROOT/APPHOST/Default Web Site/tab"
-Applied configuration changes to section "system.webServer/staticContent" for "MACHINE/WEBROOT/APPHOST/Default Web Site/tab" at configuration commit path "MACHINE/WEBROOT/APPHOST/Default Web Site/tab"
-Applied configuration changes to section "system.webServer/staticContent" for "MACHINE/WEBROOT/APPHOST/Default Web Site/tab" at configuration commit path "MACHINE/WEBROOT/APPHOST/Default Web Site/tab"
-PS C:\Users\Administrator>
+& $appcmd add backup $backup
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong sao luu duoc IIS"
+}
 
+& $appcmd set config "Default Web Site/tab" `
+    /section:system.webServer/security/requestFiltering `
+    /allowDoubleEscaping:true `
+    /commit:apphost
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Cap nhat IIS that bai"
+}
+
+& $appcmd list config "Default Web Site/tab" `
+    /section:system.webServer/security/requestFiltering
+
+2......................
+$root = "C:\TunerTools\Data\GuitarPro"
+$plusDir = Join-Path $root "+"
+
+if (-not (Test-Path -LiteralPath $plusDir)) {
+    throw "Khong tim thay thu muc +"
+}
+
+$file = Get-ChildItem -LiteralPath $plusDir -Recurse -File |
+    Where-Object { $_.Extension -in ".gp3", ".gp4", ".gp5", ".gpx" } |
+    Select-Object -First 1
+
+if (-not $file) {
+    throw "Khong tim thay file GP de kiem tra"
+}
+
+$relative = $file.FullName.Substring($root.Length).TrimStart('\')
+
+$encoded = (($relative -split '\\') |
+    ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+
+$url = "https://tunertools.top/tab/$encoded"
+
+Write-Host "FILE EXISTS: $(Test-Path -LiteralPath $file.FullName)"
+Write-Host "TEST URL: $url"
+
+curl.exe -sS -L -r 0-0 -o NUL `
+    -w "GP HTTP STATUS: %{http_code}`n" `
+    "$url"
+
+
+
+3...............
+& "$env:windir\System32\inetsrv\appcmd.exe" `
+    set config "Default Web Site/tab" `
+    /section:system.webServer/security/requestFiltering `
+    /allowDoubleEscaping:false `
+    /commit:apphost
