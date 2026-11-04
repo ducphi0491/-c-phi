@@ -1,25 +1,82 @@
-$source = "C:\inetpub\wwwroot"
-$target = "C:\TunerTools\Web\API"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-New-Item -ItemType Directory -Path $target -Force | Out-Null
+PS C:\Users\Administrator> Windows PowerShell
+>> Copyright (C) Microsoft Corporation. All rights reserved.
+>>
+>> PS C:\Users\Administrator> Get-Process robocopy -ErrorAction SilentlyContinue |
+>> >> Select-Object Id, StartTime
+>> >>
+>> >> Get-PSDrive C |
+>> >> Select-Object Name,
+>> >> @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
+>> >>
+>> >> Get-Content "C:\TunerTools\Logs\copy_guitarpro.log" -Tail 15
+>>
+>> Name FreeGB
+>> ---- ------
+>> C     51.39
+>>
+>> -------------------------------------------------------------------------------
+>>    ROBOCOPY     ::     Robust File Copy for Windows
+>> -------------------------------------------------------------------------------
+>>
+>>   Started : Thursday, November 5, 2026 0:26:50
+>>    Source : C:\inetpub\wwwroot\tab\
+>>      Dest : C:\TunerTools\Data\GuitarPro\
+>>
+>>     Files : *.*
+>>
+>>   Options : *.* /NDL /NFL /TEE /S /E /DCOPY:DAT /COPY:DAT /Z /NP /XJ /MT:8 /R:2 /W:2
+>>
+>> ------------------------------------------------------------------------------
+>>
+>>
+>> PS C:\Users\Administrator>
+At line:8 char:23
++ >> Select-Object Name,
++                       ~
+Missing expression after ',' in pipeline element.
+At line:14 char:12
++ ---- ------
++            ~
+Missing expression after unary operator '--'.
+At line:15 char:1
++ C     51.39
++ ~
+Unexpected token 'C' in expression or statement.
+At line:17 char:80
++ ... ---------------------------------------------------------------------
++                                                                          ~
+Missing expression after unary operator '-'.
+At line:18 char:4
++    ROBOCOPY     ::     Robust File Copy for Windows
++    ~~~~~~~~
+Unexpected token 'ROBOCOPY' in expression or statement.
+At line:19 char:80
++ ... ---------------------------------------------------------------------
++                                                                          ~
+Missing expression after unary operator '-'.
+At line:21 char:3
++   Started : Thursday, November 5, 2026 0:26:50
++   ~~~~~~~
+Unexpected token 'Started' in expression or statement.
+At line:29 char:79
++ ... ---------------------------------------------------------------------
++                                                                          ~
+Missing expression after unary operator '--'.
+At line:32 char:1
++ PS C:\Users\Administrator>
++ ~~
+Unexpected token 'PS' in expression or statement.
+At line:14 char:3
++ ---- ------
++   ~~~~~~~~~
+The '--' operator works only on variables or on properties.
+Not all parse errors were reported.  Correct the reported errors and try again.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingExpression
 
-$files = @(
-    "api_songs.php",
-    "api_gp_search.php",
-    "api_AI.bat"
-)
+PS C:\Users\Administrator>
 
-foreach ($file in $files) {
-    $old = Join-Path $source $file
-    $new = Join-Path $target $file
 
-    Copy-Item -LiteralPath $old -Destination $new -Force -ErrorAction Stop
-
-    $hashOld = (Get-FileHash $old -Algorithm SHA256).Hash
-    $hashNew = (Get-FileHash $new -Algorithm SHA256).Hash
-
-    [PSCustomObject]@{
-        File = $file
-        Identical = ($hashOld -eq $hashNew)
-    }
-}
