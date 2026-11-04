@@ -1,1 +1,5 @@
-GEMINI_MODEL=gemini-3.5-flash-lite
+cd /d C:\TunerToolsGP_Fresh
+py kiem_tra_loi_502_gp.txt
+
+
+py kiem_tra_loi_502_gp.txt --base-url "https://tunertools.top/api_gp_search.php" --primary
