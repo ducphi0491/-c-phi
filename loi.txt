@@ -1,25 +1,3 @@
-$source = "C:\inetpub\wwwroot"
-$target = "C:\TunerTools\Web\API"
-
-New-Item -ItemType Directory -Path $target -Force | Out-Null
-
-$files = @(
-    "api_songs.php",
-    "api_gp_search.php",
-    "api_AI.bat"
-)
-
-foreach ($file in $files) {
-    $src = Join-Path $source $file
-    $dst = Join-Path $target $file
-
-    Copy-Item -LiteralPath $src -Destination $dst -Force
-
-    [PSCustomObject]@{
-        File = $file
-        Identical = (
-            (Get-FileHash $src).Hash -eq
-            (Get-FileHash $dst).Hash
-        )
-    }
-}
+Get-ChildItem "C:\inetpub\wwwroot" -File |
+Select-Object Name, Extension |
+Format-Table -AutoSize
