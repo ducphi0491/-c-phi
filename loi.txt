@@ -1,200 +1,27 @@
-$ErrorActionPreference = "Stop"
-
-$src = "C:\inetpub\wwwroot\support_chat_uploads"
-$dst = "C:\TunerTools\Data\support_chat_uploads"
-$apiDir = "C:\TunerTools\Web\API"
-$backupDir = "C:\TunerTools\Backups"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
-$phpExe = "C:\php\php.exe"
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$enc = [Text.Encoding]::GetEncoding(28591)
-
-if (!(Test-Path -LiteralPath $src -PathType Container)) {
-    throw "Thieu thu muc upload goc"
-}
-if (!(Test-Path -LiteralPath $dst -PathType Container)) {
-    throw "Thieu thu muc upload moi"
-}
-
-$vdirs = & $appcmd list vdirs | Out-String
-if ($LASTEXITCODE -ne 0) { throw "Khong doc duoc IIS" }
-if ($vdirs -match 'VDIR "Default Web Site/support_chat_uploads"') {
-    throw "IIS da co /support_chat_uploads. Khong ghi de."
-}
-
-# Chuan bi PHP, chua sua file dang chay
-$oldPaths = @(
-    '$baseDir = ''C:/inetpub/wwwroot'' . DIRECTORY_SEPARATOR . ''support_chat_uploads'';',
-    '$baseDir = __DIR__ . DIRECTORY_SEPARATOR . ''support_chat_uploads'';'
+$folders = @(
+    @{
+        Name = "THU MUC MOI"
+        Path = "C:\TunerTools\Data\support_chat_uploads"
+    },
+    @{
+        Name = "THU MUC CU"
+        Path = "C:\inetpub\wwwroot\support_chat_uploads"
+    }
 )
-$newPath = '$baseDir = ''C:/TunerTools/Data/support_chat_uploads'';'
 
-$staged = @{}
-$backups = @{}
+foreach ($folder in $folders) {
+    $files = @(Get-ChildItem -LiteralPath $folder.Path -Recurse -File)
+    $latest = $files |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
 
-foreach ($name in @("api_gp_search.php", "api_songs.php")) {
-    $path = Join-Path $apiDir $name
-    $code = $enc.GetString([IO.File]::ReadAllBytes($path))
-
-    $matches = @($oldPaths | Where-Object { $code.Contains($_) })
-    if ($matches.Count -ne 1) {
-        throw "Khong xac dinh duoc duong dan cu trong $name"
-    }
-
-    $old = $matches[0]
-    $count = ([regex]::Matches($code, [regex]::Escape($old))).Count
-    if ($count -ne 1) {
-        throw "So vi tri bat thuong trong $name : $count"
-    }
-
-    $stage = Join-Path $backupDir "$name.stage_$stamp.php"
-    $backup = Join-Path $backupDir "$name.before_upload_$stamp.bak"
-
-    [IO.File]::WriteAllBytes(
-        $stage,
-        $enc.GetBytes($code.Replace($old, $newPath))
-    )
-
-    & $phpExe -l $stage
-    if ($LASTEXITCODE -ne 0) {
-        throw "PHP khong hop le: $name"
-    }
-
-    Copy-Item $path $backup -ErrorAction Stop
-    $staged[$name] = $stage
-    $backups[$name] = $backup
-}
-
-# Dong bo lan cuoi, khong xoa thu muc cu
-& robocopy.exe $src $dst /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
-if ($LASTEXITCODE -ge 8) { throw "Dong bo upload that bai" }
-
-$files = @(Get-ChildItem -LiteralPath $src -Recurse -File)
-$destFiles = @(Get-ChildItem -LiteralPath $dst -Recurse -File)
-
-if ($files.Count -ne $destFiles.Count) {
-    throw "So file upload khong khop"
-}
-
-foreach ($f in $files) {
-    $rel = $f.FullName.Substring($src.Length).TrimStart('\')
-    $other = Join-Path $dst $rel
-
-    if (!(Test-Path -LiteralPath $other -PathType Leaf)) {
-        throw "Thieu file upload"
-    }
-    if ((Get-FileHash -LiteralPath $f.FullName).Hash -ne
-        (Get-FileHash -LiteralPath $other).Hash) {
-        throw "File upload khac nhau"
-    }
-}
-
-Write-Host "UPLOAD VERIFIED: $($files.Count) FILES" -ForegroundColor Green
-
-# Cap quyen ghi cho IIS DefaultAppPool tai thu muc upload
-& icacls.exe $dst /grant 'IIS AppPool\DefaultAppPool:(OI)(CI)M'
-if ($LASTEXITCODE -ne 0) { throw "Khong cap duoc quyen upload" }
-
-# Sao luu cau hinh IIS
-$iisBackup = "TT_UPLOAD_$stamp"
-& $appcmd add backup $iisBackup
-if ($LASTEXITCODE -ne 0) { throw "Khong backup duoc IIS" }
-
-$created = $false
-$updated = @()
-$probe = $null
-
-try {
-    # Giu URL cu, doi thu muc vat ly
-    & $appcmd add vdir `
-        '/app.name:Default Web Site/' `
-        '/path:/support_chat_uploads' `
-        "/physicalPath:$dst"
-
-    if ($LASTEXITCODE -ne 0) { throw "Tao IIS vdir that bai" }
-    $created = $true
-
-    # Khong cho thuc thi script trong thu muc upload
-    & $appcmd set config "Default Web Site/support_chat_uploads" `
-        /section:system.webServer/handlers `
-        /accessPolicy:Read `
-        /commit:apphost
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Khong thiet lap duoc handler Read"
-    }
-
-    # Kiem tra URL bang file tam do script tao
-    $probeName = "__tt_test_$([guid]::NewGuid().ToString('N')).txt"
-    $probe = Join-Path $dst $probeName
-    [IO.File]::WriteAllText($probe, "TT TEST")
-
-    $testUrl = "http://127.0.0.1/support_chat_uploads/$probeName"
-
-    $status = (& curl.exe -sS --max-time 20 -o NUL `
-        -H "Host: tunertools.top" `
-        -w "%{http_code}" "$testUrl" | Out-String).Trim()
-
-    Write-Host "UPLOAD URL HTTP: $status"
-
-    if ($LASTEXITCODE -ne 0 -or $status -ne "200") {
-        throw "URL upload moi khong hoat dong"
-    }
-
-    # Chuyen duong dan doc/ghi trong 2 PHP
-    foreach ($name in @("api_gp_search.php", "api_songs.php")) {
-        $path = Join-Path $apiDir $name
-        Copy-Item $staged[$name] $path -Force -ErrorAction Stop
-        $updated += $name
-
-        & $phpExe -l $path
-        if ($LASTEXITCODE -ne 0) {
-            throw "Loi PHP sau cap nhat: $name"
+    [PSCustomObject]@{
+        Folder = $folder.Name
+        Files = $files.Count
+        LastUpdated = if ($latest) {
+            $latest.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+        } else {
+            "-"
         }
-    }
-
-    # Kiem tra API Guitar Pro
-    $gpUrl = "http://127.0.0.1/api_gp_search.php?action=soundfont_info&profile=musescore"
-    $gpResponse = & curl.exe -fsS --max-time 30 `
-        -H "Host: tunertools.top" "$gpUrl"
-
-    if ($LASTEXITCODE -ne 0) { throw "API GP khong phan hoi" }
-    $gpResult = ($gpResponse -join "`n") | ConvertFrom-Json
-
-    if ($gpResult.success -ne $true) {
-        throw "API GP tra ve loi"
-    }
-
-    # Kiem tra phan hoi JSON co ban cua API Songs
-    $songUrl = "http://127.0.0.1/api_songs.php?action=__tt_migration_check"
-    $songResponse = & curl.exe -sS --max-time 30 `
-        -H "Host: tunertools.top" "$songUrl"
-
-    if ($LASTEXITCODE -ne 0) { throw "API Songs khong phan hoi" }
-    $null = ($songResponse -join "`n") | ConvertFrom-Json -ErrorAction Stop
-
-    Write-Host ""
-    Write-Host "SUPPORT CHAT UPLOAD MIGRATION OK" -ForegroundColor Green
-    Write-Host "API GP: OK"
-    Write-Host "API Songs JSON: OK"
-    Write-Host "Upload folder: $dst"
-}
-catch {
-    Write-Host "LOI: $($_.Exception.Message)" -ForegroundColor Red
-
-    foreach ($name in $updated) {
-        Copy-Item $backups[$name] (Join-Path $apiDir $name) -Force
-    }
-
-    if ($created) {
-        & $appcmd delete vdir "Default Web Site/support_chat_uploads"
-    }
-
-    Write-Host "DA THU KHOI PHUC PHP VA IIS" -ForegroundColor Yellow
-    throw
-}
-finally {
-    if ($probe -and (Test-Path -LiteralPath $probe)) {
-        Remove-Item -LiteralPath $probe -Force
     }
 }
