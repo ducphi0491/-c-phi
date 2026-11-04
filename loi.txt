@@ -28,3 +28,40 @@ Invoke-RestMethod http://127.0.0.1:5000/
 
 
 .\Move-TunerTools.ps1 -Area AI -Action Rollback -AllowAIStop
+
+
+
+
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> cd C:\TunerTools\Tools\Migration
+>> Set-ExecutionPolicy -Scope Process Bypass -Force
+>>
+>> $tokens = $null
+>> $errors = $null
+>>
+>> [void][System.Management.Automation.Language.Parser]::ParseFile(
+>>     ".\Move-TunerTools.ps1",
+>>     [ref]$tokens,
+>>     [ref]$errors
+>> )
+>>
+>> $errors
+cd : Cannot find path 'C:\TunerTools\Tools\Migration' because it does not exist.
+At line:1 char:1
++ cd C:\TunerTools\Tools\Migration
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\TunerTools\Tools\Migration:String) [Set-Location], ItemNotFoundExcep
+   tion
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.SetLocationCommand
+
+
+Extent                                                  ErrorId       Message
+------                                                  -------       -------
+System.Management.Automation.Language.EmptyScriptExtent FileReadError The file could not be read: Could not find fil...
+
+
+PS C:\Users\Administrator>
+
