@@ -1,81 +1,151 @@
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $root = "C:\inetpub\wwwroot"
->>
->> $names = @("guitar_HD", "img_sys", "libs")
->>
->> Write-Host "`n=== DUNG LUONG DU LIEU ===" -ForegroundColor Cyan
->>
->> foreach ($name in $names) {
->>     $path = Join-Path $root $name
->>
->>     $stats = Get-ChildItem -LiteralPath $path -Recurse -File |
->>         Measure-Object -Property Length -Sum
->>
->>     [PSCustomObject]@{
->>         Folder = $name
->>         Files = $stats.Count
->>         SizeMB = [math]::Round($stats.Sum / 1MB, 2)
->>     }
->> }
->>
->> Write-Host "`n=== KIEM TRA URL ===" -ForegroundColor Cyan
->>
->> $urls = @(
->>     "/guitar_HD/course_index.json",
->>     "/libs/guitar.json",
->>     "/libs/piano.json",
->>     "/libs/ukulele.json",
->>     "/img_sys/logo.png"
->> )
->>
->> foreach ($path in $urls) {
->>     $url = "http://127.0.0.1$path"
->>
->>     $status = & curl.exe -sS --max-time 15 `
->>         -H "Host: tunertools.top" `
->>         -r 0-0 -o NUL `
->>         -w "%{http_code}" "$url"
->>
->>     [PSCustomObject]@{
->>         URL = $path
->>         HTTP = $status
->>     }
->> }
->>
->> Write-Host "`n=== KIEM TRA AI MOI ===" -ForegroundColor Cyan
->>
->> @(
->>     "C:\TunerTools\Audio\AI_Music\app.py",
->>     "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs"
->> ) | ForEach-Object {
->>     [PSCustomObject]@{
->>         File = $_
->>         Exists = Test-Path -LiteralPath $_
->>     }
->> }
->>
->> Write-Host "`nKIEM TRA HOAN TAT" -ForegroundColor Green
+$root = "C:\inetpub\wwwroot"
+$newRoot = "C:\TunerTools\Web"
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
-=== DUNG LUONG DU LIEU ===
+$names = @("guitar_HD", "libs", "img_sys")
 
+function Get-HttpStatus {
+    param([string]$RelativeUrl)
 
-=== KIEM TRA URL ===
+    $url = "http://127.0.0.1/$RelativeUrl"
 
-=== KIEM TRA AI MOI ===
+    $status = (& curl.exe -sS --max-time 20 `
+        -H "Host: tunertools.top" `
+        -r 0-0 -o NUL `
+        -w "%{http_code}" "$url" | Out-String).Trim()
 
-KIEM TRA HOAN TAT
-Folder    Files SizeMB
-------    ----- ------
-guitar_HD    18    0.2
-img_sys      10   9.28
-libs          3   1.05
+    if ($LASTEXITCODE -ne 0) {
+        throw "Khong goi duoc URL: $RelativeUrl"
+    }
 
+    return $status
+}
 
+# Kiem tra URL truoc khi chuyen
+$tests = @(
+    "guitar_HD/course_index.json",
+    "libs/guitar.json"
+)
 
+foreach ($test in $tests) {
+    $status = Get-HttpStatus $test
+    Write-Host "BEFORE /${test}: HTTP $status"
 
+    if ($status -notin @("200", "206")) {
+        throw "URL goc chua hoat dong. Khong chuyen IIS."
+    }
+}
 
+# Sao chep va xac minh tat ca file
+foreach ($name in $names) {
+    $source = Join-Path $root $name
+    $target = Join-Path $newRoot $name
 
+    if (!(Test-Path -LiteralPath $source -PathType Container)) {
+        throw "Thieu thu muc: $source"
+    }
 
+    New-Item -ItemType Directory -Path $target -Force | Out-Null
 
+    & robocopy.exe $source $target /E /COPY:DAT /DCOPY:DAT `
+        /R:2 /W:1 /NFL /NDL /NP | Out-Null
 
-PS C:\Users\Administrator>
+    if ($LASTEXITCODE -ge 8) {
+        throw "Loi sao chep: $name"
+    }
+
+    $files = @(Get-ChildItem -LiteralPath $source -Recurse -File)
+    $destFiles = @(Get-ChildItem -LiteralPath $target -Recurse -File)
+
+    if ($files.Count -ne $destFiles.Count) {
+        throw "So file khong khop: $name"
+    }
+
+    foreach ($f in $files) {
+        $relative = $f.FullName.Substring($source.Length).TrimStart('\')
+        $dest = Join-Path $target $relative
+
+        if (!(Test-Path -LiteralPath $dest -PathType Leaf)) {
+            throw "Thieu file: $relative"
+        }
+
+        $hash1 = (Get-FileHash -LiteralPath $f.FullName).Hash
+        $hash2 = (Get-FileHash -LiteralPath $dest).Hash
+
+        if ($hash1 -ne $hash2) {
+            throw "Hash khong khop: $relative"
+        }
+    }
+
+    Write-Host "COPY VERIFIED: $name ($($files.Count) FILES)" `
+        -ForegroundColor Green
+}
+
+# Kiem tra IIS truoc khi thay doi
+$vdirs = (& $appcmd list vdirs | Out-String)
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong doc duoc IIS."
+}
+
+foreach ($name in @("guitar_HD", "libs")) {
+    if ($vdirs.Contains("VDIR `"Default Web Site/$name`"")) {
+        throw "Virtual Directory da ton tai: $name"
+    }
+}
+
+# Backup IIS
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$backup = "TT_STATIC_$stamp"
+
+& $appcmd add backup $backup | Out-Host
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong backup duoc IIS."
+}
+
+$created = @()
+
+try {
+    foreach ($name in @("guitar_HD", "libs")) {
+        $target = Join-Path $newRoot $name
+
+        & $appcmd add vdir `
+            '/app.name:Default Web Site/' `
+            "/path:/$name" `
+            "/physicalPath:$target" | Out-Host
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Khong tao duoc IIS vdir: $name"
+        }
+
+        $created += $name
+    }
+
+    foreach ($test in $tests) {
+        $status = Get-HttpStatus $test
+        Write-Host "AFTER /${test}: HTTP $status"
+
+        if ($status -notin @("200", "206")) {
+            throw "URL moi khong hoat dong: $test"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "GUITAR_HD AND LIBS MIGRATION OK" `
+        -ForegroundColor Green
+
+    Write-Host "IMG_SYS: COPIED ONLY - IIS NOT CHANGED"
+
+    & $appcmd list vdirs
+}
+catch {
+    foreach ($name in $created) {
+        & $appcmd delete vdir "Default Web Site/$name" | Out-Host
+    }
+
+    Write-Host "DA THU KHOI PHUC IIS" -ForegroundColor Yellow
+    throw
+}
