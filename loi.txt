@@ -1,49 +1,30 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+cd C:\TunerTools\Tools\Migration
+Set-ExecutionPolicy -Scope Process Bypass -Force
 
-PS C:\Users\Administrator> $names = @(
->>     "gp_fresh_1600000.db",
->>     "gp_fresh_1600000_backup.db"
->> )
->>
->> foreach ($name in $names) {
->>     $source = "C:\TunerToolsGP_Fresh\$name"
->>     $target = "C:\TunerTools\Tools\GP_Fresh\$name"
->>
->>     $hash1 = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
->>     $hash2 = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
->>
->>     [PSCustomObject]@{
->>         File = $name
->>         Identical = ($hash1 -eq $hash2)
->>     }
->> }
+$tokens = $null
+$errors = $null
 
-File                       Identical
-----                       ---------
-gp_fresh_1600000.db             True
-gp_fresh_1600000_backup.db      True
+[void][System.Management.Automation.Language.Parser]::ParseFile(
+    ".\Move-TunerTools.ps1",
+    [ref]$tokens,
+    [ref]$errors
+)
+
+$errors
 
 
-PS C:\Users\Administrator> Get-Content "C:\AI_Music\ChayNgam.vbs"
-Set WshShell = CreateObject("WScript.Shell")
-
-' 1. Ch?y ng?m k?t n?i WIFI (B?n v?n nên gi? file .bat WIFI n?u nó ch?a nhi?u l?nh h? th?ng ph?c t?p)
-WshShell.Run chr(34) & "C:\inetpub\wwwroot\AutoReconnectWIFI.bat" & Chr(34), 0
-
-' 2. Tr? thu m?c làm vi?c hi?n t?i v? d? án AI (Ð? Flask d?c du?c các file model/âm thanh)
-WshShell.CurrentDirectory = "C:\AI_Music"
-
-' 3. G?i th?ng python.exe c?a venv311 d? ch?y kh?i d?ng server AI ng?m (tham s? 0)
-WshShell.Run chr(34) & "C:\Users\Administrator\venv311\Scripts\python.exe" & chr(34) & " app.py", 0
-
-Set WshShell = Nothing
-PS C:\Users\Administrator> Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue |
->> Select-Object LocalAddress, LocalPort, OwningProcess
-
-LocalAddress LocalPort OwningProcess
------------- --------- -------------
-0.0.0.0           5000          9516
+.\Move-TunerTools.ps1 -Area GP -Action Migrate
 
 
-PS C:\Users\Administrator>
+.\Move-TunerTools.ps1 -Area GP -Action Status
+
+
+.\Move-TunerTools.ps1 -Area AI -Action Migrate -AllowAIStop
+
+
+.\Move-TunerTools.ps1 -Area AI -Action Status
+Invoke-RestMethod http://127.0.0.1:5000/
+
+
+
+.\Move-TunerTools.ps1 -Area AI -Action Rollback -AllowAIStop
