@@ -1,3 +1,25 @@
-Get-ChildItem "C:\inetpub\wwwroot" -File |
-Select-Object Name, Extension |
-Format-Table -AutoSize
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> Get-ChildItem "C:\inetpub\wwwroot" -File |
+>> Select-Object Name, Extension |
+>> Format-Table -AutoSize
+
+Name                                       Extension
+----                                       ---------
+.tunertools_document_schema_v10.ready      .ready
+.tunertools_document_schema_v10.ready.lock .lock
+api_AI.bat                                 .bat
+api_documents.php                          .php
+api_gp_search.php                          .php
+api_songs.php                              .php
+drive_picker.php                           .php
+FluidR3_GM.sf2                             .sf2
+index.php                                  .php
+MuseScore_General.sf3                      .sf3
+test.php                                   .php
+web.config                                 .config
+
+
+PS C:\Users\Administrator>
+
