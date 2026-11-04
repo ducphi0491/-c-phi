@@ -1,3 +1,6 @@
 robocopy "C:\TunerToolsGP_Fresh" "C:\TunerTools\Tools\GP_Fresh" /E /Z /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:2 /MT:4 /TEE /LOG:"C:\TunerTools\Logs\copy_gp_fresh.log"
 
 Write-Host "Robocopy exit code: $LASTEXITCODE"
+
+
+C:\AI_Music\ChayNgam.vbs
