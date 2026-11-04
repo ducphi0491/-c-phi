@@ -17,19 +17,36 @@ $password = "123456";
 $dbname = "tuner";       
 $port = 3306;
 
-// Khởi tạo kết nối
-$conn = new mysqli($servername, $username, $password, $dbname, $port);
-
-if ($conn->connect_error) {
-    echo json_encode(["error" => "Kết nối thất bại"]);
+// Kết nối DB: không để ngoại lệ mysqli tạo trang HTML 500 không có mã lỗi.
+try {
+    $conn = new mysqli($servername, $username, $password, $dbname, $port);
+    if ($conn->connect_errno) {
+        throw new RuntimeException('Database connection was rejected: ' . $conn->connect_error);
+    }
+    if (!$conn->set_charset('utf8mb4')) {
+        throw new RuntimeException('Cannot set database encoding to utf8mb4');
+    }
+} catch (Throwable $e) {
+    error_log('[TunerTools][DB_CONNECTION_FAILED] ' . $e->getMessage());
+    http_response_code(503);
+    echo json_encode([
+        'success' => false,
+        'code' => 'DB_CONNECTION_FAILED',
+        'error' => 'Không kết nối được MySQL. Kiểm tra nhật ký PHP máy chủ.'
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// Bắt buộc set charset utf8mb4 để giữ nguyên font tiếng Việt
-$conn->set_charset("utf8mb4");
-
 // --- 2. Nhận tham số từ App Android ---
 $action = isset($_GET['action']) ? $_GET['action'] : '';
+
+// Các trang Sync V2 nhỏ được nén gzip để giảm dung lượng tải lời/hợp âm.
+// Không áp dụng cho action sync cũ vì action đó đang stream trực tiếp từng record.
+if (in_array($action, ['check_update_v2', 'sync_bootstrap_v2', 'sync_v2'], true)) {
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    // No ob_gzhandler here: some hosting compression stacks reject nested handlers.
+}
 
 
 // =========================================================
@@ -47,6 +64,98 @@ function tt_json_exit($payload, $httpCode = 200) {
     http_response_code($httpCode);
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
+}
+
+
+/**
+ * Safe error reporting for Sync V2. Internal SQL and credentials are never
+ * returned to a public caller. See PHP error log for the matching trace id.
+ */
+function tt_song_sync_abort($code, $exception, $status = 500) {
+    try {
+        $trace = bin2hex(random_bytes(5));
+    } catch (Throwable $ignored) {
+        $trace = (string)time();
+    }
+    error_log('[TunerTools][SyncV2][' . $trace . '][' . $code . '] ' . $exception->getMessage());
+    tt_json_exit([
+        'success' => false,
+        'code' => $code,
+        'trace_id' => $trace,
+        'error' => 'Lỗi đồng bộ phía máy chủ. Kiểm tra PHP error log theo trace_id.'
+    ], $status);
+}
+
+// =========================================================
+// SONG DELTA SYNC V2
+// - Giữ nguyên action check_update/sync cho các bản app cũ.
+// - App mới dùng cursor change_id và tải theo từng trang nhỏ.
+// - Bảng + trigger được tạo bởi ALTER_song_sync_v2.sql.
+// =========================================================
+function tt_song_sync_schema_ready($conn) {
+    static $ready = null;
+    if ($ready !== null) return $ready;
+
+    try {
+        $result = $conn->query("SHOW TABLES LIKE 'song_sync_changes'");
+        if (!$result) throw new RuntimeException('SHOW TABLES failed: ' . $conn->error);
+        $ready = $result->num_rows > 0;
+        $result->free();
+        return $ready;
+    } catch (Throwable $e) {
+        tt_song_sync_abort('SYNC_SCHEMA_QUERY_FAILED', $e);
+    }
+}
+
+function tt_song_sync_latest_cursor($conn) {
+    if (!tt_song_sync_schema_ready($conn)) return 0;
+    try {
+        $result = $conn->query("SELECT COALESCE(MAX(change_id), 0) AS latest_change_id FROM song_sync_changes");
+        if (!$result) throw new RuntimeException('Cursor query failed: ' . $conn->error);
+        $row = $result->fetch_assoc();
+        $result->free();
+        return (int)($row['latest_change_id'] ?? 0);
+    } catch (Throwable $e) {
+        tt_song_sync_abort('SYNC_CURSOR_QUERY_FAILED', $e);
+    }
+}
+
+function tt_song_sync_require_schema($conn) {
+    if (tt_song_sync_schema_ready($conn)) return;
+    tt_json_exit([
+        'success' => false,
+        'error' => 'Chưa cài bảng song_sync_changes. Hãy chạy ALTER_song_sync_v2.sql trước.',
+        'code' => 'SYNC_SCHEMA_MISSING'
+    ], 409);
+}
+
+function tt_song_sync_normalize_limit($value, $default = 200, $max = 500) {
+    $limit = (int)$value;
+    if ($limit <= 0) $limit = $default;
+    return max(1, min($max, $limit));
+}
+
+function tt_song_sync_valid_timestamp($value) {
+    $value = trim((string)$value);
+    if ($value === '') return '2000-01-01 00:00:00';
+    $date = DateTime::createFromFormat('Y-m-d H:i:s', $value);
+    $errors = DateTime::getLastErrors();
+    if (!$date || (is_array($errors) && (($errors['warning_count'] ?? 0) > 0 || ($errors['error_count'] ?? 0) > 0))) {
+        return '2000-01-01 00:00:00';
+    }
+    return $date->format('Y-m-d H:i:s');
+}
+
+function tt_song_sync_cast_song_row($song) {
+    if (!is_array($song)) return [];
+
+    foreach (['favoriteCount', 'viewCount', 'commentCount', 'ratingCount', 'bpm', 'image_count', 'status'] as $field) {
+        if (array_key_exists($field, $song)) $song[$field] = (int)$song[$field];
+    }
+    if (array_key_exists('ratingStars', $song)) $song['ratingStars'] = (float)$song['ratingStars'];
+    if (!isset($song['id_zing_mp3']) || $song['id_zing_mp3'] === null) $song['id_zing_mp3'] = '';
+    if (!isset($song['lyrics']) || $song['lyrics'] === null) $song['lyrics'] = '';
+    return $song;
 }
 
 /** Chuẩn hóa email để đối chiếu với tuner.songs_app_admins.email. */
@@ -672,6 +781,187 @@ if ($action === 'check_notifications') {
     exit;
 }
 
+
+// =========================================================
+// SONG SYNC V2 - KIỂM TRA CURSOR
+// =========================================================
+if ($action === 'check_update_v2') {
+    try {
+    tt_song_sync_require_schema($conn);
+
+    $after = max(0, (int)($_GET['after'] ?? 0));
+    $currentCursor = tt_song_sync_latest_cursor($conn);
+
+    // Không COUNT toàn bộ phần đuôi change log ở mỗi lần app kiểm tra.
+    // So sánh cursor là O(1) trên primary key và đủ cho UI biết có cập nhật hay không.
+    tt_json_exit([
+        'success' => true,
+        'has_update' => $currentCursor > $after,
+        'change_count' => max(0, $currentCursor - $after),
+        'current_cursor' => $currentCursor
+    ]);
+    } catch (Throwable $e) {
+        tt_song_sync_abort('SYNC_CHECK_FAILED', $e);
+    }
+}
+
+// =========================================================
+// SONG SYNC V2 - BOOTSTRAP MỘT LẦN CHO DATABASE CŨ/SEED
+// Dùng cặp (updatedAt, id), có phân trang, không xóa database.
+// snapshot_cursor được cố định từ trang đầu để không bỏ sót thay đổi
+// phát sinh trong lúc thiết bị đang tải nhiều trang bootstrap.
+// =========================================================
+if ($action === 'sync_bootstrap_v2') {
+    try {
+    tt_song_sync_require_schema($conn);
+
+    $lastUpdate = tt_song_sync_valid_timestamp($_GET['last_update'] ?? '2000-01-01 00:00:00');
+    $lastId = trim((string)($_GET['last_id'] ?? ''));
+    if (strlen($lastId) > 255) $lastId = substr($lastId, 0, 255);
+
+    $limit = tt_song_sync_normalize_limit($_GET['limit'] ?? 200);
+    $fetchLimit = $limit + 1;
+    $snapshotProvided = array_key_exists('snapshot_cursor', $_GET);
+    $snapshotCursor = $snapshotProvided
+        ? max(0, (int)$_GET['snapshot_cursor'])
+        : tt_song_sync_latest_cursor($conn);
+
+    $stmt = $conn->prepare(
+        "SELECT *
+         FROM songs
+         WHERE status = 1
+           AND (updatedAt > ? OR (updatedAt = ? AND id > ?))
+         ORDER BY updatedAt ASC, id ASC
+         LIMIT ?"
+    );
+    if (!$stmt) {
+        tt_json_exit(['success' => false, 'error' => 'Không chuẩn bị được truy vấn bootstrap.', 'code' => 'BOOTSTRAP_QUERY_FAILED'], 500);
+    }
+
+    $stmt->bind_param('sssi', $lastUpdate, $lastUpdate, $lastId, $fetchLimit);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    $items = [];
+    $hasMore = false;
+    $nextUpdate = $lastUpdate;
+    $nextId = $lastId;
+    $seen = 0;
+
+    while ($result && ($song = $result->fetch_assoc())) {
+        $seen++;
+        if ($seen > $limit) {
+            $hasMore = true;
+            break;
+        }
+        $song = tt_song_sync_cast_song_row($song);
+        $items[] = $song;
+        $nextUpdate = (string)($song['updatedAt'] ?? $nextUpdate);
+        $nextId = (string)($song['id'] ?? $nextId);
+    }
+    $stmt->close();
+
+    tt_json_exit([
+        'success' => true,
+        'items' => $items,
+        'next_updated_at' => $nextUpdate,
+        'next_id' => $nextId,
+        'has_more' => $hasMore,
+        'snapshot_cursor' => $snapshotCursor,
+        'page_size' => count($items)
+    ]);
+    } catch (Throwable $e) {
+        tt_song_sync_abort('SYNC_BOOTSTRAP_FAILED', $e);
+    }
+}
+
+// =========================================================
+// SONG SYNC V2 - DELTA THEO change_id
+// operation=upsert: trả dữ liệu bài hiện tại.
+// operation=delete: app chỉ xóa đúng song_id ở SQLite.
+// =========================================================
+if ($action === 'sync_v2') {
+    try {
+    tt_song_sync_require_schema($conn);
+
+    $after = max(0, (int)($_GET['after'] ?? 0));
+    $limit = tt_song_sync_normalize_limit($_GET['limit'] ?? 200);
+    $fetchLimit = $limit + 1;
+
+    $stmt = $conn->prepare(
+        "SELECT
+            c.change_id AS sync_change_id,
+            c.song_id AS sync_song_id,
+            c.operation AS sync_operation,
+            s.*
+         FROM song_sync_changes c
+         LEFT JOIN songs s ON s.id = c.song_id
+         WHERE c.change_id > ?
+         ORDER BY c.change_id ASC
+         LIMIT ?"
+    );
+    if (!$stmt) {
+        tt_json_exit(['success' => false, 'error' => 'Không chuẩn bị được truy vấn delta.', 'code' => 'SYNC_QUERY_FAILED'], 500);
+    }
+
+    $stmt->bind_param('ii', $after, $fetchLimit);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    // Trong cùng một trang có thể một bài đã bị sửa nhiều lần. Chỉ gửi trạng thái
+    // cuối cùng của mỗi song_id để không tải lặp lại toàn bộ lyrics/hợp âm.
+    $changeMap = [];
+    $hasMore = false;
+    $nextCursor = $after;
+    $seen = 0;
+
+    while ($result && ($row = $result->fetch_assoc())) {
+        $seen++;
+        if ($seen > $limit) {
+            $hasMore = true;
+            break;
+        }
+
+        $changeId = (int)($row['sync_change_id'] ?? 0);
+        $songId = (string)($row['sync_song_id'] ?? '');
+        $requestedOperation = strtolower((string)($row['sync_operation'] ?? 'upsert'));
+        $isVisibleSong = !empty($row['id']) && (int)($row['status'] ?? 0) === 1;
+        $effectiveOperation = ($requestedOperation === 'delete' || !$isVisibleSong) ? 'delete' : 'upsert';
+
+        $change = [
+            'change_id' => $changeId,
+            'operation' => $effectiveOperation,
+            'song_id' => $songId
+        ];
+
+        if ($effectiveOperation === 'upsert') {
+            unset($row['sync_change_id'], $row['sync_song_id'], $row['sync_operation']);
+            $change['song'] = tt_song_sync_cast_song_row($row);
+        }
+
+        $changeMap['song:' . $songId] = $change;
+        $nextCursor = $changeId;
+    }
+    $stmt->close();
+
+    $changes = array_values($changeMap);
+    usort($changes, function ($a, $b) {
+        return ((int)($a['change_id'] ?? 0)) <=> ((int)($b['change_id'] ?? 0));
+    });
+
+    tt_json_exit([
+        'success' => true,
+        'changes' => $changes,
+        'next_cursor' => $nextCursor,
+        'has_more' => $hasMore,
+        'current_cursor' => tt_song_sync_latest_cursor($conn),
+        'page_size' => count($changes)
+    ]);
+    } catch (Throwable $e) {
+        tt_song_sync_abort('SYNC_DELTA_FAILED', $e);
+    }
+}
+
 if ($action === 'check_update') {
     $last_update = isset($_GET['last_update']) ? $_GET['last_update'] : '2000-01-01 00:00:00';
     $last_update = $conn->real_escape_string($last_update);
@@ -698,11 +988,16 @@ if ($action === 'update_zing_id') {
     $zing_id = isset($_POST['zing_id']) ? $_POST['zing_id'] : '';
     
     if (!empty($id) && !empty($zing_id)) {
-        $stmt = $conn->prepare("UPDATE songs SET id_zing_mp3 = ?, updatedAt = NOW() WHERE id = ?");
-        $stmt->bind_param("ss", $zing_id, $id);
+        // Chỉ đổi updatedAt khi Zing ID thật sự thay đổi. Trigger sync sẽ tự ghi 1 delta upsert.
+        $stmt = $conn->prepare(
+            "UPDATE songs
+             SET id_zing_mp3 = ?, updatedAt = NOW()
+             WHERE id = ? AND NOT (COALESCE(id_zing_mp3, '') <=> ?)"
+        );
+        $stmt->bind_param("sss", $zing_id, $id, $zing_id);
         
         if ($stmt->execute()) {
-            echo json_encode(["success" => true]);
+            echo json_encode(["success" => true, "changed" => $stmt->affected_rows > 0]);
         } else {
             echo json_encode(["error" => "Database update failed"]);
         }
@@ -718,7 +1013,7 @@ if ($action === 'sync') {
     $last_update = isset($_GET['last_update']) ? $_GET['last_update'] : '2000-01-01 00:00:00';
     $last_update = $conn->real_escape_string($last_update);
 
-    $sql = "SELECT * FROM songs WHERE updatedAt > '$last_update' AND status = 1 ORDER BY updatedAt ASC";
+    $sql = "SELECT * FROM songs WHERE updatedAt > '$last_update' AND status = 1 ORDER BY updatedAt ASC, id ASC";
     
     $result = $conn->query($sql, MYSQLI_USE_RESULT);
 
@@ -765,10 +1060,10 @@ if ($action === 'toggle_like') {
 
     if ($is_liking === 'true') {
         $conn->query("INSERT IGNORE INTO device_likes (user_email, song_id) VALUES ('$email', '$id')");
-        $conn->query("UPDATE songs SET favoriteCount = favoriteCount + 1, updatedAt = NOW() WHERE id = '$id'");
+        $conn->query("UPDATE songs SET favoriteCount = favoriteCount + 1 WHERE id = '$id'");
     } else {
         $conn->query("DELETE FROM device_likes WHERE user_email = '$email' AND song_id = '$id'");
-        $conn->query("UPDATE songs SET favoriteCount = GREATEST(favoriteCount - 1, 0), updatedAt = NOW() WHERE id = '$id'");
+        $conn->query("UPDATE songs SET favoriteCount = GREATEST(favoriteCount - 1, 0) WHERE id = '$id'");
     }
     
     echo json_encode(["success" => true]);
@@ -1097,7 +1392,7 @@ if ($action === 'detail') {
         exit;
     }
 
-    $conn->query("UPDATE songs SET viewCount = viewCount + 1, updatedAt = NOW() WHERE id = '$id'");
+    $conn->query("UPDATE songs SET viewCount = viewCount + 1 WHERE id = '$id'");
 
     $sql = "SELECT 
                 id AS songId, 
