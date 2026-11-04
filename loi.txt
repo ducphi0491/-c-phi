@@ -1,63 +1,49 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$oldPath = 'C:\AI_Music'
+$newPath = 'C:\TunerTools\Audio\AI_Music'
 
-PS C:\Users\Administrator> try {
->>     $result = Invoke-RestMethod "http://127.0.0.1:5000/" -TimeoutSec 15
->>     Write-Host "API STATUS: $($result.status)" -ForegroundColor Green
->> } catch {
->>     Write-Host "API ERROR: $($_.Exception.Message)" -ForegroundColor Red
->> }
-API STATUS: Máy chủ đang chờ nhận file từ thiết bị Android!
-PS C:\Users\Administrator> $oldPath = 'C:\AI_Music'
->>
->> $folders = @(
->>     'C:\inetpub\wwwroot',
->>     'C:\TunerTools\Audio\AI_Music',
->>     'C:\inetpub\wwwroot\tunertools'
->> )
->>
->> $extensions = @('.php', '.py', '.bat', '.cmd', '.ps1', '.vbs', '.config')
->>
->> $files = @()
->>
->> foreach ($folder in $folders) {
->>     if (Test-Path $folder) {
->>         $files += Get-ChildItem $folder -File -ErrorAction SilentlyContinue |
->>             Where-Object { $_.Extension -in $extensions }
->>     }
->> }
->>
->> foreach ($folder in $folders[1..2]) {
->>     if (Test-Path $folder) {
->>         $files += Get-ChildItem $folder -Recurse -File -ErrorAction SilentlyContinue |
->>             Where-Object { $_.Extension -in $extensions }
->>     }
->> }
->>
->> $matches = @(
->>     $files |
->>     Sort-Object FullName -Unique |
->>     Select-String -SimpleMatch $oldPath -ErrorAction SilentlyContinue
->> )
->>
->> if ($matches.Count -eq 0) {
->>     Write-Host "KHONG TIM THAY DUONG DAN CU TRONG CAC FILE DA KIEM TRA" -ForegroundColor Green
->> } else {
->>     $matches |
->>         Select-Object Path, LineNumber |
->>         Format-Table -AutoSize
->> }
->>
->> Write-Host "SO VI TRI THAM CHIEU DUONG DAN CU: $($matches.Count)"
+$files = @(
+    'C:\inetpub\wwwroot\api_AI.bat',
+    'C:\inetpub\wwwroot\api_gp_search.php',
+    'C:\inetpub\wwwroot\api_songs.php'
+)
 
-Path                                 LineNumber
-----                                 ----------
-C:\inetpub\wwwroot\api_AI.bat                 6
-C:\inetpub\wwwroot\api_gp_search.php       1355
-C:\inetpub\wwwroot\api_gp_search.php       3495
-C:\inetpub\wwwroot\api_songs.php            258
-C:\inetpub\wwwroot\api_songs.php           3536
+$encoding = [System.Text.Encoding]::GetEncoding(28591)
+$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+
+foreach ($file in $files) {
+
+    $bytes = [System.IO.File]::ReadAllBytes($file)
+    $content = $encoding.GetString($bytes)
+
+    $count = ([regex]::Matches(
+        $content,
+        [regex]::Escape($oldPath)
+    )).Count
+
+    if ($count -gt 0) {
+
+        $backup = "C:\TunerTools\Backups\" +
+                  (Split-Path $file -Leaf) +
+                  "." + $timestamp + ".bak"
+
+        Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
+
+        $content = $content.Replace($oldPath, $newPath)
+
+        [System.IO.File]::WriteAllBytes(
+            $file,
+            $encoding.GetBytes($content)
+        )
+
+        Write-Host "UPDATED: $file ($count vi tri)" -ForegroundColor Green
+    }
+}
 
 
-SO VI TRI THAM CHIEU DUONG DAN CU: 5
-PS C:\Users\Administrator>
+
+2.........
+& "C:\php\php.exe" -l "C:\inetpub\wwwroot\api_songs.php"
+& "C:\php\php.exe" -l "C:\inetpub\wwwroot\api_gp_search.php"
+
+
+(Invoke-RestMethod "http://127.0.0.1:5000/").status
