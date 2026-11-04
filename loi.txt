@@ -1,10 +1,22 @@
-SELECT id, title, slug, image_count, updatedAt
-FROM songs
-WHERE title = 'Người Tình Mùa Đông'
-  AND singerNames LIKE '%Hà Anh Tuấn%';
+$paths = @(
+    "C:\",
+    "C:\inetpub\wwwroot",
+    "C:\AI_Music"
+)
 
+foreach ($path in $paths) {
+    if (Test-Path $path) {
+        Write-Host "`n========================================" -ForegroundColor Cyan
+        Write-Host "THU MUC: $path" -ForegroundColor Yellow
+        Write-Host "========================================"
 
-SELECT change_id, song_id, operation, changed_at
-FROM song_sync_changes
-ORDER BY change_id DESC
-LIMIT 5;
+        $folders = @(Get-ChildItem -LiteralPath $path -Directory -Force -ErrorAction SilentlyContinue)
+
+        $folders |
+            Sort-Object Name |
+            Select-Object Name, FullName |
+            Format-Table -AutoSize
+
+        Write-Host "TONG SO THU MUC CAP 1: $($folders.Count)" -ForegroundColor Green
+    }
+}
