@@ -1,22 +1,64 @@
-$root = "C:\inetpub\wwwroot"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$files = @(
-    Get-ChildItem $root -File |
-    Where-Object { $_.Extension -in ".php", ".config" }
+PS C:\Users\Administrator> Windows PowerShell
+>> Copyright (C) Microsoft Corporation. All rights reserved.
+>>
+>> PS C:\Users\Administrator> Get-ChildItem "C:\inetpub\wwwroot" -File |
+>> >> Select-Object Name, Extension |
+>> >> Format-Table -AutoSize
+>>
+>> Name                                       Extension
+>> ----                                       ---------
+>> .tunertools_document_schema_v10.ready      .ready
+>> .tunertools_document_schema_v10.ready.lock .lock
+>> api_AI.bat                                 .bat
+>> api_documents.php                          .php
+>> api_gp_search.php                          .php
+>> api_songs.php                              .php
+>> drive_picker.php                           .php
+>> FluidR3_GM.sf2                             .sf2
+>> index.php                                  .php
+>> MuseScore_General.sf3                      .sf3
+>> test.php                                   .php
+>> web.config                                 .config
+>>
+>>
+>> PS C:\Users\Administrator>
+>>
+At line:9 char:53
++ ----                                       ---------
++                                                     ~
+Missing expression after unary operator '-'.
+At line:10 char:1
++ .tunertools_document_schema_v10.ready      .ready
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unexpected token '.tunertools_document_schema_v10.ready' in expression or statement.
+At line:9 char:3
++ ----                                       ---------
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The '--' operator works only on variables or on properties.
+At line:9 char:44
++ ----                                       ---------
++                                            ~~~~~~~~~
+The '--' operator works only on variables or on properties.
+At line:9 char:46
++ ----                                       ---------
++                                              ~~~~~~~
+The '--' operator works only on variables or on properties.
+At line:9 char:48
++ ----                                       ---------
++                                                ~~~~~
+The '--' operator works only on variables or on properties.
+At line:9 char:50
++ ----                                       ---------
++                                                  ~~~
+The '--' operator works only on variables or on properties.
+At line:9 char:52
++ ----                                       ---------
++                                                    ~
+The '--' operator works only on variables or on properties.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingExpressionAfterOperator
 
-    Get-ChildItem "$root\tunertools" -Recurse -File |
-    Where-Object { $_.Extension -in ".php", ".js", ".json", ".config" }
-)
-
-$patterns = @(
-    'C:\inetpub\wwwroot',
-    'tab/',
-    'MuseScore_General.sf3',
-    'FluidR3_GM.sf2'
-)
-
-$files |
-Select-String -SimpleMatch -Pattern $patterns |
-Select-Object Path, LineNumber, Pattern |
-Sort-Object Path, LineNumber |
-Format-Table -AutoSize
+PS C:\Users\Administrator>
