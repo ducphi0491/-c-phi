@@ -1,54 +1,16 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+foreach ($profile in @("fluidr3", "musescore")) {
+    try {
+        $url = "https://tunertools.top/api_gp_search.php?action=soundfont_info&profile=$profile"
 
-PS C:\Users\Administrator> $file = "C:\inetpub\wwwroot\api_gp_search.php"
->> $dest = "C:\TunerTools\Web\API\api_gp_search.php"
->>
->> $encoding = [System.Text.Encoding]::GetEncoding(28591)
->> $content = $encoding.GetString([System.IO.File]::ReadAllBytes($file))
->>
->> $old1 = '$filePath = __DIR__ . DIRECTORY_SEPARATOR . $fileName;'
->> $new1 = '$filePath = ''C:/TunerTools/Audio/SoundFonts/'' . $fileName;'
->>
->> $old2 = '$ttgp_soundfont_file = __DIR__ . DIRECTORY_SEPARATOR . $ttgp_soundfont_config[''file_name''];'
->> $new2 = '$ttgp_soundfont_file = ''C:/TunerTools/Audio/SoundFonts/'' . $ttgp_soundfont_config[''file_name''];'
->>
->> foreach ($old in @($old1, $old2)) {
->>     $count = ([regex]::Matches($content, [regex]::Escape($old))).Count
->>
->>     if ($count -ne 1) {
->>         throw "Khong tim thay dung 1 vi tri: $old"
->>     }
->> }
->>
->> foreach ($name in @("FluidR3_GM.sf2", "MuseScore_General.sf3")) {
->>     if (-not (Test-Path "C:\TunerTools\Audio\SoundFonts\$name")) {
->>         throw "Thieu SoundFont: $name"
->>     }
->> }
->>
->> $backup = "C:\TunerTools\Backups\api_gp_search_" +
->>           (Get-Date -Format "yyyyMMdd_HHmmss") + ".php.bak"
->>
->> Copy-Item $file $backup -ErrorAction Stop
->>
->> $content = $content.Replace($old1, $new1).Replace($old2, $new2)
->>
->> [System.IO.File]::WriteAllBytes(
->>     $file,
->>     $encoding.GetBytes($content)
->> )
->>
->> & "C:\php\php.exe" -l $file
->>
->> if ($LASTEXITCODE -ne 0) {
->>     Copy-Item $backup $file -Force
->>     throw "PHP syntax error. Da khoi phuc ban goc."
->> }
->>
->> Copy-Item $file $dest -Force -ErrorAction Stop
->>
->> Write-Host "SOUNDFONT PATH UPDATED OK" -ForegroundColor Green
-No syntax errors detected in C:\inetpub\wwwroot\api_gp_search.php
-SOUNDFONT PATH UPDATED OK
-PS C:\Users\Administrator>
+        $result = Invoke-RestMethod -Uri $url -TimeoutSec 30
+
+        [PSCustomObject]@{
+            Profile = $profile
+            Success = $result.success
+            File    = $result.data.file_name
+        }
+    }
+    catch {
+        Write-Host "ERROR $profile : $($_.Exception.Message)"
+    }
+}
