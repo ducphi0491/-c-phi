@@ -1,39 +1,27 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$names = @(
+    "api_songs.php",
+    "api_gp_search.php",
+    "api_documents.php"
+)
 
-PS C:\Users\Administrator> $urls = @(
->>     "https://api.tunertools.top/api/get_lyrics",
->>     "http://127.0.0.1:5000/api/get_lyrics"
->> )
->>
->> foreach ($url in $urls) {
->>     Write-Host "`nTEST: $url" -ForegroundColor Cyan
->>
->>     & curl.exe -sS --max-time 15 `
->>         -X POST `
->>         -d "" `
->>         -o NUL `
->>         -w "HTTP STATUS: %{http_code}`n" `
->>         $url
->> }
+foreach ($name in $names) {
+    $old = "C:\inetpub\wwwroot\$name"
+    $new = "C:\TunerTools\Web\API\$name"
 
-TEST: https://api.tunertools.top/api/get_lyrics
-curl: (6) Could not resolve host: NUL
-HTTP STATUS: 000
-<!doctype html>
-<html lang=en>
-<title>404 Not Found</title>
-<h1>Not Found</h1>
-<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>
-HTTP STATUS: 404
+    $isWrapper = $false
 
-TEST: http://127.0.0.1:5000/api/get_lyrics
-curl: (6) Could not resolve host: NUL
-HTTP STATUS: 000
-<!doctype html>
-<html lang=en>
-<title>404 Not Found</title>
-<h1>Not Found</h1>
-<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>
-HTTP STATUS: 404
-PS C:\Users\Administrator>
+    if (Test-Path -LiteralPath $old) {
+        $content = [IO.File]::ReadAllText($old)
+
+        $expected = "C:/TunerTools/Web/API/$name"
+
+        $isWrapper = $content.Contains($expected)
+    }
+
+    [PSCustomObject]@{
+        API = $name
+        PHP_Old_Exists = Test-Path -LiteralPath $old
+        Wrapper_OK = $isWrapper
+        PHP_New_Exists = Test-Path -LiteralPath $new
+    }
+} | Format-Table -AutoSize
