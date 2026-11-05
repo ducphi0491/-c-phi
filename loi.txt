@@ -1,29 +1,72 @@
-$files = @(
-    "C:\TunerTools\Web\API\api_gp_search.php",
-    "C:\TunerTools\Web\API\api_songs.php"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($file in $files) {
-    Write-Host "`n=== $(Split-Path $file -Leaf) ===" -ForegroundColor Cyan
+PS C:\Users\Administrator> $files = @(
+>>     "C:\TunerTools\Web\API\api_gp_search.php",
+>>     "C:\TunerTools\Web\API\api_songs.php"
+>> )
+>>
+>> foreach ($file in $files) {
+>>     Write-Host "`n=== $(Split-Path $file -Leaf) ===" -ForegroundColor Cyan
+>>
+>>     Select-String -LiteralPath $file `
+>>         -SimpleMatch `
+>>         -Pattern @(
+>>             '$tempFilesDir',
+>>             'tuner_images_'
+>>         ) |
+>>     ForEach-Object {
+>>
+>>         $line = $_.Line.Trim()
+>>
+>>         if ($line -match '(?i)password|token|secret|api.?key|authorization') {
+>>             $line = "[DA AN NOI DUNG NHAY CAM]"
+>>         }
+>>
+>>         [PSCustomObject]@{
+>>             Line = $_.LineNumber
+>>             Code = $line
+>>         }
+>>     } |
+>>     Format-Table -AutoSize -Wrap
+>> }
 
-    Select-String -LiteralPath $file `
-        -SimpleMatch `
-        -Pattern @(
-            '$tempFilesDir',
-            'tuner_images_'
-        ) |
-    ForEach-Object {
+=== api_gp_search.php ===
 
-        $line = $_.Line.Trim()
+Line Code
+---- ----
+2148 $tempFilesDir = 'C:/inetpub/wwwroot' . '/tuner_images_' . uniqid();
+2149 if (!is_dir($tempFilesDir)) {
+2150 mkdir($tempFilesDir, 0777, true);
+2178 file_put_contents("{$tempFilesDir}/{$newImageCount}.{$extUsed}", $fileContent);
+2190 move_uploaded_file($files['tmp_name'][$i], "{$tempFilesDir}/{$newImageCount}.{$ext}");
+2196 $matchedFile = glob("{$tempFilesDir}/{$i}.*");
+2220 rmdir($tempFilesDir);
 
-        if ($line -match '(?i)password|token|secret|api.?key|authorization') {
-            $line = "[DA AN NOI DUNG NHAY CAM]"
-        }
 
-        [PSCustomObject]@{
-            Line = $_.LineNumber
-            Code = $line
-        }
-    } |
-    Format-Table -AutoSize -Wrap
-}
+
+=== api_songs.php ===
+
+Line Code
+---- ----
+1553 $tempFilesDir = '';
+1574 $tempFilesDir = 'C:/inetpub/wwwroot' . DIRECTORY_SEPARATOR . 'tuner_images_' . uniqid('', true);
+1575 if (!@mkdir($tempFilesDir, 0777, true) && !is_dir($tempFilesDir)) {
+1632 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1651 $targetPath = $tempFilesDir . DIRECTORY_SEPARATOR .
+1654 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1677 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1688 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1699 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1708 $targetPath = $tempFilesDir . DIRECTORY_SEPARATOR .
+1713 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1724 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1736 $matchedFiles = glob($tempFilesDir . DIRECTORY_SEPARATOR . $page . '.*');
+1745 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1766 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1788 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1896 tt_sheet_update_remove_temp_dir($tempFilesDir);
+1940 tt_sheet_update_remove_temp_dir($tempFilesDir);
+
+
+PS C:\Users\Administrator>
