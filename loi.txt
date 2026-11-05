@@ -1,114 +1,168 @@
-$root = "C:\TunerTools\Audio\AI_Music"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Write-Host "`n=== 1. KIEM TRA AI FOLDER ===" -ForegroundColor Cyan
+PS C:\Users\Administrator> $root = "C:\TunerTools\Audio\AI_Music"
+>>
+>> Write-Host "`n=== 1. KIEM TRA AI FOLDER ===" -ForegroundColor Cyan
+>>
+>> foreach ($path in @(
+>>     $root,
+>>     "$root\app.py",
+>>     "$root\CHORD_AI",
+>>     "$root\AI_MODELS",
+>>     "$root\YOUTUBE_CACHE"
+>> )) {
+>>     Write-Host ("{0} : {1}" -f (Test-Path -LiteralPath $path), $path)
+>> }
+>>
+>> Write-Host "`n=== 2. KIEM TRA PYTHON PORT 5000 ===" -ForegroundColor Cyan
+>>
+>> $listeners = @(
+>>     Get-NetTCPConnection -LocalPort 5000 -State Listen `
+>>         -ErrorAction SilentlyContinue
+>> )
+>>
+>> if ($listeners.Count -eq 0) {
+>>     Write-Host "PORT 5000 NOT LISTENING" -ForegroundColor Red
+>> } else {
+>>     $listeners |
+>>         Select-Object LocalAddress, LocalPort, OwningProcess |
+>>         Format-Table -AutoSize
+>> }
+>>
+>> Write-Host "`n=== 3. KIEM TRA PYTHON PROCESS ===" -ForegroundColor Cyan
+>>
+>> $processes = @(
+>>     Get-CimInstance Win32_Process `
+>>         -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" `
+>>         -ErrorAction SilentlyContinue
+>> )
+>>
+>> $processes |
+>>     ForEach-Object {
+>>         $cmd = [string]$_.CommandLine
+>>
+>>         [PSCustomObject]@{
+>>             PID = $_.ProcessId
+>>             Name = $_.Name
+>>             AppPy = ($cmd -match '(?i)app\.py')
+>>             NewAIPath = ($cmd -match '(?i)C:[\\/]TunerTools[\\/]Audio[\\/]AI_Music')
+>>             OldAIPath = ($cmd -match '(?i)C:[\\/]AI_Music')
+>>         }
+>>     } |
+>>     Format-Table -AutoSize
+>>
+>> Write-Host "`n=== 4. KIEM TRA AI ENDPOINTS ===" -ForegroundColor Cyan
+>>
+>> $tests = @(
+>>     @{
+>>         Name = "LOCAL - ANALYZE"
+>>         Url = "http://127.0.0.1:5000/api/analyze_file"
+>>     },
+>>     @{
+>>         Name = "PUBLIC - ANALYZE"
+>>         Url = "https://api.tunertools.top/api/analyze_file"
+>>     },
+>>     @{
+>>         Name = "LOCAL - ZING AI"
+>>         Url = "http://127.0.0.1:5000/api/zing_acapella_sync"
+>>     },
+>>     @{
+>>         Name = "PUBLIC - ZING AI"
+>>         Url = "https://api.tunertools.top/api/zing_acapella_sync"
+>>     }
+>> )
+>>
+>> foreach ($test in $tests) {
+>>     $bodyFile = Join-Path $env:TEMP (
+>>         "tt_ai_probe_" + [guid]::NewGuid().ToString("N") + ".txt"
+>>     )
+>>
+>>     Write-Host "`n$($test.Name)" -ForegroundColor Yellow
+>>
+>>     try {
+>>         $result = & curl.exe -sS `
+>>             --connect-timeout 5 `
+>>             --max-time 15 `
+>>             --request POST `
+>>             --data "tt_diagnostic=1" `
+>>             --output $bodyFile `
+>>             --write-out "%{http_code}" `
+>>             $test.Url
+>>
+>>         $exitCode = $LASTEXITCODE
+>>         $httpCode = ($result | Out-String).Trim()
+>>
+>>         Write-Host "HTTP: $httpCode"
+>>         Write-Host "CURL EXIT: $exitCode"
+>>
+>>         if (Test-Path -LiteralPath $bodyFile) {
+>>             $body = [IO.File]::ReadAllText($bodyFile)
+>>             $body = $body.Replace("`r", " ").Replace("`n", " ")
+>>
+>>             if ($body.Length -gt 250) {
+>>                 $body = $body.Substring(0, 250)
+>>             }
+>>
+>>             Write-Host "RESPONSE: $body"
+>>         }
+>>     }
+>>     finally {
+>>         if (Test-Path -LiteralPath $bodyFile) {
+>>             Remove-Item -LiteralPath $bodyFile -Force
+>>         }
+>>     }
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA HOAN TAT ===" -ForegroundColor Green
 
-foreach ($path in @(
-    $root,
-    "$root\app.py",
-    "$root\CHORD_AI",
-    "$root\AI_MODELS",
-    "$root\YOUTUBE_CACHE"
-)) {
-    Write-Host ("{0} : {1}" -f (Test-Path -LiteralPath $path), $path)
-}
+=== 1. KIEM TRA AI FOLDER ===
+True : C:\TunerTools\Audio\AI_Music
+True : C:\TunerTools\Audio\AI_Music\app.py
+True : C:\TunerTools\Audio\AI_Music\CHORD_AI
+True : C:\TunerTools\Audio\AI_Music\AI_MODELS
+True : C:\TunerTools\Audio\AI_Music\YOUTUBE_CACHE
 
-Write-Host "`n=== 2. KIEM TRA PYTHON PORT 5000 ===" -ForegroundColor Cyan
+=== 2. KIEM TRA PYTHON PORT 5000 ===
 
-$listeners = @(
-    Get-NetTCPConnection -LocalPort 5000 -State Listen `
-        -ErrorAction SilentlyContinue
-)
+LocalAddress LocalPort OwningProcess
+------------ --------- -------------
+0.0.0.0           5000         14684
 
-if ($listeners.Count -eq 0) {
-    Write-Host "PORT 5000 NOT LISTENING" -ForegroundColor Red
-} else {
-    $listeners |
-        Select-Object LocalAddress, LocalPort, OwningProcess |
-        Format-Table -AutoSize
-}
 
-Write-Host "`n=== 3. KIEM TRA PYTHON PROCESS ===" -ForegroundColor Cyan
 
-$processes = @(
-    Get-CimInstance Win32_Process `
-        -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" `
-        -ErrorAction SilentlyContinue
-)
+=== 3. KIEM TRA PYTHON PROCESS ===
 
-$processes |
-    ForEach-Object {
-        $cmd = [string]$_.CommandLine
+  PID Name       AppPy NewAIPath OldAIPath
+  --- ----       ----- --------- ---------
+17548 python.exe  True     False     False
+14684 python.exe  True     False     False
+24592 python.exe  True     False     False
+12776 python.exe  True     False     False
 
-        [PSCustomObject]@{
-            PID = $_.ProcessId
-            Name = $_.Name
-            AppPy = ($cmd -match '(?i)app\.py')
-            NewAIPath = ($cmd -match '(?i)C:[\\/]TunerTools[\\/]Audio[\\/]AI_Music')
-            OldAIPath = ($cmd -match '(?i)C:[\\/]AI_Music')
-        }
-    } |
-    Format-Table -AutoSize
 
-Write-Host "`n=== 4. KIEM TRA AI ENDPOINTS ===" -ForegroundColor Cyan
 
-$tests = @(
-    @{
-        Name = "LOCAL - ANALYZE"
-        Url = "http://127.0.0.1:5000/api/analyze_file"
-    },
-    @{
-        Name = "PUBLIC - ANALYZE"
-        Url = "https://api.tunertools.top/api/analyze_file"
-    },
-    @{
-        Name = "LOCAL - ZING AI"
-        Url = "http://127.0.0.1:5000/api/zing_acapella_sync"
-    },
-    @{
-        Name = "PUBLIC - ZING AI"
-        Url = "https://api.tunertools.top/api/zing_acapella_sync"
-    }
-)
+=== 4. KIEM TRA AI ENDPOINTS ===
 
-foreach ($test in $tests) {
-    $bodyFile = Join-Path $env:TEMP (
-        "tt_ai_probe_" + [guid]::NewGuid().ToString("N") + ".txt"
-    )
+LOCAL - ANALYZE
+HTTP: 400
+CURL EXIT: 0
+RESPONSE: {"error":"Kh\u00f4ng t\u00ecm th\u1ea5y file \u00e2m thanh."}
 
-    Write-Host "`n$($test.Name)" -ForegroundColor Yellow
+PUBLIC - ANALYZE
+HTTP: 400
+CURL EXIT: 0
+RESPONSE: {"error":"Kh\u00f4ng t\u00ecm th\u1ea5y file \u00e2m thanh."}
 
-    try {
-        $result = & curl.exe -sS `
-            --connect-timeout 5 `
-            --max-time 15 `
-            --request POST `
-            --data "tt_diagnostic=1" `
-            --output $bodyFile `
-            --write-out "%{http_code}" `
-            $test.Url
+LOCAL - ZING AI
+HTTP: 400
+CURL EXIT: 0
+RESPONSE: {"error":"Thi\u1ebfu th\u00f4ng tin t\u00ecm ki\u1ebfm","success":false}
 
-        $exitCode = $LASTEXITCODE
-        $httpCode = ($result | Out-String).Trim()
+PUBLIC - ZING AI
+HTTP: 400
+CURL EXIT: 0
+RESPONSE: {"error":"Thi\u1ebfu th\u00f4ng tin t\u00ecm ki\u1ebfm","success":false}
 
-        Write-Host "HTTP: $httpCode"
-        Write-Host "CURL EXIT: $exitCode"
-
-        if (Test-Path -LiteralPath $bodyFile) {
-            $body = [IO.File]::ReadAllText($bodyFile)
-            $body = $body.Replace("`r", " ").Replace("`n", " ")
-
-            if ($body.Length -gt 250) {
-                $body = $body.Substring(0, 250)
-            }
-
-            Write-Host "RESPONSE: $body"
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $bodyFile) {
-            Remove-Item -LiteralPath $bodyFile -Force
-        }
-    }
-}
-
-Write-Host "`n=== KIEM TRA HOAN TAT ===" -ForegroundColor Green
+=== KIEM TRA HOAN TAT ===
+PS C:\Users\Administrator>
