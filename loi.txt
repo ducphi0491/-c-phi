@@ -1,123 +1,33 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $checks = @(
->>     @{
->>         File = "C:\TunerTools\Web\API\api_gp_search.php"
->>         Lines = @(1358, 3474, 3498, 3557)
->>     },
->>     @{
->>         File = "C:\TunerTools\Web\API\api_songs.php"
->>         Lines = @(261, 3515, 3539, 3598)
->>     }
->> )
->>
->> foreach ($check in $checks) {
->>     Write-Host "`n=== $($check.File) ===" -ForegroundColor Cyan
->>
->>     $content = Get-Content -LiteralPath $check.File
->>
->>     foreach ($n in $check.Lines) {
->>         Write-Host "`n--- DONG $n ---"
->>
->>         $start = [Math]::Max(1, $n - 1)
->>         $end = [Math]::Min($content.Count, $n + 1)
->>
->>         for ($i = $start; $i -le $end; $i++) {
->>             $line = $content[$i - 1]
->>
->>             if ($line -match '(?i)password|secret|token|api.?key|authorization|private.?key') {
->>                 $line = "[DA AN NOI DUNG NHAY CAM]"
->>             }
->>
->>             Write-Host "${i}: $line"
->>         }
->>     }
->> }
+$main = "C:\TunerTools\Data\GuitarPro"
+$partial = "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
 
-=== C:\TunerTools\Web\API\api_gp_search.php ===
+# Xac nhan du lieu chinh van ton tai
+if (-not (Test-Path -LiteralPath $main -PathType Container)) {
+    throw "KHONG TIM THAY GUITAR PRO CHINH. DUNG XOA."
+}
 
---- DONG 1358 ---
-1357: if ($action === 'get_metronome_sounds') {
-1358:     $dir = 'C:/AI_Music/METRONOME';
-1359:     $sounds = [];
+# Kiem tra dung thu muc ban sao
+$item = Get-Item -LiteralPath $partial -Force -ErrorAction Stop
 
---- DONG 3474 ---
-3473:
-3474:     $filepath = 'C:/AI_Music/METRONOME/' . $filename;
-3475:
+if (-not $item.PSIsContainer -or
+    $item.FullName -ne $partial -or
+    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "THU MUC KHONG HOP LE. DUNG XOA."
+}
 
---- DONG 3498 ---
-3497: if ($action === 'get_drum_sounds') {
-3498:     $dir = 'C:/AI_Music/DRUM';
-3499:     $results = []; // LÆ°u trá»¯ theo dáº¡ng ['TÃªn_thÆ°_má»¥c' => ['file1.wav', 'file2.wav']]
+Write-Host "DANG XOA BAN COPY DO 10GB..." -ForegroundColor Yellow
 
---- DONG 3557 ---
-3556:     $filename = str_replace(['../', '..\\'], '', $filename);
-3557:     $filepath = 'C:/AI_Music/DRUM/' . $filename;
-3558:
+# Chi xoa ban copy do
+Remove-Item -LiteralPath $partial -Recurse -Force -ErrorAction Stop
 
-=== C:\TunerTools\Web\API\api_songs.php ===
+Write-Host "`nDA XOA THANH CONG!" -ForegroundColor Green
 
---- DONG 261 ---
-260: if ($action === 'get_metronome_sounds') {
-261:     $dir = 'C:/AI_Music/METRONOME';
-262:     $sounds = [];
+Write-Host "GUITAR PRO CHINH: $(Test-Path -LiteralPath $main)"
+Write-Host "BAN COPY DO CON: $(Test-Path -LiteralPath $partial)"
 
---- DONG 3515 ---
-3514:
-3515:     $filepath = 'C:/AI_Music/METRONOME/' . $filename;
-3516:
-
---- DONG 3539 ---
-3538: if ($action === 'get_drum_sounds') {
-3539:     $dir = 'C:/AI_Music/DRUM';
-3540:     $results = []; // LÆ°u trá»¯ theo dáº¡ng ['TÃªn_thÆ°_má»¥c' => ['file1.wav', 'file2.wav']]
-
---- DONG 3598 ---
-3597:     $filename = str_replace(['../', '..\\'], '', $filename);
-3598:     $filepath = 'C:/AI_Music/DRUM/' . $filename;
-3599:
-PS C:\Users\Administrator> $root = "C:\TunerTools\Data\GuitarPro"
->>
->> if (-not (Test-Path -LiteralPath $root -PathType Container)) {
->>     throw "Khong tim thay thu muc Guitar Pro chinh"
->> }
->>
->> [long]$total = 0
->> [long]$bytes = 0
->> [long]$gpCount = 0
->>
->> Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
->> ForEach-Object {
->>     $total++
->>     $bytes += $_.Length
->>
->>     if ($_.Extension.ToLowerInvariant() -in @(
->>         ".gp", ".gp3", ".gp4", ".gp5", ".gpx"
->>     )) {
->>         $gpCount++
->>     }
->> }
->>
->> Write-Host "`n=== GUITAR PRO HIEN TAI ===" -ForegroundColor Cyan
->> Write-Host "TONG SO FILE: $total"
->> Write-Host "FILE GUITAR PRO: $gpCount"
->> Write-Host "DUNG LUONG BYTE: $bytes"
->> Write-Host "DUNG LUONG GiB: $([math]::Round($bytes / 1GB, 2))"
->>
->> if ($total -eq 1639039 -and $bytes -eq 57955266829) {
->>     Write-Host "KHOP SO LIEU TRUOC KHI CHUYEN" -ForegroundColor Green
->> }
->> else {
->>     Write-Host "SO LIEU CO CHENH LECH - CAN KIEM TRA" -ForegroundColor Yellow
->> }
-
-=== GUITAR PRO HIEN TAI ===
-TONG SO FILE: 1639040
-FILE GUITAR PRO: 1638975
-DUNG LUONG BYTE: 57955267332
-DUNG LUONG GiB: 53.98
-SO LIEU CO CHENH LECH - CAN KIEM TRA
-PS C:\Users\Administrator>
-PS C:\Users\Administrator>
+Get-PSDrive C |
+Select-Object Name,
+@{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}} |
+Format-Table -AutoSize
