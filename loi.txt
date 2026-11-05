@@ -1,70 +1,29 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$files = @(
+    "C:\TunerTools\Web\API\api_gp_search.php",
+    "C:\TunerTools\Web\API\api_songs.php"
+)
 
-PS C:\Users\Administrator> $checks = @(
->>     @{
->>         File = "C:\TunerTools\Web\API\api_gp_search.php"
->>         Line = 2148
->>     },
->>     @{
->>         File = "C:\TunerTools\Web\API\api_songs.php"
->>         Line = 1574
->>     }
->> )
->>
->> foreach ($check in $checks) {
->>     Write-Host "`n=== $($check.File) ===" -ForegroundColor Cyan
->>
->>     $lines = Get-Content -LiteralPath $check.File
->>
->>     $start = [Math]::Max(1, $check.Line - 3)
->>     $end = [Math]::Min($lines.Count, $check.Line + 8)
->>
->>     for ($i = $start; $i -le $end; $i++) {
->>         $line = $lines[$i - 1]
->>
->>         if ($line -match '(?i)password|secret|token|api.?key|authorization') {
->>             $line = "[DA AN]"
->>         }
->>
->>         Write-Host "${i}: $line"
->>     }
->> }
->>
->> Write-Host "`n=== THU MUC ANH TAM CU ===" -ForegroundColor Cyan
->>
->> Get-ChildItem "C:\inetpub\wwwroot" -Directory `
->>     -Filter "tuner_images_*" |
->>     Select-Object Name, LastWriteTime
+foreach ($file in $files) {
+    Write-Host "`n=== $(Split-Path $file -Leaf) ===" -ForegroundColor Cyan
 
-=== C:\TunerTools\Web\API\api_gp_search.php ===
-2145:
-2146:         $newImageCount = 0;
-2147:
-2148:         $tempFilesDir = 'C:/inetpub/wwwroot' . '/tuner_images_' . uniqid();
-2149:         if (!is_dir($tempFilesDir)) {
-2150:             mkdir($tempFilesDir, 0777, true);
-2151:         }
-2152:
-2153:         $extensions = ['jpg', 'png', 'jpeg', 'gif'];
-2154:         foreach ($keptIndices as $oldIdx) {
-2155:             $fileContent = false;
-2156:             $extUsed = 'jpg';
+    Select-String -LiteralPath $file `
+        -SimpleMatch `
+        -Pattern @(
+            '$tempFilesDir',
+            'tuner_images_'
+        ) |
+    ForEach-Object {
 
-=== C:\TunerTools\Web\API\api_songs.php ===
-1571:         $newSlug = $baseSlug . '-' . $slugSuffix;
-1572:         $newImageCount = 0;
-1573:
-1574:         $tempFilesDir = 'C:/inetpub/wwwroot' . DIRECTORY_SEPARATOR . 'tuner_images_' . uniqid('', true);
-1575:         if (!@mkdir($tempFilesDir, 0777, true) && !is_dir($tempFilesDir)) {
-1576:             tt_json_exit([
-1577:                 'success' => false,
-1578:                 'error' => 'MÃ¡y chá»§ khÃ´ng táº¡o Ä‘Æ°á»£c thÆ° má»¥c táº¡m cho áº£nh sheet.',
-1579:                 'code' => 'TEMP_DIRECTORY_FAILED'
-1580:             ], 500);
-1581:         }
-1582:
+        $line = $_.Line.Trim()
 
-=== THU MUC ANH TAM CU ===
-PS C:\Users\Administrator>
+        if ($line -match '(?i)password|token|secret|api.?key|authorization') {
+            $line = "[DA AN NOI DUNG NHAY CAM]"
+        }
 
+        [PSCustomObject]@{
+            Line = $_.LineNumber
+            Code = $line
+        }
+    } |
+    Format-Table -AutoSize -Wrap
+}
