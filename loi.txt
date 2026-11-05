@@ -1,41 +1,15 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$routes = @(
+    "api/analyze_file",
+    "api/get_lyrics"
+)
 
-PS C:\Users\Administrator> $root = "C:\TunerTools\Audio\AI_Music"
->>
->> Write-Host "`n=== TIM API GET_LYRICS ===" -ForegroundColor Cyan
->>
->> $files = @(
->>     Get-ChildItem -LiteralPath $root -Recurse -File `
->>         -Filter "*.py" -ErrorAction Stop |
->>     Where-Object {
->>         $_.FullName -notmatch '(?i)[\\/](venv|\.venv|site-packages)[\\/]'
->>     }
->> )
->>
->> $matches = @(
->>     $files | Select-String -SimpleMatch -Pattern "get_lyrics"
->> )
->>
->> if ($matches.Count -eq 0) {
->>     Write-Host "KHONG TIM THAY GET_LYRICS TRONG PYTHON" `
->>         -ForegroundColor Yellow
->> }
->> else {
->>     $matches |
->>         Select-Object Path, LineNumber |
->>         Format-Table -AutoSize
->> }
->>
->> Write-Host "`n=== DANH SACH IIS SITE ===" -ForegroundColor Cyan
->>
->> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
->>
->> & $appcmd list site
+foreach ($route in $routes) {
+    $url = "https://api.tunertools.top/$route"
 
-=== TIM API GET_LYRICS ===
-KHONG TIM THAY GET_LYRICS TRONG PYTHON
+    Write-Host "`n=== $url ===" -ForegroundColor Cyan
 
-=== DANH SACH IIS SITE ===
-SITE "Default Web Site" (id:1,bindings:http/*:80:tunertools.top,state:Started)
-PS C:\Users\Administrator>
+    & curl.exe -sS --max-time 20 `
+        -o NUL `
+        -w "HTTP STATUS: %{http_code}`n" `
+        $url
+}
