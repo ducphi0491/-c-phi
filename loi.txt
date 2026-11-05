@@ -1,17 +1,13 @@
-C:\TunerTools\BackupScripts\Drive_Buoc2D
+$zip = "$env:USERPROFILE\Downloads\TunerTools_GoogleDrive_Buoc2D_Uploader.zip"
 
+$destination = "C:\TunerTools\BackupScripts\Drive_Buoc2D"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1" -SourceDir "C:\TunerTools\Web\tunertools\app-guides"
+if (-not (Test-Path -LiteralPath $zip)) {
+    throw "Khong tim thay ZIP: $zip"
+}
 
+New-Item -ItemType Directory -Path $destination -Force | Out-Null
 
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+Expand-Archive -LiteralPath $zip -DestinationPath $destination -Force
 
-PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1" -SourceDir "C:\TunerTools\Web\tunertools\app-guides"
-The argument 'C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator>
-
-
+Get-ChildItem -LiteralPath $destination
