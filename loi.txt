@@ -1,68 +1,119 @@
-$ErrorActionPreference = "Stop"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$src = "C:\inetpub\wwwroot\document"
-$dst = "C:\TunerTools\Data\Documents"
-$logDir = "C:\TunerTools\Backups"
+PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
+>>
+>> $src = "C:\inetpub\wwwroot\document"
+>> $dst = "C:\TunerTools\Data\Documents"
+>> $logDir = "C:\TunerTools\Backups"
+>>
+>> if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+>>     throw "KHONG TIM THAY THU MUC TAI LIEU GOC."
+>> }
+>>
+>> # Khong ghi de du lieu dich da co
+>> if (Test-Path -LiteralPath $dst) {
+>>     $existing = Get-ChildItem -LiteralPath $dst -Force |
+>>         Select-Object -First 1
+>>
+>>     if ($existing) {
+>>         throw "THU MUC DICH DA CO DU LIEU. CAN KIEM TRA TRUOC."
+>>     }
+>> }
+>>
+>> $sourceSize = (
+>>     Get-ChildItem -LiteralPath $src -Recurse -File -Force |
+>>     Measure-Object -Property Length -Sum
+>> ).Sum
+>>
+>> $free = (Get-PSDrive C).Free
+>>
+>> if ($free -lt ($sourceSize + 8GB)) {
+>>     throw "DUNG LUONG O C KHONG DU DE COPY AN TOAN."
+>> }
+>>
+>> New-Item -ItemType Directory -Path $dst -Force | Out-Null
+>> New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+>>
+>> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+>> $log = Join-Path $logDir "document_copy_$stamp.log"
+>>
+>> Write-Host "`nBAT DAU COPY DOCUMENT..." -ForegroundColor Cyan
+>>
+>> & robocopy.exe $src $dst `
+>>     /E /COPY:DAT /DCOPY:DAT /XJ `
+>>     /R:2 /W:2 /MT:4 `
+>>     /NP /NFL /NDL /TEE "/LOG:$log"
+>>
+>> $rc = $LASTEXITCODE
+>>
+>> if ($rc -ge 8) {
+>>     throw "ROBOCOPY GAP LOI. EXIT CODE: $rc. XEM LOG: $log"
+>> }
+>>
+>> Write-Host "`n=== DOI CHIEU DU LIEU ===" -ForegroundColor Cyan
+>>
+>> foreach ($dir in @($src, $dst)) {
+>>     $stats = Get-ChildItem -LiteralPath $dir `
+>>         -Recurse -File -Force |
+>>         Measure-Object -Property Length -Sum
+>>
+>>     [PSCustomObject]@{
+>>         Folder = $dir
+>>         Files = $stats.Count
+>>         Bytes = [long]$stats.Sum
+>>         SizeGB = [math]::Round($stats.Sum / 1GB, 2)
+>>     }
+>> }
+>>
+>> Write-Host "`nROBOCOPY EXIT CODE: $rc"
+>> Write-Host "LOG: $log"
+>> Write-Host "KHONG XOA DU LIEU GOC." -ForegroundColor Yellow
 
-if (-not (Test-Path -LiteralPath $src -PathType Container)) {
-    throw "KHONG TIM THAY THU MUC TAI LIEU GOC."
-}
+BAT DAU COPY DOCUMENT...
 
-# Khong ghi de du lieu dich da co
-if (Test-Path -LiteralPath $dst) {
-    $existing = Get-ChildItem -LiteralPath $dst -Force |
-        Select-Object -First 1
+ Log File : C:\TunerTools\Backups\document_copy_20261105_141312.log
 
-    if ($existing) {
-        throw "THU MUC DICH DA CO DU LIEU. CAN KIEM TRA TRUOC."
-    }
-}
+-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows
+-------------------------------------------------------------------------------
 
-$sourceSize = (
-    Get-ChildItem -LiteralPath $src -Recurse -File -Force |
-    Measure-Object -Property Length -Sum
-).Sum
+  Started : Thursday, November 5, 2026 14:13:12
+   Source : C:\inetpub\wwwroot\document\
+     Dest : C:\TunerTools\Data\Documents\
 
-$free = (Get-PSDrive C).Free
+    Files : *.*
 
-if ($free -lt ($sourceSize + 8GB)) {
-    throw "DUNG LUONG O C KHONG DU DE COPY AN TOAN."
-}
+  Options : *.* /NDL /NFL /TEE /S /E /DCOPY:DAT /COPY:DAT /NP /XJ /MT:4 /R:2 /W:2
 
-New-Item -ItemType Directory -Path $dst -Force | Out-Null
-New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+------------------------------------------------------------------------------
 
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$log = Join-Path $logDir "document_copy_$stamp.log"
 
-Write-Host "`nBAT DAU COPY DOCUMENT..." -ForegroundColor Cyan
+------------------------------------------------------------------------------
 
-& robocopy.exe $src $dst `
-    /E /COPY:DAT /DCOPY:DAT /XJ `
-    /R:2 /W:2 /MT:4 `
-    /NP /NFL /NDL /TEE "/LOG:$log"
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Dirs :        21        21         1         0         0         0
+   Files :       251       251         0         0         0         0
+   Bytes :  11.539 g  11.539 g         0         0         0         0
+   Times :   0:01:08   0:00:10                       0:00:00   0:00:02
 
-$rc = $LASTEXITCODE
 
-if ($rc -ge 8) {
-    throw "ROBOCOPY GAP LOI. EXIT CODE: $rc. XEM LOG: $log"
-}
+   Speed :           1132693561 Bytes/sec.
+   Speed :            64813.245 MegaBytes/min.
+   Ended : Thursday, November 5, 2026 14:13:26
 
-Write-Host "`n=== DOI CHIEU DU LIEU ===" -ForegroundColor Cyan
 
-foreach ($dir in @($src, $dst)) {
-    $stats = Get-ChildItem -LiteralPath $dir `
-        -Recurse -File -Force |
-        Measure-Object -Property Length -Sum
+=== DOI CHIEU DU LIEU ===
 
-    [PSCustomObject]@{
-        Folder = $dir
-        Files = $stats.Count
-        Bytes = [long]$stats.Sum
-        SizeGB = [math]::Round($stats.Sum / 1GB, 2)
-    }
-}
 
-Write-Host "`nROBOCOPY EXIT CODE: $rc"
-Write-Host "LOG: $log"
-Write-Host "KHONG XOA DU LIEU GOC." -ForegroundColor Yellow
+ROBOCOPY EXIT CODE: 1
+LOG: C:\TunerTools\Backups\document_copy_20261105_141312.log
+KHONG XOA DU LIEU GOC.
+Folder                       Files       Bytes SizeGB
+------                       -----       ----- ------
+C:\inetpub\wwwroot\document    251 12390534870  11.54
+C:\TunerTools\Data\Documents   251 12390534870  11.54
+
+
+PS C:\Users\Administrator>
+
