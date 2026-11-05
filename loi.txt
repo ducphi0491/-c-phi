@@ -31,3 +31,41 @@ foreach ($check in $checks) {
         }
     }
 }
+
+2...............
+
+
+$root = "C:\TunerTools\Data\GuitarPro"
+
+if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+    throw "Khong tim thay thu muc Guitar Pro chinh"
+}
+
+[long]$total = 0
+[long]$bytes = 0
+[long]$gpCount = 0
+
+Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
+ForEach-Object {
+    $total++
+    $bytes += $_.Length
+
+    if ($_.Extension.ToLowerInvariant() -in @(
+        ".gp", ".gp3", ".gp4", ".gp5", ".gpx"
+    )) {
+        $gpCount++
+    }
+}
+
+Write-Host "`n=== GUITAR PRO HIEN TAI ===" -ForegroundColor Cyan
+Write-Host "TONG SO FILE: $total"
+Write-Host "FILE GUITAR PRO: $gpCount"
+Write-Host "DUNG LUONG BYTE: $bytes"
+Write-Host "DUNG LUONG GiB: $([math]::Round($bytes / 1GB, 2))"
+
+if ($total -eq 1639039 -and $bytes -eq 57955266829) {
+    Write-Host "KHOP SO LIEU TRUOC KHI CHUYEN" -ForegroundColor Green
+}
+else {
+    Write-Host "SO LIEU CO CHENH LECH - CAN KIEM TRA" -ForegroundColor Yellow
+}
