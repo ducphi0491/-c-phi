@@ -1,93 +1,28 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$dirs = @(
+    "C:\inetpub\wwwroot\document",
+    "C:\inetpub\wwwroot\document_cache"
+)
 
-PS C:\Users\Administrator> $root = "C:\inetpub\wwwroot"
->> $py = "C:\TunerTools\Audio\AI_Music\app.py"
->> $doc = "$root\api_documents.php"
->>
->> Write-Host "`n=== API DOCUMENTS ===" -ForegroundColor Cyan
->>
->> @(
->>     "$root\api_documents.php",
->>     "$root\document",
->>     "$root\document_cache",
->>     "C:\TunerTools\Web\API\api_documents.php"
->> ) | ForEach-Object {
->>     [PSCustomObject]@{
->>         Path = $_
->>         Exists = Test-Path -LiteralPath $_
->>     }
->> } | Format-Table -AutoSize
->>
->> Write-Host "`n=== DUONG DAN TRONG API DOCUMENTS ===" -ForegroundColor Cyan
->>
->> if (Test-Path -LiteralPath $doc) {
->>     Select-String -LiteralPath $doc -SimpleMatch -Pattern @(
->>         'C:\inetpub\wwwroot',
->>         'document_cache',
->>         '__DIR__'
->>     ) | ForEach-Object {
->>         $line = $_.Line.Trim()
->>
->>         if ($line -match '(?i)password|secret|token|api.?key|authorization|private.?key') {
->>             $line = "[DA AN NOI DUNG NHAY CAM]"
->>         }
->>
->>         [PSCustomObject]@{
->>             Line = $_.LineNumber
->>             Code = $line
->>         }
->>     } | Format-Table -AutoSize -Wrap
->> }
->>
->> Write-Host "`n=== PYTHON AI ROUTES ===" -ForegroundColor Cyan
->>
->> if (Test-Path -LiteralPath $py) {
->>     Select-String -LiteralPath $py -SimpleMatch -Pattern @(
->>         'get_lyrics',
->>         'analyze_file',
->>         'search_zing_mp3'
->>     ) | Select-Object LineNumber, Pattern |
->>         Format-Table -AutoSize
->> }
->>
->> Write-Host "`nBACKEND AUDIT COMPLETED" -ForegroundColor Green
+foreach ($dir in $dirs) {
 
-=== API DOCUMENTS ===
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        Write-Host "NOT FOUND: $dir" -ForegroundColor Yellow
+        continue
+    }
 
-Path                                    Exists
-----                                    ------
-C:\inetpub\wwwroot\api_documents.php      True
-C:\inetpub\wwwroot\document               True
-C:\inetpub\wwwroot\document_cache         True
-C:\TunerTools\Web\API\api_documents.php  False
+    $result = Get-ChildItem -LiteralPath $dir `
+        -Recurse -File -Force -ErrorAction Stop |
+        Measure-Object -Property Length -Sum
 
+    [PSCustomObject]@{
+        Folder = $dir
+        Files = $result.Count
+        SizeMB = [math]::Round($result.Sum / 1MB, 2)
+        SizeGB = [math]::Round($result.Sum / 1GB, 3)
+    }
+}
 
+Write-Host "`n=== DOCUMENT SCHEMA MARKER ===" -ForegroundColor Cyan
 
-=== DUONG DAN TRONG API DOCUMENTS ===
-
-Line Code
----- ----
-   6 *   C:\inetpub\wwwroot\api_documents.php
-   9 *   C:\inetpub\wwwroot\document
-  12 *   C:\inetpub\wwwroot\guitar_HD
-  36 ini_set('error_log', __DIR__ . DIRECTORY_SEPARATOR . 'api_documents_error.log');
-  78 $documentRoot = __DIR__ . DIRECTORY_SEPARATOR . 'document';
-  79 $guitarCourseRoot = __DIR__ . DIRECTORY_SEPARATOR . 'guitar_HD';
- 131 $DOCUMENT_SCHEMA_MARKER_FILE = __DIR__ . DIRECTORY_SEPARATOR . '.tunertools_document_schema_v10.ready';
- 132 $DOCUMENT_SUMMARY_CACHE_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'document_cache';
-
-
-
-=== PYTHON AI ROUTES ===
-
-LineNumber Pattern
----------- -------
-      1089 search_zing_mp3
-      1090 search_zing_mp3
-      1363 analyze_file
-
-
-
-BACKEND AUDIT COMPLETED
-PS C:\Users\Administrator>
+Test-Path -LiteralPath `
+    "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
