@@ -4,13 +4,18 @@ $names = @(
     "api_documents.php"
 )
 
-foreach ($name in $names) {
+$results = foreach ($name in $names) {
+
     $old = "C:\inetpub\wwwroot\$name"
     $new = "C:\TunerTools\Web\API\$name"
 
+    $oldExists = Test-Path -LiteralPath $old -PathType Leaf
+    $newExists = Test-Path -LiteralPath $new -PathType Leaf
+
     $isWrapper = $false
 
-    if (Test-Path -LiteralPath $old) {
+    if ($oldExists) {
+
         $content = [IO.File]::ReadAllText($old)
 
         $expected = "C:/TunerTools/Web/API/$name"
@@ -19,9 +24,13 @@ foreach ($name in $names) {
     }
 
     [PSCustomObject]@{
-        API = $name
-        PHP_Old_Exists = Test-Path -LiteralPath $old
-        Wrapper_OK = $isWrapper
-        PHP_New_Exists = Test-Path -LiteralPath $new
+        API            = $name
+        PHP_Old_Exists = $oldExists
+        Wrapper_OK     = $isWrapper
+        PHP_New_Exists = $newExists
     }
-} | Format-Table -AutoSize
+}
+
+Write-Host "`n=== KET QUA KIEM TRA PHP ===" -ForegroundColor Cyan
+
+$results | Format-Table -AutoSize
