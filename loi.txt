@@ -1,28 +1,43 @@
-$dirs = @(
-    "C:\inetpub\wwwroot\document",
-    "C:\inetpub\wwwroot\document_cache"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($dir in $dirs) {
+PS C:\Users\Administrator> $dirs = @(
+>>     "C:\inetpub\wwwroot\document",
+>>     "C:\inetpub\wwwroot\document_cache"
+>> )
+>>
+>> foreach ($dir in $dirs) {
+>>
+>>     if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+>>         Write-Host "NOT FOUND: $dir" -ForegroundColor Yellow
+>>         continue
+>>     }
+>>
+>>     $result = Get-ChildItem -LiteralPath $dir `
+>>         -Recurse -File -Force -ErrorAction Stop |
+>>         Measure-Object -Property Length -Sum
+>>
+>>     [PSCustomObject]@{
+>>         Folder = $dir
+>>         Files = $result.Count
+>>         SizeMB = [math]::Round($result.Sum / 1MB, 2)
+>>         SizeGB = [math]::Round($result.Sum / 1GB, 3)
+>>     }
+>> }
+>>
+>> Write-Host "`n=== DOCUMENT SCHEMA MARKER ===" -ForegroundColor Cyan
+>>
+>> Test-Path -LiteralPath `
+>>     "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
 
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
-        Write-Host "NOT FOUND: $dir" -ForegroundColor Yellow
-        continue
-    }
 
-    $result = Get-ChildItem -LiteralPath $dir `
-        -Recurse -File -Force -ErrorAction Stop |
-        Measure-Object -Property Length -Sum
+=== DOCUMENT SCHEMA MARKER ===
+Folder                            Files   SizeMB SizeGB
+------                            -----   ------ ------
+C:\inetpub\wwwroot\document         251 11816.53  11.54
+C:\inetpub\wwwroot\document_cache    35        0      0
+True
 
-    [PSCustomObject]@{
-        Folder = $dir
-        Files = $result.Count
-        SizeMB = [math]::Round($result.Sum / 1MB, 2)
-        SizeGB = [math]::Round($result.Sum / 1GB, 3)
-    }
-}
 
-Write-Host "`n=== DOCUMENT SCHEMA MARKER ===" -ForegroundColor Cyan
+PS C:\Users\Administrator>
 
-Test-Path -LiteralPath `
-    "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
