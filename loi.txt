@@ -1,72 +1,131 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $files = @(
->>     "C:\TunerTools\Web\API\api_gp_search.php",
->>     "C:\TunerTools\Web\API\api_songs.php"
->> )
->>
->> foreach ($file in $files) {
->>     Write-Host "`n=== $(Split-Path $file -Leaf) ===" -ForegroundColor Cyan
->>
->>     Select-String -LiteralPath $file `
->>         -SimpleMatch `
->>         -Pattern @(
->>             '$tempFilesDir',
->>             'tuner_images_'
->>         ) |
->>     ForEach-Object {
->>
->>         $line = $_.Line.Trim()
->>
->>         if ($line -match '(?i)password|token|secret|api.?key|authorization') {
->>             $line = "[DA AN NOI DUNG NHAY CAM]"
->>         }
->>
->>         [PSCustomObject]@{
->>             Line = $_.LineNumber
->>             Code = $line
->>         }
->>     } |
->>     Format-Table -AutoSize -Wrap
->> }
+$cache = "C:\TunerTools\Cache\SheetImages"
+$apiDir = "C:\TunerTools\Web\API"
+$backupDir = "C:\TunerTools\Backups"
+$phpExe = "C:\php\php.exe"
 
-=== api_gp_search.php ===
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$enc = [Text.Encoding]::GetEncoding(28591)
 
-Line Code
----- ----
-2148 $tempFilesDir = 'C:/inetpub/wwwroot' . '/tuner_images_' . uniqid();
-2149 if (!is_dir($tempFilesDir)) {
-2150 mkdir($tempFilesDir, 0777, true);
-2178 file_put_contents("{$tempFilesDir}/{$newImageCount}.{$extUsed}", $fileContent);
-2190 move_uploaded_file($files['tmp_name'][$i], "{$tempFilesDir}/{$newImageCount}.{$ext}");
-2196 $matchedFile = glob("{$tempFilesDir}/{$i}.*");
-2220 rmdir($tempFilesDir);
+New-Item -ItemType Directory -Path $cache -Force | Out-Null
+New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
+# Khong su dung symbolic link/junction cho cache
+$cacheItem = Get-Item -LiteralPath $cache -Force
 
+if ($cacheItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "Cache la link/junction. DUNG SUA."
+}
 
-=== api_songs.php ===
+# Cap quyen ghi cho PHP chay trong DefaultAppPool
+& icacls.exe $cache /grant 'IIS AppPool\DefaultAppPool:(OI)(CI)M'
 
-Line Code
----- ----
-1553 $tempFilesDir = '';
-1574 $tempFilesDir = 'C:/inetpub/wwwroot' . DIRECTORY_SEPARATOR . 'tuner_images_' . uniqid('', true);
-1575 if (!@mkdir($tempFilesDir, 0777, true) && !is_dir($tempFilesDir)) {
-1632 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1651 $targetPath = $tempFilesDir . DIRECTORY_SEPARATOR .
-1654 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1677 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1688 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1699 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1708 $targetPath = $tempFilesDir . DIRECTORY_SEPARATOR .
-1713 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1724 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1736 $matchedFiles = glob($tempFilesDir . DIRECTORY_SEPARATOR . $page . '.*');
-1745 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1766 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1788 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1896 tt_sheet_update_remove_temp_dir($tempFilesDir);
-1940 tt_sheet_update_remove_temp_dir($tempFilesDir);
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong cap duoc quyen ghi Cache."
+}
 
+# Hai mau duong dan da xac nhan tu code
+$plans = @(
+    @{
+        Name = "api_gp_search.php"
+        Old = "'C:/inetpub/wwwroot' . '/tuner_images_'"
+        New = "'C:/TunerTools/Cache/SheetImages/tuner_images_'"
+    },
+    @{
+        Name = "api_songs.php"
+        Old = "'C:/inetpub/wwwroot' . DIRECTORY_SEPARATOR . 'tuner_images_'"
+        New = "'C:/TunerTools/Cache/SheetImages/tuner_images_'"
+    }
+)
 
-PS C:\Users\Administrator>
+$prepared = @()
+
+# Chuan bi file moi, chua thay doi PHP dang chay
+foreach ($p in $plans) {
+
+    $file = Join-Path $apiDir $p.Name
+
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        throw "Khong tim thay: $file"
+    }
+
+    $content = $enc.GetString(
+        [IO.File]::ReadAllBytes($file)
+    )
+
+    $count = ([regex]::Matches(
+        $content,
+        [regex]::Escape($p.Old)
+    )).Count
+
+    if ($count -ne 1) {
+        throw "$($p.Name): Can 1 vi tri, tim thay $count"
+    }
+
+    $backup = Join-Path $backupDir "$($p.Name).before_cache_$stamp.bak"
+    $stage = Join-Path $backupDir "$($p.Name).cache_$stamp.php"
+
+    Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
+
+    $newContent = $content.Replace($p.Old, $p.New)
+
+    [IO.File]::WriteAllBytes(
+        $stage,
+        $enc.GetBytes($newContent)
+    )
+
+    & $phpExe -l $stage
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "PHP syntax error: $($p.Name)"
+    }
+
+    $prepared += [PSCustomObject]@{
+        Name = $p.Name
+        File = $file
+        Backup = $backup
+        Stage = $stage
+    }
+}
+
+$changed = @()
+
+try {
+    foreach ($p in $prepared) {
+
+        $changed += $p
+
+        Copy-Item -LiteralPath $p.Stage `
+            -Destination $p.File `
+            -Force -ErrorAction Stop
+
+        & $phpExe -l $p.File
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "PHP syntax error: $($p.Name)"
+        }
+
+        Write-Host "UPDATED: $($p.Name)" -ForegroundColor Green
+    }
+
+    Write-Host ""
+    Write-Host "SHEET IMAGE CACHE UPDATED OK" -ForegroundColor Green
+    Write-Host "CACHE: $cache"
+}
+catch {
+    foreach ($p in $changed) {
+        Copy-Item -LiteralPath $p.Backup `
+            -Destination $p.File -Force
+    }
+
+    Write-Host "DA KHOI PHUC PHP TU BACKUP" -ForegroundColor Yellow
+    throw
+}
+finally {
+    foreach ($p in $prepared) {
+        if (Test-Path -LiteralPath $p.Stage) {
+            Remove-Item -LiteralPath $p.Stage -Force
+        }
+    }
+}
