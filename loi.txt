@@ -1,36 +1,26 @@
-$names = @(
-    "api_songs.php",
-    "api_gp_search.php",
-    "api_documents.php"
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+
+Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
+
+& $appcmd list vdir
+
+Write-Host "`n=== KIEM TRA THU MUC CU ===" -ForegroundColor Cyan
+
+$folders = @(
+    "tunertools",
+    "img_sys",
+    "libs",
+    "support_chat_uploads",
+    "document_cache"
 )
 
-$results = foreach ($name in $names) {
+foreach ($name in $folders) {
 
-    $old = "C:\inetpub\wwwroot\$name"
-    $new = "C:\TunerTools\Web\API\$name"
-
-    $oldExists = Test-Path -LiteralPath $old -PathType Leaf
-    $newExists = Test-Path -LiteralPath $new -PathType Leaf
-
-    $isWrapper = $false
-
-    if ($oldExists) {
-
-        $content = [IO.File]::ReadAllText($old)
-
-        $expected = "C:/TunerTools/Web/API/$name"
-
-        $isWrapper = $content.Contains($expected)
-    }
+    $path = "C:\inetpub\wwwroot\$name"
 
     [PSCustomObject]@{
-        API            = $name
-        PHP_Old_Exists = $oldExists
-        Wrapper_OK     = $isWrapper
-        PHP_New_Exists = $newExists
+        Folder = $name
+        Exists = Test-Path -LiteralPath $path
+        Path   = $path
     }
-}
-
-Write-Host "`n=== KET QUA KIEM TRA PHP ===" -ForegroundColor Cyan
-
-$results | Format-Table -AutoSize
+} 
