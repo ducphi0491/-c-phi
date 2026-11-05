@@ -1,145 +1,165 @@
-$ErrorActionPreference = "Stop"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$oldApi = "C:\inetpub\wwwroot\api_documents.php"
-$newApi = "C:\TunerTools\Web\API\api_documents.php"
+PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
+>>
+>> $oldApi = "C:\inetpub\wwwroot\api_documents.php"
+>> $newApi = "C:\TunerTools\Web\API\api_documents.php"
+>>
+>> $oldDocs = "C:\inetpub\wwwroot\document"
+>> $newDocs = "C:\TunerTools\Data\Documents"
+>> $course = "C:\TunerTools\Web\guitar_HD"
+>>
+>> $oldMarker = "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
+>> $state = "C:\TunerTools\State\Documents"
+>> $newMarker = Join-Path $state ".tunertools_document_schema_v10.ready"
+>>
+>> $cache = "C:\TunerTools\Cache\Documents"
+>> $logs = "C:\TunerTools\Logs\Documents"
+>> $backup = "C:\TunerTools\Backups"
+>>
+>> $phpExe = "C:\php\php.exe"
+>> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+>>
+>> # Kiem tra cac thanh phan bat buoc
+>> foreach ($file in @($oldApi, $oldMarker, $phpExe, $appcmd)) {
+>>     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+>>         throw "KHONG TIM THAY: $file"
+>>     }
+>> }
+>>
+>> foreach ($dir in @($oldDocs, $newDocs, $course)) {
+>>     if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+>>         throw "KHONG TIM THAY: $dir"
+>>     }
+>> }
+>>
+>> if (Test-Path -LiteralPath $newApi) {
+>>     throw "API DICH DA TON TAI. KHONG GHI DE."
+>> }
+>>
+>> # Xac dinh App Pool dang su dung
+>> $pool = (
+>>     & $appcmd list app "Default Web Site/" /text:applicationPool
+>>     | Out-String
+>> ).Trim()
+>>
+>> if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pool)) {
+>>     throw "KHONG XAC DINH DUOC IIS APPLICATION POOL."
+>> }
+>>
+>> Write-Host "IIS APP POOL: $pool" -ForegroundColor Cyan
+>>
+>> # Tao cac thu muc ngoai IIS
+>> foreach ($dir in @($state, $cache, $logs, $backup)) {
+>>     New-Item -ItemType Directory -Path $dir -Force | Out-Null
+>> }
+>>
+>> # Sao chep file danh dau schema
+>> if (-not (Test-Path -LiteralPath $newMarker)) {
+>>     Copy-Item -LiteralPath $oldMarker `
+>>         -Destination $newMarker -ErrorAction Stop
+>> }
+>>
+>> if ((Get-FileHash $oldMarker).Hash -ne (Get-FileHash $newMarker).Hash) {
+>>     throw "FILE SCHEMA MARKER KHONG KHOP."
+>> }
+>>
+>> # Cap quyen cho App Pool
+>> $permission = "IIS AppPool\$pool" + ":(OI)(CI)M"
+>>
+>> foreach ($dir in @($newDocs, $state, $cache, $logs)) {
+>>     & icacls.exe $dir /grant $permission /T /C /Q
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "LOI CAP QUYEN: $dir"
+>>     }
+>> }
+>>
+>> # Sao luu PHP dang hoat dong
+>> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+>>
+>> $apiBackup = Join-Path $backup "api_documents_before_move_$stamp.php"
+>>
+>> Copy-Item -LiteralPath $oldApi `
+>>     -Destination $apiBackup -ErrorAction Stop
+>>
+>> # Doc theo byte de khong lam thay doi encoding goc
+>> $enc = [Text.Encoding]::GetEncoding(28591)
+>> $content = $enc.GetString([IO.File]::ReadAllBytes($oldApi))
+>>
+>> # Chi sua 5 dong phu thuoc __DIR__
+>> $changes = @(
+>>     @{
+>>         Old = 'ini_set(''error_log'', __DIR__ . DIRECTORY_SEPARATOR . ''api_documents_error.log'');'
+>>         New = 'ini_set(''error_log'', ''C:/TunerTools/Logs/Documents/api_documents_error.log'');'
+>>     },
+>>     @{
+>>         Old = '$documentRoot = __DIR__ . DIRECTORY_SEPARATOR . ''document'';'
+>>         New = '$documentRoot = ''C:/TunerTools/Data/Documents'';'
+>>     },
+>>     @{
+>>         Old = '$guitarCourseRoot = __DIR__ . DIRECTORY_SEPARATOR . ''guitar_HD'';'
+>>         New = '$guitarCourseRoot = ''C:/TunerTools/Web/guitar_HD'';'
+>>     },
+>>     @{
+>>         Old = '$DOCUMENT_SCHEMA_MARKER_FILE = __DIR__ . DIRECTORY_SEPARATOR . ''.tunertools_document_schema_v10.ready'';'
+>>         New = '$DOCUMENT_SCHEMA_MARKER_FILE = ''C:/TunerTools/State/Documents/.tunertools_document_schema_v10.ready'';'
+>>     },
+>>     @{
+>>         Old = '$DOCUMENT_SUMMARY_CACHE_DIR = __DIR__ . DIRECTORY_SEPARATOR . ''document_cache'';'
+>>         New = '$DOCUMENT_SUMMARY_CACHE_DIR = ''C:/TunerTools/Cache/Documents'';'
+>>     }
+>> )
+>>
+>> foreach ($change in $changes) {
+>>     $count = (
+>>         [regex]::Matches($content, [regex]::Escape($change.Old))
+>>     ).Count
+>>
+>>     if ($count -ne 1) {
+>>         throw "MAU PHP KHONG KHOP. TIM THAY $count VI TRI."
+>>     }
+>>
+>>     $content = $content.Replace($change.Old, $change.New)
+>> }
+>>
+>> # Ghi vao file tam, kiem tra truoc khi dua vao Web\API
+>> $stage = Join-Path $backup "api_documents_stage_$stamp.php"
+>>
+>> [IO.File]::WriteAllBytes($stage, $enc.GetBytes($content))
+>>
+>> & $phpExe -l $stage
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>     throw "PHP CO LOI CU PHAP. KHONG CHUYEN API."
+>> }
+>>
+>> Copy-Item -LiteralPath $stage `
+>>     -Destination $newApi -ErrorAction Stop
+>>
+>> Write-Host "`nDOCUMENT API PREPARED OK" -ForegroundColor Green
+>> Write-Host "NEW API: $newApi"
+>> Write-Host "DOCUMENT DATA: $newDocs"
+>> Write-Host "SCHEMA MARKER: $newMarker"
+>> Write-Host "BACKUP: $apiBackup"
+>>
+>> Write-Host "`nAPI GOC VAN DANG HOAT DONG - CHUA CUTOVER" `
+>>     -ForegroundColor Yellow
+At line:40 char:65
++     & $appcmd list app "Default Web Site/" /text:applicationPool
++                                                                 ~
+Missing closing ')' in expression.
+At line:42 char:1
++ ).Trim()
++ ~
+Unexpected token ')' in expression or statement.
+At line:42 char:8
++ ).Trim()
++        ~
+An expression was expected after '('.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingEndParenthesisInExpression
 
-$oldDocs = "C:\inetpub\wwwroot\document"
-$newDocs = "C:\TunerTools\Data\Documents"
-$course = "C:\TunerTools\Web\guitar_HD"
+PS C:\Users\Administrator>
 
-$oldMarker = "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
-$state = "C:\TunerTools\State\Documents"
-$newMarker = Join-Path $state ".tunertools_document_schema_v10.ready"
-
-$cache = "C:\TunerTools\Cache\Documents"
-$logs = "C:\TunerTools\Logs\Documents"
-$backup = "C:\TunerTools\Backups"
-
-$phpExe = "C:\php\php.exe"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
-
-# Kiem tra cac thanh phan bat buoc
-foreach ($file in @($oldApi, $oldMarker, $phpExe, $appcmd)) {
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-        throw "KHONG TIM THAY: $file"
-    }
-}
-
-foreach ($dir in @($oldDocs, $newDocs, $course)) {
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
-        throw "KHONG TIM THAY: $dir"
-    }
-}
-
-if (Test-Path -LiteralPath $newApi) {
-    throw "API DICH DA TON TAI. KHONG GHI DE."
-}
-
-# Xac dinh App Pool dang su dung
-$pool = (
-    & $appcmd list app "Default Web Site/" /text:applicationPool
-    | Out-String
-).Trim()
-
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pool)) {
-    throw "KHONG XAC DINH DUOC IIS APPLICATION POOL."
-}
-
-Write-Host "IIS APP POOL: $pool" -ForegroundColor Cyan
-
-# Tao cac thu muc ngoai IIS
-foreach ($dir in @($state, $cache, $logs, $backup)) {
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
-}
-
-# Sao chep file danh dau schema
-if (-not (Test-Path -LiteralPath $newMarker)) {
-    Copy-Item -LiteralPath $oldMarker `
-        -Destination $newMarker -ErrorAction Stop
-}
-
-if ((Get-FileHash $oldMarker).Hash -ne (Get-FileHash $newMarker).Hash) {
-    throw "FILE SCHEMA MARKER KHONG KHOP."
-}
-
-# Cap quyen cho App Pool
-$permission = "IIS AppPool\$pool" + ":(OI)(CI)M"
-
-foreach ($dir in @($newDocs, $state, $cache, $logs)) {
-    & icacls.exe $dir /grant $permission /T /C /Q
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "LOI CAP QUYEN: $dir"
-    }
-}
-
-# Sao luu PHP dang hoat dong
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-
-$apiBackup = Join-Path $backup "api_documents_before_move_$stamp.php"
-
-Copy-Item -LiteralPath $oldApi `
-    -Destination $apiBackup -ErrorAction Stop
-
-# Doc theo byte de khong lam thay doi encoding goc
-$enc = [Text.Encoding]::GetEncoding(28591)
-$content = $enc.GetString([IO.File]::ReadAllBytes($oldApi))
-
-# Chi sua 5 dong phu thuoc __DIR__
-$changes = @(
-    @{
-        Old = 'ini_set(''error_log'', __DIR__ . DIRECTORY_SEPARATOR . ''api_documents_error.log'');'
-        New = 'ini_set(''error_log'', ''C:/TunerTools/Logs/Documents/api_documents_error.log'');'
-    },
-    @{
-        Old = '$documentRoot = __DIR__ . DIRECTORY_SEPARATOR . ''document'';'
-        New = '$documentRoot = ''C:/TunerTools/Data/Documents'';'
-    },
-    @{
-        Old = '$guitarCourseRoot = __DIR__ . DIRECTORY_SEPARATOR . ''guitar_HD'';'
-        New = '$guitarCourseRoot = ''C:/TunerTools/Web/guitar_HD'';'
-    },
-    @{
-        Old = '$DOCUMENT_SCHEMA_MARKER_FILE = __DIR__ . DIRECTORY_SEPARATOR . ''.tunertools_document_schema_v10.ready'';'
-        New = '$DOCUMENT_SCHEMA_MARKER_FILE = ''C:/TunerTools/State/Documents/.tunertools_document_schema_v10.ready'';'
-    },
-    @{
-        Old = '$DOCUMENT_SUMMARY_CACHE_DIR = __DIR__ . DIRECTORY_SEPARATOR . ''document_cache'';'
-        New = '$DOCUMENT_SUMMARY_CACHE_DIR = ''C:/TunerTools/Cache/Documents'';'
-    }
-)
-
-foreach ($change in $changes) {
-    $count = (
-        [regex]::Matches($content, [regex]::Escape($change.Old))
-    ).Count
-
-    if ($count -ne 1) {
-        throw "MAU PHP KHONG KHOP. TIM THAY $count VI TRI."
-    }
-
-    $content = $content.Replace($change.Old, $change.New)
-}
-
-# Ghi vao file tam, kiem tra truoc khi dua vao Web\API
-$stage = Join-Path $backup "api_documents_stage_$stamp.php"
-
-[IO.File]::WriteAllBytes($stage, $enc.GetBytes($content))
-
-& $phpExe -l $stage
-
-if ($LASTEXITCODE -ne 0) {
-    throw "PHP CO LOI CU PHAP. KHONG CHUYEN API."
-}
-
-Copy-Item -LiteralPath $stage `
-    -Destination $newApi -ErrorAction Stop
-
-Write-Host "`nDOCUMENT API PREPARED OK" -ForegroundColor Green
-Write-Host "NEW API: $newApi"
-Write-Host "DOCUMENT DATA: $newDocs"
-Write-Host "SCHEMA MARKER: $newMarker"
-Write-Host "BACKUP: $apiBackup"
-
-Write-Host "`nAPI GOC VAN DANG HOAT DONG - CHUA CUTOVER" `
-    -ForegroundColor Yellow
