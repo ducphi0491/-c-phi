@@ -1,119 +1,33 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$checks = @(
+    @{
+        File = "C:\TunerTools\Web\API\api_gp_search.php"
+        Lines = @(1358, 3474, 3498, 3557)
+    },
+    @{
+        File = "C:\TunerTools\Web\API\api_songs.php"
+        Lines = @(261, 3515, 3539, 3598)
+    }
+)
 
-PS C:\Users\Administrator> $files = @(
->>     "C:\TunerTools\Web\API\api_gp_search.php",
->>     "C:\TunerTools\Web\API\api_songs.php",
->>     "C:\TunerTools\Audio\AI_Music\app.py",
->>     "C:\TunerTools\Audio\AI_Music\ChayNgam.vbs",
->>     "C:\inetpub\wwwroot\api_AI.bat",
->>     "C:\inetpub\wwwroot\api_documents.php"
->> )
->>
->> $patterns = @(
->>     'C:/inetpub/wwwroot',
->>     'C:\inetpub\wwwroot',
->>     'C:/AI_Music',
->>     'C:\AI_Music',
->>     'firebase-service-account.json',
->>     'google-services.json',
->>     'tuner_images_'
->> )
->>
->> Write-Host "`n=== DUONG DAN CON THAM CHIEU ===" -ForegroundColor Cyan
->>
->> foreach ($file in $files) {
->>     if (Test-Path -LiteralPath $file -PathType Leaf) {
->>         Select-String -LiteralPath $file `
->>             -SimpleMatch -Pattern $patterns |
->>         Select-Object @{
->>             Name = 'File'
->>             Expression = { Split-Path $_.Path -Leaf }
->>         }, LineNumber, Pattern
->>     }
->> }
->>
->> Write-Host "`n=== THU MUC CU ===" -ForegroundColor Cyan
->>
->> @(
->>     "C:\AI_Music",
->>     "C:\inetpub\wwwroot\tunertools",
->>     "C:\inetpub\wwwroot\guitar_HD",
->>     "C:\inetpub\wwwroot\libs",
->>     "C:\inetpub\wwwroot\img_sys",
->>     "C:\inetpub\wwwroot\support_chat_uploads",
->>     "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
->> ) | ForEach-Object {
->>     [PSCustomObject]@{
->>         Folder = $_
->>         Exists = Test-Path -LiteralPath $_
->>     }
->> } | Format-Table -AutoSize
->>
->> Write-Host "`n=== DUNG LUONG O C ===" -ForegroundColor Cyan
->>
->> Get-PSDrive C |
->> Select-Object Name,
->> @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}} |
->> Format-Table -AutoSize
->>
->> Write-Host "FINAL AUDIT COMPLETED" -ForegroundColor Green
+foreach ($check in $checks) {
+    Write-Host "`n=== $($check.File) ===" -ForegroundColor Cyan
 
-=== DUONG DAN CON THAM CHIEU ===
+    $content = Get-Content -LiteralPath $check.File
 
+    foreach ($n in $check.Lines) {
+        Write-Host "`n--- DONG $n ---"
 
-=== THU MUC CU ===
-File              LineNumber Pattern
-----              ---------- -------
-api_gp_search.php       1259 C:/inetpub/wwwroot
-api_gp_search.php       1328 google-services.json
-api_gp_search.php       1339 C:/inetpub/wwwroot
-api_gp_search.php       1358 C:/AI_Music
-api_gp_search.php       1500 C:/inetpub/wwwroot
-api_gp_search.php       1510 firebase-service-account.json
-api_gp_search.php       1778 C:/inetpub/wwwroot
-api_gp_search.php       2148 C:/inetpub/wwwroot
-api_gp_search.php       3445 C:/inetpub/wwwroot
-api_gp_search.php       3474 C:/AI_Music
-api_gp_search.php       3498 C:/AI_Music
-api_gp_search.php       3557 C:/AI_Music
-api_songs.php             59 C:/inetpub/wwwroot
-api_songs.php            231 google-services.json
-api_songs.php            242 C:/inetpub/wwwroot
-api_songs.php            261 C:/AI_Music
-api_songs.php            403 C:/inetpub/wwwroot
-api_songs.php            413 firebase-service-account.json
-api_songs.php            717 C:/inetpub/wwwroot
-api_songs.php           1574 C:/inetpub/wwwroot
-api_songs.php           3486 C:/inetpub/wwwroot
-api_songs.php           3515 C:/AI_Music
-api_songs.php           3539 C:/AI_Music
-api_songs.php           3598 C:/AI_Music
-ChayNgam.vbs               4 C:\inetpub\wwwroot
-api_documents.php          6 C:\inetpub\wwwroot
-api_documents.php          9 C:\inetpub\wwwroot
-api_documents.php         12 C:\inetpub\wwwroot
+        $start = [Math]::Max(1, $n - 1)
+        $end = [Math]::Min($content.Count, $n + 1)
 
+        for ($i = $start; $i -le $end; $i++) {
+            $line = $content[$i - 1]
 
+            if ($line -match '(?i)password|secret|token|api.?key|authorization|private.?key') {
+                $line = "[DA AN NOI DUNG NHAY CAM]"
+            }
 
-Folder                                       Exists
-------                                       ------
-C:\AI_Music                                   False
-C:\inetpub\wwwroot\tunertools                  True
-C:\inetpub\wwwroot\guitar_HD                   True
-C:\inetpub\wwwroot\libs                        True
-C:\inetpub\wwwroot\img_sys                     True
-C:\inetpub\wwwroot\support_chat_uploads        True
-C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE   True
-
-
-
-=== DUNG LUONG O C ===
-
-Name FreeGB
----- ------
-C     51.06
-
-
-FINAL AUDIT COMPLETED
-PS C:\Users\Administrator>
+            Write-Host "${i}: $line"
+        }
+    }
+}
