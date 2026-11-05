@@ -1,43 +1,68 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $dirs = @(
->>     "C:\inetpub\wwwroot\document",
->>     "C:\inetpub\wwwroot\document_cache"
->> )
->>
->> foreach ($dir in $dirs) {
->>
->>     if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
->>         Write-Host "NOT FOUND: $dir" -ForegroundColor Yellow
->>         continue
->>     }
->>
->>     $result = Get-ChildItem -LiteralPath $dir `
->>         -Recurse -File -Force -ErrorAction Stop |
->>         Measure-Object -Property Length -Sum
->>
->>     [PSCustomObject]@{
->>         Folder = $dir
->>         Files = $result.Count
->>         SizeMB = [math]::Round($result.Sum / 1MB, 2)
->>         SizeGB = [math]::Round($result.Sum / 1GB, 3)
->>     }
->> }
->>
->> Write-Host "`n=== DOCUMENT SCHEMA MARKER ===" -ForegroundColor Cyan
->>
->> Test-Path -LiteralPath `
->>     "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
+$src = "C:\inetpub\wwwroot\document"
+$dst = "C:\TunerTools\Data\Documents"
+$logDir = "C:\TunerTools\Backups"
 
+if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+    throw "KHONG TIM THAY THU MUC TAI LIEU GOC."
+}
 
-=== DOCUMENT SCHEMA MARKER ===
-Folder                            Files   SizeMB SizeGB
-------                            -----   ------ ------
-C:\inetpub\wwwroot\document         251 11816.53  11.54
-C:\inetpub\wwwroot\document_cache    35        0      0
-True
+# Khong ghi de du lieu dich da co
+if (Test-Path -LiteralPath $dst) {
+    $existing = Get-ChildItem -LiteralPath $dst -Force |
+        Select-Object -First 1
 
+    if ($existing) {
+        throw "THU MUC DICH DA CO DU LIEU. CAN KIEM TRA TRUOC."
+    }
+}
 
-PS C:\Users\Administrator>
+$sourceSize = (
+    Get-ChildItem -LiteralPath $src -Recurse -File -Force |
+    Measure-Object -Property Length -Sum
+).Sum
 
+$free = (Get-PSDrive C).Free
+
+if ($free -lt ($sourceSize + 8GB)) {
+    throw "DUNG LUONG O C KHONG DU DE COPY AN TOAN."
+}
+
+New-Item -ItemType Directory -Path $dst -Force | Out-Null
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$log = Join-Path $logDir "document_copy_$stamp.log"
+
+Write-Host "`nBAT DAU COPY DOCUMENT..." -ForegroundColor Cyan
+
+& robocopy.exe $src $dst `
+    /E /COPY:DAT /DCOPY:DAT /XJ `
+    /R:2 /W:2 /MT:4 `
+    /NP /NFL /NDL /TEE "/LOG:$log"
+
+$rc = $LASTEXITCODE
+
+if ($rc -ge 8) {
+    throw "ROBOCOPY GAP LOI. EXIT CODE: $rc. XEM LOG: $log"
+}
+
+Write-Host "`n=== DOI CHIEU DU LIEU ===" -ForegroundColor Cyan
+
+foreach ($dir in @($src, $dst)) {
+    $stats = Get-ChildItem -LiteralPath $dir `
+        -Recurse -File -Force |
+        Measure-Object -Property Length -Sum
+
+    [PSCustomObject]@{
+        Folder = $dir
+        Files = $stats.Count
+        Bytes = [long]$stats.Sum
+        SizeGB = [math]::Round($stats.Sum / 1GB, 2)
+    }
+}
+
+Write-Host "`nROBOCOPY EXIT CODE: $rc"
+Write-Host "LOG: $log"
+Write-Host "KHONG XOA DU LIEU GOC." -ForegroundColor Yellow
