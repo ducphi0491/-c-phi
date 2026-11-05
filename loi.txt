@@ -1,260 +1,155 @@
-$ErrorActionPreference = "Stop"
 
-# =====================================================
-# 1. CAU HINH DUONG DAN
-# =====================================================
-
-$oldApi = "C:\inetpub\wwwroot\api_documents.php"
-$newApi = "C:\TunerTools\Web\API\api_documents.php"
-
-$oldDocs = "C:\inetpub\wwwroot\document"
-$newDocs = "C:\TunerTools\Data\Documents"
-
-$course = "C:\TunerTools\Web\guitar_HD"
-
-$oldMarker = "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
-
-$state = "C:\TunerTools\State\Documents"
-$newMarker = Join-Path $state ".tunertools_document_schema_v10.ready"
-
-$cache = "C:\TunerTools\Cache\Documents"
-$logs = "C:\TunerTools\Logs\Documents"
-$backup = "C:\TunerTools\Backups"
-
-$phpExe = "C:\php\php.exe"
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
-
-# =====================================================
-# 2. KIEM TRA FILE VA THU MUC
-# =====================================================
-
-Write-Host "`n=== KIEM TRA DU LIEU ===" -ForegroundColor Cyan
-
-foreach ($file in @($oldApi, $oldMarker, $phpExe, $appcmd)) {
-
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-        throw "KHONG TIM THAY FILE: $file"
-    }
-
-    Write-Host "FILE OK: $file" -ForegroundColor Green
-}
-
-foreach ($dir in @($oldDocs, $newDocs, $course)) {
-
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
-        throw "KHONG TIM THAY THU MUC: $dir"
-    }
-
-    Write-Host "FOLDER OK: $dir" -ForegroundColor Green
-}
-
-# Khong ghi de API dich neu da ton tai
-if (Test-Path -LiteralPath $newApi) {
-    throw "API MOI DA TON TAI. KHONG GHI DE: $newApi"
-}
-
-# =====================================================
-# 3. XAC DINH IIS APPLICATION POOL
-# =====================================================
-
-Write-Host "`n=== IIS APPLICATION POOL ===" -ForegroundColor Cyan
-
-# DA SUA LOI CU PHAP POWERSHELL
-$pool = (& $appcmd list app "Default Web Site/" /text:applicationPool | Out-String).Trim()
-
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pool)) {
-    throw "KHONG XAC DINH DUOC IIS APPLICATION POOL."
-}
-
-if ($pool.Contains("`n") -or $pool.Contains("`r")) {
-    throw "KET QUA APPLICATION POOL KHONG HOP LE."
-}
-
-Write-Host "IIS APP POOL: $pool" -ForegroundColor Green
-
-# =====================================================
-# 4. DOC PHP VA CHUAN BI 5 THAY DOI
-# =====================================================
-
-Write-Host "`n=== CHUAN BI PHP ===" -ForegroundColor Cyan
-
-# ISO-8859-1 giu nguyen gia tri byte khi thay the ASCII
-$enc = [Text.Encoding]::GetEncoding(28591)
-
-$content = $enc.GetString(
-    [IO.File]::ReadAllBytes($oldApi)
-)
-
-$changes = @(
-    @{
-        Old = "ini_set('error_log', __DIR__ . DIRECTORY_SEPARATOR . 'api_documents_error.log');"
-        New = "ini_set('error_log', 'C:/TunerTools/Logs/Documents/api_documents_error.log');"
-    },
-    @{
-        Old = '$documentRoot = __DIR__ . DIRECTORY_SEPARATOR . ''document'';'
-        New = '$documentRoot = ''C:/TunerTools/Data/Documents'';'
-    },
-    @{
-        Old = '$guitarCourseRoot = __DIR__ . DIRECTORY_SEPARATOR . ''guitar_HD'';'
-        New = '$guitarCourseRoot = ''C:/TunerTools/Web/guitar_HD'';'
-    },
-    @{
-        Old = '$DOCUMENT_SCHEMA_MARKER_FILE = __DIR__ . DIRECTORY_SEPARATOR . ''.tunertools_document_schema_v10.ready'';'
-        New = '$DOCUMENT_SCHEMA_MARKER_FILE = ''C:/TunerTools/State/Documents/.tunertools_document_schema_v10.ready'';'
-    },
-    @{
-        Old = '$DOCUMENT_SUMMARY_CACHE_DIR = __DIR__ . DIRECTORY_SEPARATOR . ''document_cache'';'
-        New = '$DOCUMENT_SUMMARY_CACHE_DIR = ''C:/TunerTools/Cache/Documents'';'
-    }
-)
-
-foreach ($change in $changes) {
-
-    $count = (
-        [regex]::Matches(
-            $content,
-            [regex]::Escape($change.Old)
-        )
-    ).Count
-
-    if ($count -ne 1) {
-        throw "MAU PHP KHONG KHOP. TIM THAY $count VI TRI."
-    }
-
-    $content = $content.Replace(
-        $change.Old,
-        $change.New
-    )
-}
-
-Write-Host "5 PHP PATHS READY" -ForegroundColor Green
-
-# =====================================================
-# 5. TAO THU MUC MOI
-# =====================================================
-
-Write-Host "`n=== TAO THU MUC ===" -ForegroundColor Cyan
-
-foreach ($dir in @($state, $cache, $logs, $backup)) {
-
-    New-Item `
-        -ItemType Directory `
-        -Path $dir `
-        -Force | Out-Null
-
-    Write-Host "FOLDER READY: $dir" -ForegroundColor Green
-}
-
-# =====================================================
-# 6. SAO CHEP SCHEMA MARKER
-# =====================================================
-
-if (-not (Test-Path -LiteralPath $newMarker)) {
-
-    Copy-Item `
-        -LiteralPath $oldMarker `
-        -Destination $newMarker `
-        -ErrorAction Stop
-}
-
-$hashOld = (Get-FileHash -LiteralPath $oldMarker).Hash
-$hashNew = (Get-FileHash -LiteralPath $newMarker).Hash
-
-if ($hashOld -ne $hashNew) {
-    throw "SCHEMA MARKER KHONG KHOP. DUNG CHUYEN."
-}
-
-Write-Host "SCHEMA MARKER OK" -ForegroundColor Green
-
-# =====================================================
-# 7. CAP QUYEN IIS
-# =====================================================
-
-Write-Host "`n=== CAP QUYEN IIS ===" -ForegroundColor Cyan
-
-$permission = "IIS AppPool\$pool" + ":(OI)(CI)M"
-
-foreach ($dir in @($newDocs, $state, $cache, $logs)) {
-
-    & icacls.exe $dir /grant $permission /T /C /Q
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "LOI CAP QUYEN: $dir"
-    }
-
-    Write-Host "PERMISSION OK: $dir" -ForegroundColor Green
-}
-
-# =====================================================
-# 8. SAO LUU PHP GOC
-# =====================================================
-
-Write-Host "`n=== BACKUP API ===" -ForegroundColor Cyan
-
-$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-
-$apiBackup = Join-Path $backup "api_documents_before_move_$stamp.php"
-
-Copy-Item `
-    -LiteralPath $oldApi `
-    -Destination $apiBackup `
-    -ErrorAction Stop
-
-Write-Host "BACKUP OK: $apiBackup" -ForegroundColor Green
-
-# =====================================================
-# 9. TAO PHP MOI VA KIEM TRA CU PHAP
-# =====================================================
-
-Write-Host "`n=== PHP SYNTAX CHECK ===" -ForegroundColor Cyan
-
-$stage = Join-Path $backup "api_documents_stage_$stamp.php"
-
-[IO.File]::WriteAllBytes(
-    $stage,
-    $enc.GetBytes($content)
-)
-
-& $phpExe -l $stage
-
-if ($LASTEXITCODE -ne 0) {
-    throw "PHP MOI CO LOI CU PHAP. KHONG CHUYEN."
-}
-
-# =====================================================
-# 10. DUA PHP VAO THU MUC MOI
-# =====================================================
-
-Copy-Item `
-    -LiteralPath $stage `
-    -Destination $newApi `
-    -ErrorAction Stop
-
-& $phpExe -l $newApi
-
-if ($LASTEXITCODE -ne 0) {
-
-    Remove-Item -LiteralPath $newApi -Force
-
-    throw "PHP MOI CO LOI. DA XOA BAN DICH LOI."
-}
-
-# =====================================================
-# 11. KET QUA
-# =====================================================
-
-Write-Host ""
-Write-Host "======================================" -ForegroundColor Green
-Write-Host "DOCUMENT API PREPARED OK" -ForegroundColor Green
-Write-Host "======================================" -ForegroundColor Green
-
-Write-Host "NEW API:       $newApi"
-Write-Host "DOCUMENT DATA: $newDocs"
-Write-Host "GUITAR COURSE: $course"
-Write-Host "CACHE:         $cache"
-Write-Host "SCHEMA MARKER: $newMarker"
-Write-Host "BACKUP:        $apiBackup"
-
-Write-Host ""
-Write-Host "API GOC VAN DANG HOAT DONG - CHUA CUTOVER" -ForegroundColor Yellow
-Write-Host "KHONG XOA DU LIEU TRONG WWWROOT" -ForegroundColor Yellow
+>> $hashOld = (Get-FileHash -LiteralPath $oldMarker).Hash
+>> $hashNew = (Get-FileHash -LiteralPath $newMarker).Hash
+>>
+>> if ($hashOld -ne $hashNew) {
+>>     throw "SCHEMA MARKER KHONG KHOP. DUNG CHUYEN."
+>> }
+>>
+>> Write-Host "SCHEMA MARKER OK" -ForegroundColor Green
+>>
+>> # =====================================================
+>> # 7. CAP QUYEN IIS
+>> # =====================================================
+>>
+>> Write-Host "`n=== CAP QUYEN IIS ===" -ForegroundColor Cyan
+>>
+>> $permission = "IIS AppPool\$pool" + ":(OI)(CI)M"
+>>
+>> foreach ($dir in @($newDocs, $state, $cache, $logs)) {
+>>
+>>     & icacls.exe $dir /grant $permission /T /C /Q
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "LOI CAP QUYEN: $dir"
+>>     }
+>>
+>>     Write-Host "PERMISSION OK: $dir" -ForegroundColor Green
+>> }
+>>
+>> # =====================================================
+>> # 8. SAO LUU PHP GOC
+>> # =====================================================
+>>
+>> Write-Host "`n=== BACKUP API ===" -ForegroundColor Cyan
+>>
+>> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+>>
+>> $apiBackup = Join-Path $backup "api_documents_before_move_$stamp.php"
+>>
+>> Copy-Item `
+>>     -LiteralPath $oldApi `
+>>     -Destination $apiBackup `
+>>     -ErrorAction Stop
+>>
+>> Write-Host "BACKUP OK: $apiBackup" -ForegroundColor Green
+>>
+>> # =====================================================
+>> # 9. TAO PHP MOI VA KIEM TRA CU PHAP
+>> # =====================================================
+>>
+>> Write-Host "`n=== PHP SYNTAX CHECK ===" -ForegroundColor Cyan
+>>
+>> $stage = Join-Path $backup "api_documents_stage_$stamp.php"
+>>
+>> [IO.File]::WriteAllBytes(
+>>     $stage,
+>>     $enc.GetBytes($content)
+>> )
+>>
+>> & $phpExe -l $stage
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>     throw "PHP MOI CO LOI CU PHAP. KHONG CHUYEN."
+>> }
+>>
+>> # =====================================================
+>> # 10. DUA PHP VAO THU MUC MOI
+>> # =====================================================
+>>
+>> Copy-Item `
+>>     -LiteralPath $stage `
+>>     -Destination $newApi `
+>>     -ErrorAction Stop
+>>
+>> & $phpExe -l $newApi
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>
+>>     Remove-Item -LiteralPath $newApi -Force
+>>
+>>     throw "PHP MOI CO LOI. DA XOA BAN DICH LOI."
+>> }
+>>
+>> # =====================================================
+>> # 11. KET QUA
+>> # =====================================================
+>>
+>> Write-Host ""
+>> Write-Host "======================================" -ForegroundColor Green
+>> Write-Host "DOCUMENT API PREPARED OK" -ForegroundColor Green
+>> Write-Host "======================================" -ForegroundColor Green
+>>
+>> Write-Host "NEW API:       $newApi"
+>> Write-Host "DOCUMENT DATA: $newDocs"
+>> Write-Host "GUITAR COURSE: $course"
+>> Write-Host "CACHE:         $cache"
+>> Write-Host "SCHEMA MARKER: $newMarker"
+>> Write-Host "BACKUP:        $apiBackup"
+>>
+>> Write-Host ""
+>> Write-Host "API GOC VAN DANG HOAT DONG - CHUA CUTOVER" -ForegroundColor Yellow
+>> Write-Host "KHONG XOA DU LIEU TRONG WWWROOT" -ForegroundColor Yellow
+
+=== KIEM TRA DU LIEU ===
+FILE OK: C:\inetpub\wwwroot\api_documents.php
+FILE OK: C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready
+FILE OK: C:\php\php.exe
+FILE OK: C:\Windows\System32\inetsrv\appcmd.exe
+FOLDER OK: C:\inetpub\wwwroot\document
+FOLDER OK: C:\TunerTools\Data\Documents
+FOLDER OK: C:\TunerTools\Web\guitar_HD
+
+=== IIS APPLICATION POOL ===
+IIS APP POOL: DefaultAppPool
+
+=== CHUAN BI PHP ===
+5 PHP PATHS READY
+
+=== TAO THU MUC ===
+FOLDER READY: C:\TunerTools\State\Documents
+FOLDER READY: C:\TunerTools\Cache\Documents
+FOLDER READY: C:\TunerTools\Logs\Documents
+FOLDER READY: C:\TunerTools\Backups
+SCHEMA MARKER OK
+
+=== CAP QUYEN IIS ===
+Successfully processed 272 files; Failed processing 0 files
+PERMISSION OK: C:\TunerTools\Data\Documents
+Successfully processed 2 files; Failed processing 0 files
+PERMISSION OK: C:\TunerTools\State\Documents
+Successfully processed 1 files; Failed processing 0 files
+PERMISSION OK: C:\TunerTools\Cache\Documents
+Successfully processed 1 files; Failed processing 0 files
+PERMISSION OK: C:\TunerTools\Logs\Documents
+
+=== BACKUP API ===
+BACKUP OK: C:\TunerTools\Backups\api_documents_before_move_20261105_142330.php
+
+=== PHP SYNTAX CHECK ===
+No syntax errors detected in C:\TunerTools\Backups\api_documents_stage_20261105_142330.php
+No syntax errors detected in C:\TunerTools\Web\API\api_documents.php
+
+======================================
+DOCUMENT API PREPARED OK
+======================================
+NEW API:       C:\TunerTools\Web\API\api_documents.php
+DOCUMENT DATA: C:\TunerTools\Data\Documents
+GUITAR COURSE: C:\TunerTools\Web\guitar_HD
+CACHE:         C:\TunerTools\Cache\Documents
+SCHEMA MARKER: C:\TunerTools\State\Documents\.tunertools_document_schema_v10.ready
+BACKUP:        C:\TunerTools\Backups\api_documents_before_move_20261105_142330.php
+
+API GOC VAN DANG HOAT DONG - CHUA CUTOVER
+KHONG XOA DU LIEU TRONG WWWROOT
+PS C:\Users\Administrator>
