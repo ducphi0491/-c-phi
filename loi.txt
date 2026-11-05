@@ -1,53 +1,52 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$roots = @(
+    "C:\inetpub\wwwroot",
+    "C:\TunerTools\Web\API",
+    "C:\TunerTools\Web\tunertools"
+)
 
-PS C:\Users\Administrator> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
->>
->> Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
->>
->> & $appcmd list vdir
->>
->> Write-Host "`n=== KIEM TRA THU MUC CU ===" -ForegroundColor Cyan
->>
->> $folders = @(
->>     "tunertools",
->>     "img_sys",
->>     "libs",
->>     "support_chat_uploads",
->>     "document_cache"
->> )
->>
->> foreach ($name in $folders) {
->>
->>     $path = "C:\inetpub\wwwroot\$name"
->>
->>     [PSCustomObject]@{
->>         Folder = $name
->>         Exists = Test-Path -LiteralPath $path
->>         Path   = $path
->>     }
->> }
+$extensions = @(
+    ".php",
+    ".config",
+    ".bat",
+    ".cmd",
+    ".ps1"
+)
 
-=== IIS VIRTUAL DIRECTORIES ===
-VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
-VDIR "Default Web Site/tab" (physicalPath:C:\TunerTools\Data\GuitarPro)
-VDIR "Default Web Site/tunertools" (physicalPath:C:\TunerTools\Web\tunertools)
-VDIR "Default Web Site/app-guides" (physicalPath:C:\TunerTools\Web\tunertools\app-guides)
-VDIR "Default Web Site/support_chat_uploads" (physicalPath:C:\TunerTools\Data\support_chat_uploads)
-VDIR "Default Web Site/guitar_HD" (physicalPath:C:\TunerTools\Web\guitar_HD)
-VDIR "Default Web Site/libs" (physicalPath:C:\TunerTools\Web\libs)
-VDIR "Default Web Site/img_sys" (physicalPath:C:\TunerTools\Web\img_sys)
-VDIR "Default Web Site/document" (physicalPath:C:\TunerTools\Data\Documents)
+$pattern = '(?i)inetpub[\\/]+wwwroot|document_cache|support_chat_uploads|img_sys|[\\/]libs[\\/]|[\\/]tunertools[\\/]'
 
-=== KIEM TRA THU MUC CU ===
+Write-Host "`n=== QUET THAM CHIEU DUONG DAN CU ===" -ForegroundColor Cyan
 
-Folder               Exists Path
-------               ------ ----
-tunertools             True C:\inetpub\wwwroot\tunertools
-img_sys                True C:\inetpub\wwwroot\img_sys
-libs                   True C:\inetpub\wwwroot\libs
-support_chat_uploads   True C:\inetpub\wwwroot\support_chat_uploads
-document_cache         True C:\inetpub\wwwroot\document_cache
+$files = @(
+    foreach ($root in $roots) {
 
+        if (Test-Path -LiteralPath $root) {
 
-PS C:\Users\Administrator>
+            Get-ChildItem -LiteralPath $root `
+                -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $extensions -contains $_.Extension.ToLowerInvariant()
+            }
+        }
+    }
+)
+
+$files = @($files | Sort-Object FullName -Unique)
+
+$hits = @(
+    $files | Select-String -Pattern $pattern |
+    ForEach-Object {
+
+        [PSCustomObject]@{
+            File  = $_.Path
+            Line  = $_.LineNumber
+            Match = $_.Matches[0].Value
+        }
+    }
+)
+
+Write-Host "SOURCE FILES SCANNED: $($files.Count)"
+Write-Host "REFERENCES FOUND: $($hits.Count)"
+
+$hits |
+    Select-Object -First 60 |
+    Format-Table -AutoSize
