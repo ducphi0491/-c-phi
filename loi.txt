@@ -1,122 +1,135 @@
-$ErrorActionPreference = "Stop"
+>>
+>>     Get-ChildItem -LiteralPath $gpRoot -Directory |
+>>         Select-Object -First 25 -ExpandProperty Name
+>>
+>>     Write-Host "`nKHONG SUA PHP: THU MUC VIETNAM CHUA TON TAI." -ForegroundColor Red
+>>     return
+>> }
+>>
+>> Write-Host "`n=== 2. KIEM TRA CAU HINH PHP ===" -ForegroundColor Cyan
+>>
+>> $enc = [Text.Encoding]::GetEncoding(28591)
+>> $content = $enc.GetString([IO.File]::ReadAllBytes($api))
+>>
+>> $pattern = '(?m)^([ \t]*\$ttgp_tab_root[ \t]*=[ \t]*)([^;\r\n]+)(;[^\r\n]*)$'
+>> $matches = [regex]::Matches($content, $pattern)
+>>
+>> if ($matches.Count -ne 1) {
+>>     throw "KHONG TIM THAY DUY NHAT BIEN ttgp_tab_root. CHUA SUA PHP."
+>> }
+>>
+>> $match = $matches[0]
+>> $currentRoot = $match.Groups[2].Value.Trim()
+>>
+>> Write-Host "PHP ROOT CONFIG: $currentRoot"
+>>
+>> $correctPath = $currentRoot -match '(?i)C:[/\\]TunerTools[/\\]Data[/\\]GuitarPro'
+>>
+>> if (-not $correctPath) {
+>>
+>>     Write-Host "`n=== 3. SAO LUU VA SUA ROOT ===" -ForegroundColor Cyan
+>>
+>>     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+>>
+>>     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+>>
+>>     $backup = Join-Path $backupDir "api_gp_search_before_gpfix_$stamp.php"
+>>     $stage = Join-Path $backupDir "api_gp_search_stage_gpfix_$stamp.php"
+>>
+>>     Copy-Item -LiteralPath $api -Destination $backup -ErrorAction Stop
+>>
+>>     $replacement = $match.Groups[1].Value +
+>>         "'C:/TunerTools/Data/GuitarPro'" +
+>>         $match.Groups[3].Value
+>>
+>>     $newContent = $content.Substring(0, $match.Index) +
+>>         $replacement +
+>>         $content.Substring($match.Index + $match.Length)
+>>
+>>     [IO.File]::WriteAllBytes($stage, $enc.GetBytes($newContent))
+>>
+>>     & $phpExe -l $stage
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "PHP SYNTAX ERROR. FILE GOC CHUA BI DOI."
+>>     }
+>>
+>>     Copy-Item -LiteralPath $stage -Destination $api -Force
+>>
+>>     & $phpExe -l $api
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         Copy-Item -LiteralPath $backup -Destination $api -Force
+>>         throw "PHP ERROR. DA KHOI PHUC FILE GOC."
+>>     }
+>>
+>>     Write-Host "PHP ROOT UPDATED OK" -ForegroundColor Green
+>>     Write-Host "BACKUP: $backup"
+>>
+>> } else {
+>>     Write-Host "PHP ROOT DA TRO DEN TUNERTOOLS. KHONG SUA FILE." -ForegroundColor Green
+>> }
+>>
+>> Write-Host "`n=== 4. KIEM TRA API QUA HTTPS ===" -ForegroundColor Cyan
+>>
+>> $url = "https://tunertools.top/api_gp_search.php?section=nhac_viet&q="
+>>
+>> try {
+>>     $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
+>>
+>>     Write-Host "HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
+>>
+>>     $json = $response.Content | ConvertFrom-Json
+>>
+>>     if ($null -ne $json.data) {
+>>         Write-Host "ITEMS RETURNED: $(@($json.data).Count)"
+>>     }
+>>
+>>     Write-Host "API VIETNAM TEST COMPLETED" -ForegroundColor Green
+>>
+>> } catch {
+>>     Write-Host "API VAN CO LOI: $($_.Exception.Message)" -ForegroundColor Red
+>>
+>>     if ($_.Exception.Response) {
+>>         Write-Host "HTTP STATUS: $([int]$_.Exception.Response.StatusCode)"
+>>     }
+>>
+>>     Write-Host "CAN KIEM TRA TIEP QUYEN PHP HOAC DUONG DAN THUC TE." -ForegroundColor Yellow
+>> }
 
-$api = "C:\TunerTools\Web\API\api_gp_search.php"
-$phpExe = "C:\php\php.exe"
-$gpRoot = "C:\TunerTools\Data\GuitarPro"
-$vnRoot = Join-Path $gpRoot "Vietnam"
-$backupDir = "C:\TunerTools\Backups"
+=== 1. KIEM TRA THU MUC GP ===
+OK: C:\TunerTools\Web\API\api_gp_search.php
+OK: C:\php\php.exe
+OK: C:\TunerTools\Data\GuitarPro
+VIETNAM ROOT: C:\TunerTools\Data\GuitarPro\Vietnam
+VIETNAM EXISTS: False
 
-Write-Host "`n=== 1. KIEM TRA THU MUC GP ===" -ForegroundColor Cyan
+CAC THU MUC CAP DAU:
++
+1
+2
+3
+4
+5
+6
+7
+8
+@
+A
+B
+C
+D
+dieu_dem_nhac
+E
+F
+G
+H
+I
+J
+K
+Kho_Tab_Songsterr
+L
+M
 
-foreach ($path in @($api, $phpExe, $gpRoot)) {
-    if (-not (Test-Path -LiteralPath $path)) {
-        throw "KHONG TON TAI: $path"
-    }
-    Write-Host "OK: $path" -ForegroundColor Green
-}
-
-$vnExists = Test-Path -LiteralPath $vnRoot -PathType Container
-
-Write-Host "VIETNAM ROOT: $vnRoot"
-Write-Host "VIETNAM EXISTS: $vnExists"
-
-if (-not $vnExists) {
-    Write-Host "`nCAC THU MUC CAP DAU:" -ForegroundColor Yellow
-
-    Get-ChildItem -LiteralPath $gpRoot -Directory |
-        Select-Object -First 25 -ExpandProperty Name
-
-    Write-Host "`nKHONG SUA PHP: THU MUC VIETNAM CHUA TON TAI." -ForegroundColor Red
-    return
-}
-
-Write-Host "`n=== 2. KIEM TRA CAU HINH PHP ===" -ForegroundColor Cyan
-
-$enc = [Text.Encoding]::GetEncoding(28591)
-$content = $enc.GetString([IO.File]::ReadAllBytes($api))
-
-$pattern = '(?m)^([ \t]*\$ttgp_tab_root[ \t]*=[ \t]*)([^;\r\n]+)(;[^\r\n]*)$'
-$matches = [regex]::Matches($content, $pattern)
-
-if ($matches.Count -ne 1) {
-    throw "KHONG TIM THAY DUY NHAT BIEN ttgp_tab_root. CHUA SUA PHP."
-}
-
-$match = $matches[0]
-$currentRoot = $match.Groups[2].Value.Trim()
-
-Write-Host "PHP ROOT CONFIG: $currentRoot"
-
-$correctPath = $currentRoot -match '(?i)C:[/\\]TunerTools[/\\]Data[/\\]GuitarPro'
-
-if (-not $correctPath) {
-
-    Write-Host "`n=== 3. SAO LUU VA SUA ROOT ===" -ForegroundColor Cyan
-
-    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-
-    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-
-    $backup = Join-Path $backupDir "api_gp_search_before_gpfix_$stamp.php"
-    $stage = Join-Path $backupDir "api_gp_search_stage_gpfix_$stamp.php"
-
-    Copy-Item -LiteralPath $api -Destination $backup -ErrorAction Stop
-
-    $replacement = $match.Groups[1].Value +
-        "'C:/TunerTools/Data/GuitarPro'" +
-        $match.Groups[3].Value
-
-    $newContent = $content.Substring(0, $match.Index) +
-        $replacement +
-        $content.Substring($match.Index + $match.Length)
-
-    [IO.File]::WriteAllBytes($stage, $enc.GetBytes($newContent))
-
-    & $phpExe -l $stage
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "PHP SYNTAX ERROR. FILE GOC CHUA BI DOI."
-    }
-
-    Copy-Item -LiteralPath $stage -Destination $api -Force
-
-    & $phpExe -l $api
-
-    if ($LASTEXITCODE -ne 0) {
-        Copy-Item -LiteralPath $backup -Destination $api -Force
-        throw "PHP ERROR. DA KHOI PHUC FILE GOC."
-    }
-
-    Write-Host "PHP ROOT UPDATED OK" -ForegroundColor Green
-    Write-Host "BACKUP: $backup"
-
-} else {
-    Write-Host "PHP ROOT DA TRO DEN TUNERTOOLS. KHONG SUA FILE." -ForegroundColor Green
-}
-
-Write-Host "`n=== 4. KIEM TRA API QUA HTTPS ===" -ForegroundColor Cyan
-
-$url = "https://tunertools.top/api_gp_search.php?section=nhac_viet&q="
-
-try {
-    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
-
-    Write-Host "HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
-
-    $json = $response.Content | ConvertFrom-Json
-
-    if ($null -ne $json.data) {
-        Write-Host "ITEMS RETURNED: $(@($json.data).Count)"
-    }
-
-    Write-Host "API VIETNAM TEST COMPLETED" -ForegroundColor Green
-
-} catch {
-    Write-Host "API VAN CO LOI: $($_.Exception.Message)" -ForegroundColor Red
-
-    if ($_.Exception.Response) {
-        Write-Host "HTTP STATUS: $([int]$_.Exception.Response.StatusCode)"
-    }
-
-    Write-Host "CAN KIEM TRA TIEP QUYEN PHP HOAC DUONG DAN THUC TE." -ForegroundColor Yellow
-}
+KHONG SUA PHP: THU MUC VIETNAM CHUA TON TAI.
+PS C:\Users\Administrator>
