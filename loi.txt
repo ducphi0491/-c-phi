@@ -1,26 +1,53 @@
-$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
+PS C:\Users\Administrator> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+>>
+>> Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
+>>
+>> & $appcmd list vdir
+>>
+>> Write-Host "`n=== KIEM TRA THU MUC CU ===" -ForegroundColor Cyan
+>>
+>> $folders = @(
+>>     "tunertools",
+>>     "img_sys",
+>>     "libs",
+>>     "support_chat_uploads",
+>>     "document_cache"
+>> )
+>>
+>> foreach ($name in $folders) {
+>>
+>>     $path = "C:\inetpub\wwwroot\$name"
+>>
+>>     [PSCustomObject]@{
+>>         Folder = $name
+>>         Exists = Test-Path -LiteralPath $path
+>>         Path   = $path
+>>     }
+>> }
 
-& $appcmd list vdir
+=== IIS VIRTUAL DIRECTORIES ===
+VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
+VDIR "Default Web Site/tab" (physicalPath:C:\TunerTools\Data\GuitarPro)
+VDIR "Default Web Site/tunertools" (physicalPath:C:\TunerTools\Web\tunertools)
+VDIR "Default Web Site/app-guides" (physicalPath:C:\TunerTools\Web\tunertools\app-guides)
+VDIR "Default Web Site/support_chat_uploads" (physicalPath:C:\TunerTools\Data\support_chat_uploads)
+VDIR "Default Web Site/guitar_HD" (physicalPath:C:\TunerTools\Web\guitar_HD)
+VDIR "Default Web Site/libs" (physicalPath:C:\TunerTools\Web\libs)
+VDIR "Default Web Site/img_sys" (physicalPath:C:\TunerTools\Web\img_sys)
+VDIR "Default Web Site/document" (physicalPath:C:\TunerTools\Data\Documents)
 
-Write-Host "`n=== KIEM TRA THU MUC CU ===" -ForegroundColor Cyan
+=== KIEM TRA THU MUC CU ===
 
-$folders = @(
-    "tunertools",
-    "img_sys",
-    "libs",
-    "support_chat_uploads",
-    "document_cache"
-)
+Folder               Exists Path
+------               ------ ----
+tunertools             True C:\inetpub\wwwroot\tunertools
+img_sys                True C:\inetpub\wwwroot\img_sys
+libs                   True C:\inetpub\wwwroot\libs
+support_chat_uploads   True C:\inetpub\wwwroot\support_chat_uploads
+document_cache         True C:\inetpub\wwwroot\document_cache
 
-foreach ($name in $folders) {
 
-    $path = "C:\inetpub\wwwroot\$name"
-
-    [PSCustomObject]@{
-        Folder = $name
-        Exists = Test-Path -LiteralPath $path
-        Path   = $path
-    }
-} 
+PS C:\Users\Administrator>
