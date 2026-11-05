@@ -1,25 +1,49 @@
-$script = "C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1"
-$source = "C:\TunerTools\Web\tunertools\app-guides"
+PS C:\Users\Administrator> $script = "C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1"
+>> $source = "C:\TunerTools\Web\tunertools\app-guides"
+>>
+>> Write-Host "`n=== KIEM TRA DUONG DAN ===" -ForegroundColor Cyan
+>>
+>> Write-Host "SCRIPT EXISTS: $(Test-Path -LiteralPath $script)"
+>> Write-Host "SOURCE EXISTS: $(Test-Path -LiteralPath $source)"
+>>
+>> if (Test-Path -LiteralPath $source -PathType Container) {
+>>
+>>     Write-Host "`n=== BAT DAU KIEM KE VIDEO ===" -ForegroundColor Green
+>>
+>>     powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>         -File $script `
+>>         -SourceDir $source
+>>
+>> } else {
+>>
+>>     Write-Host "`nDANG TIM THU MUC APP-GUIDES..." -ForegroundColor Yellow
+>>
+>>     Get-ChildItem -LiteralPath "C:\TunerTools\Web" `
+>>         -Directory -Filter "app-guides" -Recurse `
+>>         -ErrorAction SilentlyContinue |
+>>         Select-Object -ExpandProperty FullName
+>> }
 
-Write-Host "`n=== KIEM TRA DUONG DAN ===" -ForegroundColor Cyan
+=== KIEM TRA DUONG DAN ===
+SCRIPT EXISTS: True
+SOURCE EXISTS: True
 
-Write-Host "SCRIPT EXISTS: $(Test-Path -LiteralPath $script)"
-Write-Host "SOURCE EXISTS: $(Test-Path -LiteralPath $source)"
+=== BAT DAU KIEM KE VIDEO ===
 
-if (Test-Path -LiteralPath $source -PathType Container) {
-
-    Write-Host "`n=== BAT DAU KIEM KE VIDEO ===" -ForegroundColor Green
-
-    powershell.exe -NoProfile -ExecutionPolicy Bypass `
-        -File $script `
-        -SourceDir $source
-
-} else {
-
-    Write-Host "`nDANG TIM THU MUC APP-GUIDES..." -ForegroundColor Yellow
-
-    Get-ChildItem -LiteralPath "C:\TunerTools\Web" `
-        -Directory -Filter "app-guides" -Recurse `
-        -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty FullName
-}
+=== TunerTools AppGuides Backup ===
+Source: C:\TunerTools\Web\tunertools\app-guides
+Output: C:\TunerTools\BackupPrep\Drive_AppGuides
+MODE: CHECK ONLY (no Drive requests)
+AppGuides files: 180 source: C:\TunerTools\Web\tunertools\app-guides
+Total MB: 28.27
+  songs: 72
+  chords: 36
+  tuner: 18
+  metronome: 18
+  training: 18
+  documents: 0
+  settings: 18
+Warnings: 14 (see report)
+CHECK-ONLY. Nothing accessed or changed on Google Drive.
+Manifest: C:\TunerTools\BackupPrep\Drive_AppGuides\app_guides_drive_manifest.json
+PS C:\Users\Administrator>
