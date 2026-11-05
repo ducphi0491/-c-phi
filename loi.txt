@@ -1,22 +1,31 @@
->> }
-No syntax errors detected in C:\TunerTools\Web\API\api_documents.php
-No syntax errors detected in C:\TunerTools\Backups\documents_guard_20261105_143013.php
-No syntax errors detected in C:\TunerTools\Backups\documents_wrapper_20261105_143013.php
-No syntax errors detected in C:\TunerTools\Backups\documents_wrapper_guard_20261105_143013.php
-DOCUMENT POST TEMPORARILY BLOCKED
+$root = "C:\TunerTools\Audio\AI_Music"
 
- Log File : C:\TunerTools\Backups\document_final_sync_20261105_143013.log
-DOCUMENT FINAL SYNC OK: 251 FILES
-VDIR object "Default Web Site/document" added
-IIS /document READY
-NEW DOCUMENT API HTTP 200 / JSON OK
+Write-Host "`n=== TIM API GET_LYRICS ===" -ForegroundColor Cyan
 
-===================================
-DOCUMENT BACKEND CUTOVER OK
-===================================
-API: C:\TunerTools\Web\API\api_documents.php
-DATA: C:\TunerTools\Data\Documents
-IIS: /document
-BACKUP: C:\TunerTools\Backups\api_documents_live_20261105_143013.php
-SOURCE DATA: KEPT
-PS C:\Users\Administrator>
+$files = @(
+    Get-ChildItem -LiteralPath $root -Recurse -File `
+        -Filter "*.py" -ErrorAction Stop |
+    Where-Object {
+        $_.FullName -notmatch '(?i)[\\/](venv|\.venv|site-packages)[\\/]'
+    }
+)
+
+$matches = @(
+    $files | Select-String -SimpleMatch -Pattern "get_lyrics"
+)
+
+if ($matches.Count -eq 0) {
+    Write-Host "KHONG TIM THAY GET_LYRICS TRONG PYTHON" `
+        -ForegroundColor Yellow
+}
+else {
+    $matches |
+        Select-Object Path, LineNumber |
+        Format-Table -AutoSize
+}
+
+Write-Host "`n=== DANH SACH IIS SITE ===" -ForegroundColor Cyan
+
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
+
+& $appcmd list site
