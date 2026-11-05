@@ -1,135 +1,114 @@
->>
->>     Get-ChildItem -LiteralPath $gpRoot -Directory |
->>         Select-Object -First 25 -ExpandProperty Name
->>
->>     Write-Host "`nKHONG SUA PHP: THU MUC VIETNAM CHUA TON TAI." -ForegroundColor Red
->>     return
->> }
->>
->> Write-Host "`n=== 2. KIEM TRA CAU HINH PHP ===" -ForegroundColor Cyan
->>
->> $enc = [Text.Encoding]::GetEncoding(28591)
->> $content = $enc.GetString([IO.File]::ReadAllBytes($api))
->>
->> $pattern = '(?m)^([ \t]*\$ttgp_tab_root[ \t]*=[ \t]*)([^;\r\n]+)(;[^\r\n]*)$'
->> $matches = [regex]::Matches($content, $pattern)
->>
->> if ($matches.Count -ne 1) {
->>     throw "KHONG TIM THAY DUY NHAT BIEN ttgp_tab_root. CHUA SUA PHP."
->> }
->>
->> $match = $matches[0]
->> $currentRoot = $match.Groups[2].Value.Trim()
->>
->> Write-Host "PHP ROOT CONFIG: $currentRoot"
->>
->> $correctPath = $currentRoot -match '(?i)C:[/\\]TunerTools[/\\]Data[/\\]GuitarPro'
->>
->> if (-not $correctPath) {
->>
->>     Write-Host "`n=== 3. SAO LUU VA SUA ROOT ===" -ForegroundColor Cyan
->>
->>     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
->>
->>     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
->>
->>     $backup = Join-Path $backupDir "api_gp_search_before_gpfix_$stamp.php"
->>     $stage = Join-Path $backupDir "api_gp_search_stage_gpfix_$stamp.php"
->>
->>     Copy-Item -LiteralPath $api -Destination $backup -ErrorAction Stop
->>
->>     $replacement = $match.Groups[1].Value +
->>         "'C:/TunerTools/Data/GuitarPro'" +
->>         $match.Groups[3].Value
->>
->>     $newContent = $content.Substring(0, $match.Index) +
->>         $replacement +
->>         $content.Substring($match.Index + $match.Length)
->>
->>     [IO.File]::WriteAllBytes($stage, $enc.GetBytes($newContent))
->>
->>     & $phpExe -l $stage
->>
->>     if ($LASTEXITCODE -ne 0) {
->>         throw "PHP SYNTAX ERROR. FILE GOC CHUA BI DOI."
->>     }
->>
->>     Copy-Item -LiteralPath $stage -Destination $api -Force
->>
->>     & $phpExe -l $api
->>
->>     if ($LASTEXITCODE -ne 0) {
->>         Copy-Item -LiteralPath $backup -Destination $api -Force
->>         throw "PHP ERROR. DA KHOI PHUC FILE GOC."
->>     }
->>
->>     Write-Host "PHP ROOT UPDATED OK" -ForegroundColor Green
->>     Write-Host "BACKUP: $backup"
->>
->> } else {
->>     Write-Host "PHP ROOT DA TRO DEN TUNERTOOLS. KHONG SUA FILE." -ForegroundColor Green
->> }
->>
->> Write-Host "`n=== 4. KIEM TRA API QUA HTTPS ===" -ForegroundColor Cyan
->>
->> $url = "https://tunertools.top/api_gp_search.php?section=nhac_viet&q="
->>
->> try {
->>     $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
->>
->>     Write-Host "HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
->>
->>     $json = $response.Content | ConvertFrom-Json
->>
->>     if ($null -ne $json.data) {
->>         Write-Host "ITEMS RETURNED: $(@($json.data).Count)"
->>     }
->>
->>     Write-Host "API VIETNAM TEST COMPLETED" -ForegroundColor Green
->>
->> } catch {
->>     Write-Host "API VAN CO LOI: $($_.Exception.Message)" -ForegroundColor Red
->>
->>     if ($_.Exception.Response) {
->>         Write-Host "HTTP STATUS: $([int]$_.Exception.Response.StatusCode)"
->>     }
->>
->>     Write-Host "CAN KIEM TRA TIEP QUYEN PHP HOAC DUONG DAN THUC TE." -ForegroundColor Yellow
->> }
+$root = "C:\TunerTools\Audio\AI_Music"
 
-=== 1. KIEM TRA THU MUC GP ===
-OK: C:\TunerTools\Web\API\api_gp_search.php
-OK: C:\php\php.exe
-OK: C:\TunerTools\Data\GuitarPro
-VIETNAM ROOT: C:\TunerTools\Data\GuitarPro\Vietnam
-VIETNAM EXISTS: False
+Write-Host "`n=== 1. KIEM TRA AI FOLDER ===" -ForegroundColor Cyan
 
-CAC THU MUC CAP DAU:
-+
-1
-2
-3
-4
-5
-6
-7
-8
-@
-A
-B
-C
-D
-dieu_dem_nhac
-E
-F
-G
-H
-I
-J
-K
-Kho_Tab_Songsterr
-L
-M
+foreach ($path in @(
+    $root,
+    "$root\app.py",
+    "$root\CHORD_AI",
+    "$root\AI_MODELS",
+    "$root\YOUTUBE_CACHE"
+)) {
+    Write-Host ("{0} : {1}" -f (Test-Path -LiteralPath $path), $path)
+}
 
-KHONG SUA PHP: THU MUC VIETNAM CHUA TON TAI.
-PS C:\Users\Administrator>
+Write-Host "`n=== 2. KIEM TRA PYTHON PORT 5000 ===" -ForegroundColor Cyan
+
+$listeners = @(
+    Get-NetTCPConnection -LocalPort 5000 -State Listen `
+        -ErrorAction SilentlyContinue
+)
+
+if ($listeners.Count -eq 0) {
+    Write-Host "PORT 5000 NOT LISTENING" -ForegroundColor Red
+} else {
+    $listeners |
+        Select-Object LocalAddress, LocalPort, OwningProcess |
+        Format-Table -AutoSize
+}
+
+Write-Host "`n=== 3. KIEM TRA PYTHON PROCESS ===" -ForegroundColor Cyan
+
+$processes = @(
+    Get-CimInstance Win32_Process `
+        -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" `
+        -ErrorAction SilentlyContinue
+)
+
+$processes |
+    ForEach-Object {
+        $cmd = [string]$_.CommandLine
+
+        [PSCustomObject]@{
+            PID = $_.ProcessId
+            Name = $_.Name
+            AppPy = ($cmd -match '(?i)app\.py')
+            NewAIPath = ($cmd -match '(?i)C:[\\/]TunerTools[\\/]Audio[\\/]AI_Music')
+            OldAIPath = ($cmd -match '(?i)C:[\\/]AI_Music')
+        }
+    } |
+    Format-Table -AutoSize
+
+Write-Host "`n=== 4. KIEM TRA AI ENDPOINTS ===" -ForegroundColor Cyan
+
+$tests = @(
+    @{
+        Name = "LOCAL - ANALYZE"
+        Url = "http://127.0.0.1:5000/api/analyze_file"
+    },
+    @{
+        Name = "PUBLIC - ANALYZE"
+        Url = "https://api.tunertools.top/api/analyze_file"
+    },
+    @{
+        Name = "LOCAL - ZING AI"
+        Url = "http://127.0.0.1:5000/api/zing_acapella_sync"
+    },
+    @{
+        Name = "PUBLIC - ZING AI"
+        Url = "https://api.tunertools.top/api/zing_acapella_sync"
+    }
+)
+
+foreach ($test in $tests) {
+    $bodyFile = Join-Path $env:TEMP (
+        "tt_ai_probe_" + [guid]::NewGuid().ToString("N") + ".txt"
+    )
+
+    Write-Host "`n$($test.Name)" -ForegroundColor Yellow
+
+    try {
+        $result = & curl.exe -sS `
+            --connect-timeout 5 `
+            --max-time 15 `
+            --request POST `
+            --data "tt_diagnostic=1" `
+            --output $bodyFile `
+            --write-out "%{http_code}" `
+            $test.Url
+
+        $exitCode = $LASTEXITCODE
+        $httpCode = ($result | Out-String).Trim()
+
+        Write-Host "HTTP: $httpCode"
+        Write-Host "CURL EXIT: $exitCode"
+
+        if (Test-Path -LiteralPath $bodyFile) {
+            $body = [IO.File]::ReadAllText($bodyFile)
+            $body = $body.Replace("`r", " ").Replace("`n", " ")
+
+            if ($body.Length -gt 250) {
+                $body = $body.Substring(0, 250)
+            }
+
+            Write-Host "RESPONSE: $body"
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $bodyFile) {
+            Remove-Item -LiteralPath $bodyFile -Force
+        }
+    }
+}
+
+Write-Host "`n=== KIEM TRA HOAN TAT ===" -ForegroundColor Green
