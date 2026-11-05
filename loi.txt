@@ -1,23 +1,146 @@
-$paths = @(
-    "C:\inetpub\wwwroot\api_documents.php",
-    "C:\inetpub\wwwroot\document",
-    "C:\inetpub\wwwroot\document_cache",
-    "C:\TunerTools\Web\API\api_documents.php"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$paths | ForEach-Object {
-    [PSCustomObject]@{
-        Path = $_
-        Exists = Test-Path -LiteralPath $_
-    }
-} | Format-Table -AutoSize
+PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
+>>
+>> $cache = "C:\TunerTools\Cache\SheetImages"
+>> $apiDir = "C:\TunerTools\Web\API"
+>> $backupDir = "C:\TunerTools\Backups"
+>> $phpExe = "C:\php\php.exe"
+>>
+>> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+>> $enc = [Text.Encoding]::GetEncoding(28591)
+>>
+>> New-Item -ItemType Directory -Path $cache -Force | Out-Null
+>> New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+>>
+>> # Khong su dung symbolic link/junction cho cache
+>> $cacheItem = Get-Item -LiteralPath $cache -Force
+>>
+>> if ($cacheItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+>>     throw "Cache la link/junction. DUNG SUA."
+>> }
+>>
+>> # Cap quyen ghi cho PHP chay trong DefaultAppPool
+>> & icacls.exe $cache /grant 'IIS AppPool\DefaultAppPool:(OI)(CI)M'
+>>
+>> if ($LASTEXITCODE -ne 0) {
+>>     throw "Khong cap duoc quyen ghi Cache."
+>> }
+>>
+>> # Hai mau duong dan da xac nhan tu code
+>> $plans = @(
+>>     @{
+>>         Name = "api_gp_search.php"
+>>         Old = "'C:/inetpub/wwwroot' . '/tuner_images_'"
+>>         New = "'C:/TunerTools/Cache/SheetImages/tuner_images_'"
+>>     },
+>>     @{
+>>         Name = "api_songs.php"
+>>         Old = "'C:/inetpub/wwwroot' . DIRECTORY_SEPARATOR . 'tuner_images_'"
+>>         New = "'C:/TunerTools/Cache/SheetImages/tuner_images_'"
+>>     }
+>> )
+>>
+>> $prepared = @()
+>>
+>> # Chuan bi file moi, chua thay doi PHP dang chay
+>> foreach ($p in $plans) {
+>>
+>>     $file = Join-Path $apiDir $p.Name
+>>
+>>     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+>>         throw "Khong tim thay: $file"
+>>     }
+>>
+>>     $content = $enc.GetString(
+>>         [IO.File]::ReadAllBytes($file)
+>>     )
+>>
+>>     $count = ([regex]::Matches(
+>>         $content,
+>>         [regex]::Escape($p.Old)
+>>     )).Count
+>>
+>>     if ($count -ne 1) {
+>>         throw "$($p.Name): Can 1 vi tri, tim thay $count"
+>>     }
+>>
+>>     $backup = Join-Path $backupDir "$($p.Name).before_cache_$stamp.bak"
+>>     $stage = Join-Path $backupDir "$($p.Name).cache_$stamp.php"
+>>
+>>     Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
+>>
+>>     $newContent = $content.Replace($p.Old, $p.New)
+>>
+>>     [IO.File]::WriteAllBytes(
+>>         $stage,
+>>         $enc.GetBytes($newContent)
+>>     )
+>>
+>>     & $phpExe -l $stage
+>>
+>>     if ($LASTEXITCODE -ne 0) {
+>>         throw "PHP syntax error: $($p.Name)"
+>>     }
+>>
+>>     $prepared += [PSCustomObject]@{
+>>         Name = $p.Name
+>>         File = $file
+>>         Backup = $backup
+>>         Stage = $stage
+>>     }
+>> }
+>>
+>> $changed = @()
+>>
+>> try {
+>>     foreach ($p in $prepared) {
+>>
+>>         $changed += $p
+>>
+>>         Copy-Item -LiteralPath $p.Stage `
+>>             -Destination $p.File `
+>>             -Force -ErrorAction Stop
+>>
+>>         & $phpExe -l $p.File
+>>
+>>         if ($LASTEXITCODE -ne 0) {
+>>             throw "PHP syntax error: $($p.Name)"
+>>         }
+>>
+>>         Write-Host "UPDATED: $($p.Name)" -ForegroundColor Green
+>>     }
+>>
+>>     Write-Host ""
+>>     Write-Host "SHEET IMAGE CACHE UPDATED OK" -ForegroundColor Green
+>>     Write-Host "CACHE: $cache"
+>> }
+>> catch {
+>>     foreach ($p in $changed) {
+>>         Copy-Item -LiteralPath $p.Backup `
+>>             -Destination $p.File -Force
+>>     }
+>>
+>>     Write-Host "DA KHOI PHUC PHP TU BACKUP" -ForegroundColor Yellow
+>>     throw
+>> }
+>> finally {
+>>     foreach ($p in $prepared) {
+>>         if (Test-Path -LiteralPath $p.Stage) {
+>>             Remove-Item -LiteralPath $p.Stage -Force
+>>         }
+>>     }
+>> }
+processed file: C:\TunerTools\Cache\SheetImages
+Successfully processed 1 files; Failed processing 0 files
+No syntax errors detected in C:\TunerTools\Backups\api_gp_search.php.cache_20261105_131126.php
+No syntax errors detected in C:\TunerTools\Backups\api_songs.php.cache_20261105_131126.php
+No syntax errors detected in C:\TunerTools\Web\API\api_gp_search.php
+UPDATED: api_gp_search.php
+No syntax errors detected in C:\TunerTools\Web\API\api_songs.php
+UPDATED: api_songs.php
 
-Write-Host "`n=== PYTHON GET_LYRICS ==="
-
-$py = "C:\TunerTools\Audio\AI_Music\app.py"
-
-if (Test-Path $py) {
-    Select-String -LiteralPath $py `
-        -SimpleMatch -Pattern "get_lyrics" |
-        Select-Object LineNumber
-}
+SHEET IMAGE CACHE UPDATED OK
+CACHE: C:\TunerTools\Cache\SheetImages
+PS C:\Users\Administrator>
