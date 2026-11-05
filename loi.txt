@@ -1,119 +1,145 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
->>
->> $src = "C:\inetpub\wwwroot\document"
->> $dst = "C:\TunerTools\Data\Documents"
->> $logDir = "C:\TunerTools\Backups"
->>
->> if (-not (Test-Path -LiteralPath $src -PathType Container)) {
->>     throw "KHONG TIM THAY THU MUC TAI LIEU GOC."
->> }
->>
->> # Khong ghi de du lieu dich da co
->> if (Test-Path -LiteralPath $dst) {
->>     $existing = Get-ChildItem -LiteralPath $dst -Force |
->>         Select-Object -First 1
->>
->>     if ($existing) {
->>         throw "THU MUC DICH DA CO DU LIEU. CAN KIEM TRA TRUOC."
->>     }
->> }
->>
->> $sourceSize = (
->>     Get-ChildItem -LiteralPath $src -Recurse -File -Force |
->>     Measure-Object -Property Length -Sum
->> ).Sum
->>
->> $free = (Get-PSDrive C).Free
->>
->> if ($free -lt ($sourceSize + 8GB)) {
->>     throw "DUNG LUONG O C KHONG DU DE COPY AN TOAN."
->> }
->>
->> New-Item -ItemType Directory -Path $dst -Force | Out-Null
->> New-Item -ItemType Directory -Path $logDir -Force | Out-Null
->>
->> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
->> $log = Join-Path $logDir "document_copy_$stamp.log"
->>
->> Write-Host "`nBAT DAU COPY DOCUMENT..." -ForegroundColor Cyan
->>
->> & robocopy.exe $src $dst `
->>     /E /COPY:DAT /DCOPY:DAT /XJ `
->>     /R:2 /W:2 /MT:4 `
->>     /NP /NFL /NDL /TEE "/LOG:$log"
->>
->> $rc = $LASTEXITCODE
->>
->> if ($rc -ge 8) {
->>     throw "ROBOCOPY GAP LOI. EXIT CODE: $rc. XEM LOG: $log"
->> }
->>
->> Write-Host "`n=== DOI CHIEU DU LIEU ===" -ForegroundColor Cyan
->>
->> foreach ($dir in @($src, $dst)) {
->>     $stats = Get-ChildItem -LiteralPath $dir `
->>         -Recurse -File -Force |
->>         Measure-Object -Property Length -Sum
->>
->>     [PSCustomObject]@{
->>         Folder = $dir
->>         Files = $stats.Count
->>         Bytes = [long]$stats.Sum
->>         SizeGB = [math]::Round($stats.Sum / 1GB, 2)
->>     }
->> }
->>
->> Write-Host "`nROBOCOPY EXIT CODE: $rc"
->> Write-Host "LOG: $log"
->> Write-Host "KHONG XOA DU LIEU GOC." -ForegroundColor Yellow
+$oldApi = "C:\inetpub\wwwroot\api_documents.php"
+$newApi = "C:\TunerTools\Web\API\api_documents.php"
 
-BAT DAU COPY DOCUMENT...
+$oldDocs = "C:\inetpub\wwwroot\document"
+$newDocs = "C:\TunerTools\Data\Documents"
+$course = "C:\TunerTools\Web\guitar_HD"
 
- Log File : C:\TunerTools\Backups\document_copy_20261105_141312.log
+$oldMarker = "C:\inetpub\wwwroot\.tunertools_document_schema_v10.ready"
+$state = "C:\TunerTools\State\Documents"
+$newMarker = Join-Path $state ".tunertools_document_schema_v10.ready"
 
--------------------------------------------------------------------------------
-   ROBOCOPY     ::     Robust File Copy for Windows
--------------------------------------------------------------------------------
+$cache = "C:\TunerTools\Cache\Documents"
+$logs = "C:\TunerTools\Logs\Documents"
+$backup = "C:\TunerTools\Backups"
 
-  Started : Thursday, November 5, 2026 14:13:12
-   Source : C:\inetpub\wwwroot\document\
-     Dest : C:\TunerTools\Data\Documents\
+$phpExe = "C:\php\php.exe"
+$appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
-    Files : *.*
+# Kiem tra cac thanh phan bat buoc
+foreach ($file in @($oldApi, $oldMarker, $phpExe, $appcmd)) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        throw "KHONG TIM THAY: $file"
+    }
+}
 
-  Options : *.* /NDL /NFL /TEE /S /E /DCOPY:DAT /COPY:DAT /NP /XJ /MT:4 /R:2 /W:2
+foreach ($dir in @($oldDocs, $newDocs, $course)) {
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        throw "KHONG TIM THAY: $dir"
+    }
+}
 
-------------------------------------------------------------------------------
+if (Test-Path -LiteralPath $newApi) {
+    throw "API DICH DA TON TAI. KHONG GHI DE."
+}
 
+# Xac dinh App Pool dang su dung
+$pool = (
+    & $appcmd list app "Default Web Site/" /text:applicationPool
+    | Out-String
+).Trim()
 
-------------------------------------------------------------------------------
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pool)) {
+    throw "KHONG XAC DINH DUOC IIS APPLICATION POOL."
+}
 
-               Total    Copied   Skipped  Mismatch    FAILED    Extras
-    Dirs :        21        21         1         0         0         0
-   Files :       251       251         0         0         0         0
-   Bytes :  11.539 g  11.539 g         0         0         0         0
-   Times :   0:01:08   0:00:10                       0:00:00   0:00:02
+Write-Host "IIS APP POOL: $pool" -ForegroundColor Cyan
 
+# Tao cac thu muc ngoai IIS
+foreach ($dir in @($state, $cache, $logs, $backup)) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+}
 
-   Speed :           1132693561 Bytes/sec.
-   Speed :            64813.245 MegaBytes/min.
-   Ended : Thursday, November 5, 2026 14:13:26
+# Sao chep file danh dau schema
+if (-not (Test-Path -LiteralPath $newMarker)) {
+    Copy-Item -LiteralPath $oldMarker `
+        -Destination $newMarker -ErrorAction Stop
+}
 
+if ((Get-FileHash $oldMarker).Hash -ne (Get-FileHash $newMarker).Hash) {
+    throw "FILE SCHEMA MARKER KHONG KHOP."
+}
 
-=== DOI CHIEU DU LIEU ===
+# Cap quyen cho App Pool
+$permission = "IIS AppPool\$pool" + ":(OI)(CI)M"
 
+foreach ($dir in @($newDocs, $state, $cache, $logs)) {
+    & icacls.exe $dir /grant $permission /T /C /Q
 
-ROBOCOPY EXIT CODE: 1
-LOG: C:\TunerTools\Backups\document_copy_20261105_141312.log
-KHONG XOA DU LIEU GOC.
-Folder                       Files       Bytes SizeGB
-------                       -----       ----- ------
-C:\inetpub\wwwroot\document    251 12390534870  11.54
-C:\TunerTools\Data\Documents   251 12390534870  11.54
+    if ($LASTEXITCODE -ne 0) {
+        throw "LOI CAP QUYEN: $dir"
+    }
+}
 
+# Sao luu PHP dang hoat dong
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
-PS C:\Users\Administrator>
+$apiBackup = Join-Path $backup "api_documents_before_move_$stamp.php"
 
+Copy-Item -LiteralPath $oldApi `
+    -Destination $apiBackup -ErrorAction Stop
+
+# Doc theo byte de khong lam thay doi encoding goc
+$enc = [Text.Encoding]::GetEncoding(28591)
+$content = $enc.GetString([IO.File]::ReadAllBytes($oldApi))
+
+# Chi sua 5 dong phu thuoc __DIR__
+$changes = @(
+    @{
+        Old = 'ini_set(''error_log'', __DIR__ . DIRECTORY_SEPARATOR . ''api_documents_error.log'');'
+        New = 'ini_set(''error_log'', ''C:/TunerTools/Logs/Documents/api_documents_error.log'');'
+    },
+    @{
+        Old = '$documentRoot = __DIR__ . DIRECTORY_SEPARATOR . ''document'';'
+        New = '$documentRoot = ''C:/TunerTools/Data/Documents'';'
+    },
+    @{
+        Old = '$guitarCourseRoot = __DIR__ . DIRECTORY_SEPARATOR . ''guitar_HD'';'
+        New = '$guitarCourseRoot = ''C:/TunerTools/Web/guitar_HD'';'
+    },
+    @{
+        Old = '$DOCUMENT_SCHEMA_MARKER_FILE = __DIR__ . DIRECTORY_SEPARATOR . ''.tunertools_document_schema_v10.ready'';'
+        New = '$DOCUMENT_SCHEMA_MARKER_FILE = ''C:/TunerTools/State/Documents/.tunertools_document_schema_v10.ready'';'
+    },
+    @{
+        Old = '$DOCUMENT_SUMMARY_CACHE_DIR = __DIR__ . DIRECTORY_SEPARATOR . ''document_cache'';'
+        New = '$DOCUMENT_SUMMARY_CACHE_DIR = ''C:/TunerTools/Cache/Documents'';'
+    }
+)
+
+foreach ($change in $changes) {
+    $count = (
+        [regex]::Matches($content, [regex]::Escape($change.Old))
+    ).Count
+
+    if ($count -ne 1) {
+        throw "MAU PHP KHONG KHOP. TIM THAY $count VI TRI."
+    }
+
+    $content = $content.Replace($change.Old, $change.New)
+}
+
+# Ghi vao file tam, kiem tra truoc khi dua vao Web\API
+$stage = Join-Path $backup "api_documents_stage_$stamp.php"
+
+[IO.File]::WriteAllBytes($stage, $enc.GetBytes($content))
+
+& $phpExe -l $stage
+
+if ($LASTEXITCODE -ne 0) {
+    throw "PHP CO LOI CU PHAP. KHONG CHUYEN API."
+}
+
+Copy-Item -LiteralPath $stage `
+    -Destination $newApi -ErrorAction Stop
+
+Write-Host "`nDOCUMENT API PREPARED OK" -ForegroundColor Green
+Write-Host "NEW API: $newApi"
+Write-Host "DOCUMENT DATA: $newDocs"
+Write-Host "SCHEMA MARKER: $newMarker"
+Write-Host "BACKUP: $apiBackup"
+
+Write-Host "`nAPI GOC VAN DANG HOAT DONG - CHUA CUTOVER" `
+    -ForegroundColor Yellow
