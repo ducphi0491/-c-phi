@@ -1,52 +1,35 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$checks = @(
+    @{
+        File = "C:\TunerTools\Web\API\api_gp_search.php"
+        Line = 2148
+    },
+    @{
+        File = "C:\TunerTools\Web\API\api_songs.php"
+        Line = 1574
+    }
+)
 
-PS C:\Users\Administrator> $tests = @(
->>     "get_metronome_sounds",
->>     "get_drum_sounds"
->> )
->>
->> foreach ($api in @("api_gp_search.php", "api_songs.php")) {
->>     foreach ($action in $tests) {
->>
->>         $url = "https://tunertools.top/${api}?action=${action}"
->>
->>         Write-Host "`nTEST URL: $url" -ForegroundColor Cyan
->>
->>         try {
->>             $result = Invoke-WebRequest `
->>                 -Uri $url `
->>                 -UseBasicParsing `
->>                 -TimeoutSec 30
->>
->>             $json = $result.Content |
->>                 ConvertFrom-Json -ErrorAction Stop
->>
->>             Write-Host "HTTP $($result.StatusCode) / JSON OK" `
->>                 -ForegroundColor Green
->>
->>             if ($json.error) {
->>                 Write-Host "API ERROR: $($json.error)" `
->>                     -ForegroundColor Yellow
->>             }
->>         }
->>         catch {
->>             Write-Host "ERROR: $($_.Exception.Message)" `
->>                 -ForegroundColor Red
->>         }
->>     }
->> }
+foreach ($check in $checks) {
+    Write-Host "`n=== $($check.File) ===" -ForegroundColor Cyan
 
-TEST URL: https://tunertools.top/api_gp_search.php?action=get_metronome_sounds
-HTTP 200 / JSON OK
+    $lines = Get-Content -LiteralPath $check.File
 
-TEST URL: https://tunertools.top/api_gp_search.php?action=get_drum_sounds
-HTTP 200 / JSON OK
+    $start = [Math]::Max(1, $check.Line - 3)
+    $end = [Math]::Min($lines.Count, $check.Line + 8)
 
-TEST URL: https://tunertools.top/api_songs.php?action=get_metronome_sounds
-HTTP 200 / JSON OK
+    for ($i = $start; $i -le $end; $i++) {
+        $line = $lines[$i - 1]
 
-TEST URL: https://tunertools.top/api_songs.php?action=get_drum_sounds
-HTTP 200 / JSON OK
-PS C:\Users\Administrator>
+        if ($line -match '(?i)password|secret|token|api.?key|authorization') {
+            $line = "[DA AN]"
+        }
 
+        Write-Host "${i}: $line"
+    }
+}
+
+Write-Host "`n=== THU MUC ANH TAM CU ===" -ForegroundColor Cyan
+
+Get-ChildItem "C:\inetpub\wwwroot" -Directory `
+    -Filter "tuner_images_*" |
+    Select-Object Name, LastWriteTime
