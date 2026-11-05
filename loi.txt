@@ -1,33 +1,146 @@
 $ErrorActionPreference = "Stop"
 
-$main = "C:\TunerTools\Data\GuitarPro"
-$partial = "C:\TunerTools\Data\GuitarPro_COPY_INCOMPLETE"
+$apiDir = "C:\TunerTools\Web\API"
+$backupDir = "C:\TunerTools\Backups"
+$audioDir = "C:\TunerTools\Audio\AI_Music"
+$phpExe = "C:\php\php.exe"
 
-# Xac nhan du lieu chinh van ton tai
-if (-not (Test-Path -LiteralPath $main -PathType Container)) {
-    throw "KHONG TIM THAY GUITAR PRO CHINH. DUNG XOA."
+$old = "C:/AI_Music/"
+$new = "C:/TunerTools/Audio/AI_Music/"
+
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$enc = [Text.Encoding]::GetEncoding(28591)
+
+# Kiem tra 2 thu muc am thanh moi
+foreach ($name in @("METRONOME", "DRUM")) {
+    $path = Join-Path $audioDir $name
+
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+        throw "KHONG TIM THAY: $path"
+    }
+
+    Write-Host "FOLDER OK: $path" -ForegroundColor Green
 }
 
-# Kiem tra dung thu muc ban sao
-$item = Get-Item -LiteralPath $partial -Force -ErrorAction Stop
+# Chuan bi sua 2 PHP
+$planned = @()
 
-if (-not $item.PSIsContainer -or
-    $item.FullName -ne $partial -or
-    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-    throw "THU MUC KHONG HOP LE. DUNG XOA."
+foreach ($name in @("api_gp_search.php", "api_songs.php")) {
+
+    $file = Join-Path $apiDir $name
+
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        throw "KHONG TIM THAY PHP: $file"
+    }
+
+    $content = $enc.GetString(
+        [IO.File]::ReadAllBytes($file)
+    )
+
+    $count = ([regex]::Matches(
+        $content,
+        [regex]::Escape($old)
+    )).Count
+
+    if ($count -ne 4) {
+        throw "$name co $count vi tri, yeu cau dung 4. DUNG SUA."
+    }
+
+    $backup = Join-Path $backupDir "${name}_${stamp}.bak"
+    $stage = Join-Path $backupDir "${name}_${stamp}.new.php"
+
+    Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
+
+    $updated = $content.Replace($old, $new)
+
+    [IO.File]::WriteAllBytes(
+        $stage,
+        $enc.GetBytes($updated)
+    )
+
+    & $phpExe -l $stage
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "PHP moi co loi cu phap: $name"
+    }
+
+    $planned += [PSCustomObject]@{
+        Name = $name
+        File = $file
+        Backup = $backup
+        Stage = $stage
+    }
 }
 
-Write-Host "DANG XOA BAN COPY DO 10GB..." -ForegroundColor Yellow
+# Cap nhat PHP, tu khoi phuc neu loi
+$changed = @()
 
-# Chi xoa ban copy do
-Remove-Item -LiteralPath $partial -Recurse -Force -ErrorAction Stop
+try {
+    foreach ($item in $planned) {
 
-Write-Host "`nDA XOA THANH CONG!" -ForegroundColor Green
+        Copy-Item -LiteralPath $item.Stage `
+            -Destination $item.File -Force -ErrorAction Stop
 
-Write-Host "GUITAR PRO CHINH: $(Test-Path -LiteralPath $main)"
-Write-Host "BAN COPY DO CON: $(Test-Path -LiteralPath $partial)"
+        $changed += $item
 
-Get-PSDrive C |
-Select-Object Name,
-@{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}} |
-Format-Table -AutoSize
+        & $phpExe -l $item.File
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "PHP syntax error: $($item.Name)"
+        }
+
+        Write-Host "UPDATED: $($item.Name) - 4 PATHS" `
+            -ForegroundColor Green
+    }
+
+    Write-Host ""
+    Write-Host "METRONOME AND DRUM PATHS UPDATED OK" `
+        -ForegroundColor Green
+}
+catch {
+    foreach ($item in $changed) {
+        Copy-Item -LiteralPath $item.Backup `
+            -Destination $item.File -Force
+    }
+
+    Write-Host "DA KHOI PHUC PHP TU BACKUP" `
+        -ForegroundColor Yellow
+
+    throw
+}
+
+
+2..................
+$tests = @(
+    "get_metronome_sounds",
+    "get_drum_sounds"
+)
+
+foreach ($api in @("api_gp_search.php", "api_songs.php")) {
+    foreach ($action in $tests) {
+
+        $url = "https://tunertools.top/$api?action=$action"
+
+        try {
+            $result = Invoke-WebRequest `
+                -Uri $url `
+                -UseBasicParsing `
+                -TimeoutSec 30
+
+            $json = $result.Content |
+                ConvertFrom-Json -ErrorAction Stop
+
+            Write-Host "$api - $action : HTTP $($result.StatusCode) / JSON OK" `
+                -ForegroundColor Green
+
+            if ($json.error) {
+                Write-Host "API ERROR: $($json.error)" `
+                    -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host "$api - $action : ERROR $($_.Exception.Message)" `
+                -ForegroundColor Red
+        }
+    }
+}
