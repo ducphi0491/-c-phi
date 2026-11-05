@@ -1,25 +1,15 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$urls = @(
+    "https://api.tunertools.top/api/get_lyrics",
+    "http://127.0.0.1:5000/api/get_lyrics"
+)
 
-PS C:\Users\Administrator> $routes = @(
->>     "api/analyze_file",
->>     "api/get_lyrics"
->> )
->>
->> foreach ($route in $routes) {
->>     $url = "https://api.tunertools.top/$route"
->>
->>     Write-Host "`n=== $url ===" -ForegroundColor Cyan
->>
->>     & curl.exe -sS --max-time 20 `
->>         -o NUL `
->>         -w "HTTP STATUS: %{http_code}`n" `
->>         $url
->> }
+foreach ($url in $urls) {
+    Write-Host "`nTEST: $url" -ForegroundColor Cyan
 
-=== https://api.tunertools.top/api/analyze_file ===
-HTTP STATUS: 405
-
-=== https://api.tunertools.top/api/get_lyrics ===
-HTTP STATUS: 404
-PS C:\Users\Administrator>
+    & curl.exe -sS --max-time 15 `
+        -X POST `
+        -d "" `
+        -o NUL `
+        -w "HTTP STATUS: %{http_code}`n" `
+        $url
+}
