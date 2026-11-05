@@ -1,35 +1,52 @@
-$tests = @(
-    "get_metronome_sounds",
-    "get_drum_sounds"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($api in @("api_gp_search.php", "api_songs.php")) {
-    foreach ($action in $tests) {
+PS C:\Users\Administrator> $tests = @(
+>>     "get_metronome_sounds",
+>>     "get_drum_sounds"
+>> )
+>>
+>> foreach ($api in @("api_gp_search.php", "api_songs.php")) {
+>>     foreach ($action in $tests) {
+>>
+>>         $url = "https://tunertools.top/${api}?action=${action}"
+>>
+>>         Write-Host "`nTEST URL: $url" -ForegroundColor Cyan
+>>
+>>         try {
+>>             $result = Invoke-WebRequest `
+>>                 -Uri $url `
+>>                 -UseBasicParsing `
+>>                 -TimeoutSec 30
+>>
+>>             $json = $result.Content |
+>>                 ConvertFrom-Json -ErrorAction Stop
+>>
+>>             Write-Host "HTTP $($result.StatusCode) / JSON OK" `
+>>                 -ForegroundColor Green
+>>
+>>             if ($json.error) {
+>>                 Write-Host "API ERROR: $($json.error)" `
+>>                     -ForegroundColor Yellow
+>>             }
+>>         }
+>>         catch {
+>>             Write-Host "ERROR: $($_.Exception.Message)" `
+>>                 -ForegroundColor Red
+>>         }
+>>     }
+>> }
 
-        $url = "https://tunertools.top/${api}?action=${action}"
+TEST URL: https://tunertools.top/api_gp_search.php?action=get_metronome_sounds
+HTTP 200 / JSON OK
 
-        Write-Host "`nTEST URL: $url" -ForegroundColor Cyan
+TEST URL: https://tunertools.top/api_gp_search.php?action=get_drum_sounds
+HTTP 200 / JSON OK
 
-        try {
-            $result = Invoke-WebRequest `
-                -Uri $url `
-                -UseBasicParsing `
-                -TimeoutSec 30
+TEST URL: https://tunertools.top/api_songs.php?action=get_metronome_sounds
+HTTP 200 / JSON OK
 
-            $json = $result.Content |
-                ConvertFrom-Json -ErrorAction Stop
+TEST URL: https://tunertools.top/api_songs.php?action=get_drum_sounds
+HTTP 200 / JSON OK
+PS C:\Users\Administrator>
 
-            Write-Host "HTTP $($result.StatusCode) / JSON OK" `
-                -ForegroundColor Green
-
-            if ($json.error) {
-                Write-Host "API ERROR: $($json.error)" `
-                    -ForegroundColor Yellow
-            }
-        }
-        catch {
-            Write-Host "ERROR: $($_.Exception.Message)" `
-                -ForegroundColor Red
-        }
-    }
-}
