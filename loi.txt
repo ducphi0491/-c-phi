@@ -1,33 +1,70 @@
-$manifestPath = "C:\TunerTools\BackupPrep\Drive_AppGuides\app_guides_drive_manifest.json"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-if (-not (Test-Path -LiteralPath $manifestPath)) {
-    throw "Khong tim thay manifest: $manifestPath"
-}
+PS C:\Users\Administrator> $manifestPath = "C:\TunerTools\BackupPrep\Drive_AppGuides\app_guides_drive_manifest.json"
+>>
+>> if (-not (Test-Path -LiteralPath $manifestPath)) {
+>>     throw "Khong tim thay manifest: $manifestPath"
+>> }
+>>
+>> $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 |
+>>     ConvertFrom-Json
+>>
+>> Write-Host "`n=== 14 CANH BAO ===" -ForegroundColor Cyan
+>>
+>> $m.warnings | ForEach-Object {
+>>     Write-Host $_ -ForegroundColor Yellow
+>> }
+>>
+>> Write-Host "`n=== KIEM TRA TUNG VIDEO ===" -ForegroundColor Cyan
+>>
+>> $m.files |
+>>     Group-Object {
+>>         ($_.relative_path.Split('/')[0..1] -join '/')
+>>     } |
+>>     ForEach-Object {
+>>         $items = @($_.Group)
+>>
+>>         [PSCustomObject]@{
+>>             BaiHuongDan = $_.Name
+>>             MP4 = @($items | Where-Object { $_.type -eq 'video' }).Count
+>>             VTT = @($items | Where-Object { $_.type -eq 'subtitle' }).Count
+>>             JSON = @($items | Where-Object { $_.type -eq 'metadata' }).Count
+>>             Anh = @($items | Where-Object { $_.type -eq 'thumbnail' }).Count
+>>         }
+>>     } |
+>>     Format-Table -AutoSize
 
-$m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 |
-    ConvertFrom-Json
+=== 14 CANH BAO ===
+Unrecognized guide file (not uploaded): .htaccess.example
+Unrecognized guide file (not uploaded): api_guides.php
+Unrecognized guide file (not uploaded): chords/chord-library/captions.json
+Unrecognized guide file (not uploaded): chords/practice-finger-harmony/captions.json
+Unrecognized guide file (not uploaded): HUONG_DAN_COPY_VAO_SERVER.txt
+Unrecognized guide file (not uploaded): metronome/beat-drum-practice/captions.json
+Unrecognized guide file (not uploaded): preview_guides.html
+Unrecognized guide file (not uploaded): settings/app-settings/captions.json
+Unrecognized guide file (not uploaded): songs/add-song/captions.json
+Unrecognized guide file (not uploaded): songs/camera-ai-lyrics/captions.json
+Unrecognized guide file (not uploaded): songs/search/captions.json
+Unrecognized guide file (not uploaded): songs/tab-playback/captions.json
+Unrecognized guide file (not uploaded): training/music-games/captions.json
+Unrecognized guide file (not uploaded): tuner/instrument-tuning/captions.json
 
-Write-Host "`n=== 14 CANH BAO ===" -ForegroundColor Cyan
+=== KIEM TRA TUNG VIDEO ===
 
-$m.warnings | ForEach-Object {
-    Write-Host $_ -ForegroundColor Yellow
-}
+BaiHuongDan                    MP4 VTT JSON Anh
+-----------                    --- --- ---- ---
+chords/chord-library             1  15    1   1
+chords/practice-finger-harmony   1  15    1   1
+metronome/beat-drum-practice     1  15    1   1
+settings/app-settings            1  15    1   1
+songs/add-song                   1  15    1   1
+songs/camera-ai-lyrics           1  15    1   1
+songs/search                     1  15    1   1
+songs/tab-playback               1  15    1   1
+training/music-games             1  15    1   1
+tuner/instrument-tuning          1  15    1   1
 
-Write-Host "`n=== KIEM TRA TUNG VIDEO ===" -ForegroundColor Cyan
 
-$m.files |
-    Group-Object {
-        ($_.relative_path.Split('/')[0..1] -join '/')
-    } |
-    ForEach-Object {
-        $items = @($_.Group)
-
-        [PSCustomObject]@{
-            BaiHuongDan = $_.Name
-            MP4 = @($items | Where-Object { $_.type -eq 'video' }).Count
-            VTT = @($items | Where-Object { $_.type -eq 'subtitle' }).Count
-            JSON = @($items | Where-Object { $_.type -eq 'metadata' }).Count
-            Anh = @($items | Where-Object { $_.type -eq 'thumbnail' }).Count
-        }
-    } |
-    Format-Table -AutoSize
+PS C:\Users\Administrator>
