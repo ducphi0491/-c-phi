@@ -1,163 +1,35 @@
-ows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$tests = @(
+    "get_metronome_sounds",
+    "get_drum_sounds"
+)
 
-PS C:\Users\Administrator> $ErrorActionPreference = "Stop"
->>
->> $apiDir = "C:\TunerTools\Web\API"
->> $backupDir = "C:\TunerTools\Backups"
->> $audioDir = "C:\TunerTools\Audio\AI_Music"
->> $phpExe = "C:\php\php.exe"
->>
->> $old = "C:/AI_Music/"
->> $new = "C:/TunerTools/Audio/AI_Music/"
->>
->> $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
->> $enc = [Text.Encoding]::GetEncoding(28591)
->>
->> # Kiem tra 2 thu muc am thanh moi
->> foreach ($name in @("METRONOME", "DRUM")) {
->>     $path = Join-Path $audioDir $name
->>
->>     if (-not (Test-Path -LiteralPath $path -PathType Container)) {
->>         throw "KHONG TIM THAY: $path"
->>     }
->>
->>     Write-Host "FOLDER OK: $path" -ForegroundColor Green
->> }
->>
->> # Chuan bi sua 2 PHP
->> $planned = @()
->>
->> foreach ($name in @("api_gp_search.php", "api_songs.php")) {
->>
->>     $file = Join-Path $apiDir $name
->>
->>     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
->>         throw "KHONG TIM THAY PHP: $file"
->>     }
->>
->>     $content = $enc.GetString(
->>         [IO.File]::ReadAllBytes($file)
->>     )
->>
->>     $count = ([regex]::Matches(
->>         $content,
->>         [regex]::Escape($old)
->>     )).Count
->>
->>     if ($count -ne 4) {
->>         throw "$name co $count vi tri, yeu cau dung 4. DUNG SUA."
->>     }
->>
->>     $backup = Join-Path $backupDir "${name}_${stamp}.bak"
->>     $stage = Join-Path $backupDir "${name}_${stamp}.new.php"
->>
->>     Copy-Item -LiteralPath $file -Destination $backup -ErrorAction Stop
->>
->>     $updated = $content.Replace($old, $new)
->>
->>     [IO.File]::WriteAllBytes(
->>         $stage,
->>         $enc.GetBytes($updated)
->>     )
->>
->>     & $phpExe -l $stage
->>
->>     if ($LASTEXITCODE -ne 0) {
->>         throw "PHP moi co loi cu phap: $name"
->>     }
->>
->>     $planned += [PSCustomObject]@{
->>         Name = $name
->>         File = $file
->>         Backup = $backup
->>         Stage = $stage
->>     }
->> }
->>
->> # Cap nhat PHP, tu khoi phuc neu loi
->> $changed = @()
->>
->> try {
->>     foreach ($item in $planned) {
->>
->>         Copy-Item -LiteralPath $item.Stage `
->>             -Destination $item.File -Force -ErrorAction Stop
->>
->>         $changed += $item
->>
->>         & $phpExe -l $item.File
->>
->>         if ($LASTEXITCODE -ne 0) {
->>             throw "PHP syntax error: $($item.Name)"
->>         }
->>
->>         Write-Host "UPDATED: $($item.Name) - 4 PATHS" `
->>             -ForegroundColor Green
->>     }
->>
->>     Write-Host ""
->>     Write-Host "METRONOME AND DRUM PATHS UPDATED OK" `
->>         -ForegroundColor Green
->> }
->> catch {
->>     foreach ($item in $changed) {
->>         Copy-Item -LiteralPath $item.Backup `
->>             -Destination $item.File -Force
->>     }
->>
->>     Write-Host "DA KHOI PHUC PHP TU BACKUP" `
->>         -ForegroundColor Yellow
->>
->>     throw
->> }
->>
-FOLDER OK: C:\TunerTools\Audio\AI_Music\METRONOME
-FOLDER OK: C:\TunerTools\Audio\AI_Music\DRUM
-No syntax errors detected in C:\TunerTools\Backups\api_gp_search.php_20261105_115659.new.php
-No syntax errors detected in C:\TunerTools\Backups\api_songs.php_20261105_115659.new.php
-No syntax errors detected in C:\TunerTools\Web\API\api_gp_search.php
-UPDATED: api_gp_search.php - 4 PATHS
-No syntax errors detected in C:\TunerTools\Web\API\api_songs.php
-UPDATED: api_songs.php - 4 PATHS
+foreach ($api in @("api_gp_search.php", "api_songs.php")) {
+    foreach ($action in $tests) {
 
-METRONOME AND DRUM PATHS UPDATED OK
-PS C:\Users\Administrator> $tests = @(
->>     "get_metronome_sounds",
->>     "get_drum_sounds"
->> )
->>
->> foreach ($api in @("api_gp_search.php", "api_songs.php")) {
->>     foreach ($action in $tests) {
->>
->>         $url = "https://tunertools.top/$api?action=$action"
->>
->>         try {
->>             $result = Invoke-WebRequest `
->>                 -Uri $url `
->>                 -UseBasicParsing `
->>                 -TimeoutSec 30
->>
->>             $json = $result.Content |
->>                 ConvertFrom-Json -ErrorAction Stop
->>
->>             Write-Host "$api - $action : HTTP $($result.StatusCode) / JSON OK" `
->>                 -ForegroundColor Green
->>
->>             if ($json.error) {
->>                 Write-Host "API ERROR: $($json.error)" `
->>                     -ForegroundColor Yellow
->>             }
->>         }
->>         catch {
->>             Write-Host "$api - $action : ERROR $($_.Exception.Message)" `
->>                 -ForegroundColor Red
->>         }
->>     }
->> }
-api_gp_search.php - get_metronome_sounds : ERROR The remote server returned an error: (404) Not Found.
-api_gp_search.php - get_drum_sounds : ERROR The remote server returned an error: (404) Not Found.
-api_songs.php - get_metronome_sounds : ERROR The remote server returned an error: (404) Not Found.
-api_songs.php - get_drum_sounds : ERROR The remote server returned an error: (404) Not Found.
-PS C:\Users\Administrator>
+        $url = "https://tunertools.top/${api}?action=${action}"
 
+        Write-Host "`nTEST URL: $url" -ForegroundColor Cyan
+
+        try {
+            $result = Invoke-WebRequest `
+                -Uri $url `
+                -UseBasicParsing `
+                -TimeoutSec 30
+
+            $json = $result.Content |
+                ConvertFrom-Json -ErrorAction Stop
+
+            Write-Host "HTTP $($result.StatusCode) / JSON OK" `
+                -ForegroundColor Green
+
+            if ($json.error) {
+                Write-Host "API ERROR: $($json.error)" `
+                    -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host "ERROR: $($_.Exception.Message)" `
+                -ForegroundColor Red
+        }
+    }
+}
