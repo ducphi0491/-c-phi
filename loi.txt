@@ -1,15 +1,39 @@
-$urls = @(
-    "https://api.tunertools.top/api/get_lyrics",
-    "http://127.0.0.1:5000/api/get_lyrics"
-)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($url in $urls) {
-    Write-Host "`nTEST: $url" -ForegroundColor Cyan
+PS C:\Users\Administrator> $urls = @(
+>>     "https://api.tunertools.top/api/get_lyrics",
+>>     "http://127.0.0.1:5000/api/get_lyrics"
+>> )
+>>
+>> foreach ($url in $urls) {
+>>     Write-Host "`nTEST: $url" -ForegroundColor Cyan
+>>
+>>     & curl.exe -sS --max-time 15 `
+>>         -X POST `
+>>         -d "" `
+>>         -o NUL `
+>>         -w "HTTP STATUS: %{http_code}`n" `
+>>         $url
+>> }
 
-    & curl.exe -sS --max-time 15 `
-        -X POST `
-        -d "" `
-        -o NUL `
-        -w "HTTP STATUS: %{http_code}`n" `
-        $url
-}
+TEST: https://api.tunertools.top/api/get_lyrics
+curl: (6) Could not resolve host: NUL
+HTTP STATUS: 000
+<!doctype html>
+<html lang=en>
+<title>404 Not Found</title>
+<h1>Not Found</h1>
+<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>
+HTTP STATUS: 404
+
+TEST: http://127.0.0.1:5000/api/get_lyrics
+curl: (6) Could not resolve host: NUL
+HTTP STATUS: 000
+<!doctype html>
+<html lang=en>
+<title>404 Not Found</title>
+<h1>Not Found</h1>
+<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>
+HTTP STATUS: 404
+PS C:\Users\Administrator>
