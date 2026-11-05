@@ -1,174 +1,122 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$ErrorActionPreference = "Stop"
 
-PS C:\Users\Administrator> $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
->>
->> Write-Host "`n=== IIS VIRTUAL DIRECTORIES ===" -ForegroundColor Cyan
->>
->> & $appcmd list vdir
->>
->> Write-Host "`n=== KIEM TRA THU MUC CU ===" -ForegroundColor Cyan
->>
->> $folders = @(
->>     "tunertools",
->>     "img_sys",
->>     "libs",
->>     "support_chat_uploads",
->>     "document_cache"
->> )
->>
->> foreach ($name in $folders) {
->>
->>     $path = "C:\inetpub\wwwroot\$name"
->>
->>     [PSCustomObject]@{
->>         Folder = $name
->>         Exists = Test-Path -LiteralPath $path
->>         Path   = $path
->>     }
->> }
+$api = "C:\TunerTools\Web\API\api_gp_search.php"
+$phpExe = "C:\php\php.exe"
+$gpRoot = "C:\TunerTools\Data\GuitarPro"
+$vnRoot = Join-Path $gpRoot "Vietnam"
+$backupDir = "C:\TunerTools\Backups"
 
-=== IIS VIRTUAL DIRECTORIES ===
-VDIR "Default Web Site/" (physicalPath:C:\inetpub\wwwroot)
-VDIR "Default Web Site/tab" (physicalPath:C:\TunerTools\Data\GuitarPro)
-VDIR "Default Web Site/tunertools" (physicalPath:C:\TunerTools\Web\tunertools)
-VDIR "Default Web Site/app-guides" (physicalPath:C:\TunerTools\Web\tunertools\app-guides)
-VDIR "Default Web Site/support_chat_uploads" (physicalPath:C:\TunerTools\Data\support_chat_uploads)
-VDIR "Default Web Site/guitar_HD" (physicalPath:C:\TunerTools\Web\guitar_HD)
-VDIR "Default Web Site/libs" (physicalPath:C:\TunerTools\Web\libs)
-VDIR "Default Web Site/img_sys" (physicalPath:C:\TunerTools\Web\img_sys)
-VDIR "Default Web Site/document" (physicalPath:C:\TunerTools\Data\Documents)
+Write-Host "`n=== 1. KIEM TRA THU MUC GP ===" -ForegroundColor Cyan
 
-=== KIEM TRA THU MUC CU ===
+foreach ($path in @($api, $phpExe, $gpRoot)) {
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "KHONG TON TAI: $path"
+    }
+    Write-Host "OK: $path" -ForegroundColor Green
+}
 
-Folder               Exists Path
-------               ------ ----
-tunertools             True C:\inetpub\wwwroot\tunertools
-img_sys                True C:\inetpub\wwwroot\img_sys
-libs                   True C:\inetpub\wwwroot\libs
-support_chat_uploads   True C:\inetpub\wwwroot\support_chat_uploads
-document_cache         True C:\inetpub\wwwroot\document_cache
+$vnExists = Test-Path -LiteralPath $vnRoot -PathType Container
 
+Write-Host "VIETNAM ROOT: $vnRoot"
+Write-Host "VIETNAM EXISTS: $vnExists"
 
-PS C:\Users\Administrator> $roots = @(
->>     "C:\inetpub\wwwroot",
->>     "C:\TunerTools\Web\API",
->>     "C:\TunerTools\Web\tunertools"
->> )
->>
->> $extensions = @(
->>     ".php",
->>     ".config",
->>     ".bat",
->>     ".cmd",
->>     ".ps1"
->> )
->>
->> $pattern = '(?i)inetpub[\\/]+wwwroot|document_cache|support_chat_uploads|img_sys|[\\/]libs[\\/]|[\\/]tunertools[\\/]'
->>
->> Write-Host "`n=== QUET THAM CHIEU DUONG DAN CU ===" -ForegroundColor Cyan
->>
->> $files = @(
->>     foreach ($root in $roots) {
->>
->>         if (Test-Path -LiteralPath $root) {
->>
->>             Get-ChildItem -LiteralPath $root `
->>                 -Recurse -File -ErrorAction SilentlyContinue |
->>             Where-Object {
->>                 $extensions -contains $_.Extension.ToLowerInvariant()
->>             }
->>         }
->>     }
->> )
->>
->> $files = @($files | Sort-Object FullName -Unique)
->>
->> $hits = @(
->>     $files | Select-String -Pattern $pattern |
->>     ForEach-Object {
->>
->>         [PSCustomObject]@{
->>             File  = $_.Path
->>             Line  = $_.LineNumber
->>             Match = $_.Matches[0].Value
->>         }
->>     }
->> )
->>
->> Write-Host "SOURCE FILES SCANNED: $($files.Count)"
->> Write-Host "REFERENCES FOUND: $($hits.Count)"
->>
->> $hits |
->>     Select-Object -First 60 |
->>     Format-Table -AutoSize
+if (-not $vnExists) {
+    Write-Host "`nCAC THU MUC CAP DAU:" -ForegroundColor Yellow
 
-=== QUET THAM CHIEU DUONG DAN CU ===
-SOURCE FILES SCANNED: 24
-REFERENCES FOUND: 72
+    Get-ChildItem -LiteralPath $gpRoot -Directory |
+        Select-Object -First 25 -ExpandProperty Name
 
-File                                                    Line Match
-----                                                    ---- -----
-C:\inetpub\wwwroot\api_AI.bat                              6 \TunerTools\
-C:\inetpub\wwwroot\api_documents.php                       4 /TunerTools/
-C:\inetpub\wwwroot\api_gp_search.php                       2 /TunerTools/
-C:\inetpub\wwwroot\api_songs.php                           2 /TunerTools/
-C:\inetpub\wwwroot\index.php                             578 img_sys
-C:\inetpub\wwwroot\index.php                             579 img_sys
-C:\inetpub\wwwroot\index.php                             580 img_sys
-C:\inetpub\wwwroot\index.php                             583 img_sys
-C:\inetpub\wwwroot\index.php                             593 /libs/
-C:\inetpub\wwwroot\index.php                             605 img_sys
-C:\inetpub\wwwroot\index.php                             620 img_sys
-C:\inetpub\wwwroot\index.php                             812 img_sys
-C:\inetpub\wwwroot\index.php                             856 img_sys
-C:\inetpub\wwwroot\index.php                            1049 img_sys
-C:\inetpub\wwwroot\index.php                            1461 img_sys
-C:\inetpub\wwwroot\tunertools\app-guides\api_guides.php   18 inetpub/wwwroot
-C:\inetpub\wwwroot\tunertools\app-guides\api_guides.php   19 /tunertools/
-C:\inetpub\wwwroot\tunertools\app-guides\api_guides.php   23 /tunertools/
-C:\inetpub\wwwroot\tunertools\app-guides\api_guides.php   27 inetpub/wwwroot
-C:\TunerTools\Web\API\api_AI.bat                           6 \TunerTools\
-C:\TunerTools\Web\API\api_documents.php                    6 inetpub\wwwroot
-C:\TunerTools\Web\API\api_documents.php                    9 inetpub\wwwroot
-C:\TunerTools\Web\API\api_documents.php                   12 inetpub\wwwroot
-C:\TunerTools\Web\API\api_documents.php                   36 /TunerTools/
-C:\TunerTools\Web\API\api_documents.php                   78 /TunerTools/
-C:\TunerTools\Web\API\api_documents.php                   79 /TunerTools/
-C:\TunerTools\Web\API\api_documents.php                  131 /TunerTools/
-C:\TunerTools\Web\API\api_documents.php                  132 /TunerTools/
-C:\TunerTools\Web\API\api_documents.php                 2386 inetpub\\wwwroot
-C:\TunerTools\Web\API\api_gp_search.php                   37 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                  440 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 1178 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 1259 inetpub/wwwroot
-C:\TunerTools\Web\API\api_gp_search.php                 1339 inetpub/wwwroot
-C:\TunerTools\Web\API\api_gp_search.php                 1355 \TunerTools\
-C:\TunerTools\Web\API\api_gp_search.php                 1358 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 1500 inetpub/wwwroot
-C:\TunerTools\Web\API\api_gp_search.php                 1778 inetpub/wwwroot
-C:\TunerTools\Web\API\api_gp_search.php                 2148 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 3051 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 3057 support_chat_uploads
-C:\TunerTools\Web\API\api_gp_search.php                 3081 support_chat_uploads
-C:\TunerTools\Web\API\api_gp_search.php                 3094 support_chat_uploads
-C:\TunerTools\Web\API\api_gp_search.php                 3344 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 3381 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 3445 inetpub/wwwroot
-C:\TunerTools\Web\API\api_gp_search.php                 3474 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 3495 \TunerTools\
-C:\TunerTools\Web\API\api_gp_search.php                 3498 /TunerTools/
-C:\TunerTools\Web\API\api_gp_search.php                 3557 /TunerTools/
-C:\TunerTools\Web\API\api_songs.php                       59 inetpub/wwwroot
-C:\TunerTools\Web\API\api_songs.php                      242 inetpub/wwwroot
-C:\TunerTools\Web\API\api_songs.php                      258 \TunerTools\
-C:\TunerTools\Web\API\api_songs.php                      261 /TunerTools/
-C:\TunerTools\Web\API\api_songs.php                      403 inetpub/wwwroot
-C:\TunerTools\Web\API\api_songs.php                      717 inetpub/wwwroot
-C:\TunerTools\Web\API\api_songs.php                     1574 /TunerTools/
-C:\TunerTools\Web\API\api_songs.php                     2804 /TunerTools/
-C:\TunerTools\Web\API\api_songs.php                     2810 support_chat_uploads
-C:\TunerTools\Web\API\api_songs.php                     2834 support_chat_uploads
+    Write-Host "`nKHONG SUA PHP: THU MUC VIETNAM CHUA TON TAI." -ForegroundColor Red
+    return
+}
 
+Write-Host "`n=== 2. KIEM TRA CAU HINH PHP ===" -ForegroundColor Cyan
 
-PS C:\Users\Administrator>
+$enc = [Text.Encoding]::GetEncoding(28591)
+$content = $enc.GetString([IO.File]::ReadAllBytes($api))
+
+$pattern = '(?m)^([ \t]*\$ttgp_tab_root[ \t]*=[ \t]*)([^;\r\n]+)(;[^\r\n]*)$'
+$matches = [regex]::Matches($content, $pattern)
+
+if ($matches.Count -ne 1) {
+    throw "KHONG TIM THAY DUY NHAT BIEN ttgp_tab_root. CHUA SUA PHP."
+}
+
+$match = $matches[0]
+$currentRoot = $match.Groups[2].Value.Trim()
+
+Write-Host "PHP ROOT CONFIG: $currentRoot"
+
+$correctPath = $currentRoot -match '(?i)C:[/\\]TunerTools[/\\]Data[/\\]GuitarPro'
+
+if (-not $correctPath) {
+
+    Write-Host "`n=== 3. SAO LUU VA SUA ROOT ===" -ForegroundColor Cyan
+
+    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+
+    $backup = Join-Path $backupDir "api_gp_search_before_gpfix_$stamp.php"
+    $stage = Join-Path $backupDir "api_gp_search_stage_gpfix_$stamp.php"
+
+    Copy-Item -LiteralPath $api -Destination $backup -ErrorAction Stop
+
+    $replacement = $match.Groups[1].Value +
+        "'C:/TunerTools/Data/GuitarPro'" +
+        $match.Groups[3].Value
+
+    $newContent = $content.Substring(0, $match.Index) +
+        $replacement +
+        $content.Substring($match.Index + $match.Length)
+
+    [IO.File]::WriteAllBytes($stage, $enc.GetBytes($newContent))
+
+    & $phpExe -l $stage
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "PHP SYNTAX ERROR. FILE GOC CHUA BI DOI."
+    }
+
+    Copy-Item -LiteralPath $stage -Destination $api -Force
+
+    & $phpExe -l $api
+
+    if ($LASTEXITCODE -ne 0) {
+        Copy-Item -LiteralPath $backup -Destination $api -Force
+        throw "PHP ERROR. DA KHOI PHUC FILE GOC."
+    }
+
+    Write-Host "PHP ROOT UPDATED OK" -ForegroundColor Green
+    Write-Host "BACKUP: $backup"
+
+} else {
+    Write-Host "PHP ROOT DA TRO DEN TUNERTOOLS. KHONG SUA FILE." -ForegroundColor Green
+}
+
+Write-Host "`n=== 4. KIEM TRA API QUA HTTPS ===" -ForegroundColor Cyan
+
+$url = "https://tunertools.top/api_gp_search.php?section=nhac_viet&q="
+
+try {
+    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
+
+    Write-Host "HTTP STATUS: $($response.StatusCode)" -ForegroundColor Green
+
+    $json = $response.Content | ConvertFrom-Json
+
+    if ($null -ne $json.data) {
+        Write-Host "ITEMS RETURNED: $(@($json.data).Count)"
+    }
+
+    Write-Host "API VIETNAM TEST COMPLETED" -ForegroundColor Green
+
+} catch {
+    Write-Host "API VAN CO LOI: $($_.Exception.Message)" -ForegroundColor Red
+
+    if ($_.Exception.Response) {
+        Write-Host "HTTP STATUS: $([int]$_.Exception.Response.StatusCode)"
+    }
+
+    Write-Host "CAN KIEM TRA TIEP QUYEN PHP HOAC DUONG DAN THUC TE." -ForegroundColor Yellow
+}
