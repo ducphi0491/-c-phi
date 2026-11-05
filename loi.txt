@@ -1,27 +1,25 @@
-PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_GoogleDrive_Buoc2D_Uploader.zip"
->>
->> $destination = "C:\TunerTools\BackupScripts\Drive_Buoc2D"
->>
->> if (-not (Test-Path -LiteralPath $zip)) {
->>     throw "Khong tim thay ZIP: $zip"
->> }
->>
->> New-Item -ItemType Directory -Path $destination -Force | Out-Null
->>
->> Expand-Archive -LiteralPath $zip -DestinationPath $destination -Force
->>
->> Get-ChildItem -LiteralPath $destination
+$script = "C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1"
+$source = "C:\TunerTools\Web\tunertools\app-guides"
 
+Write-Host "`n=== KIEM TRA DUONG DAN ===" -ForegroundColor Cyan
 
-    Directory: C:\TunerTools\BackupScripts\Drive_Buoc2D
+Write-Host "SCRIPT EXISTS: $(Test-Path -LiteralPath $script)"
+Write-Host "SOURCE EXISTS: $(Test-Path -LiteralPath $source)"
 
+if (Test-Path -LiteralPath $source -PathType Container) {
 
-Mode                LastWriteTime         Length Name
-----                -------------         ------ ----
--a----       05-11-2026   4:29 PM           1258 02_drive_appguides.ps1
--a----       05-11-2026   4:30 PM          13802 api_guides_drive_check.php
--a----       05-11-2026   4:30 PM          20120 drive_appguides_upload.py
--a----       05-11-2026   4:31 PM           3520 README_VI.txt
+    Write-Host "`n=== BAT DAU KIEM KE VIDEO ===" -ForegroundColor Green
 
+    powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File $script `
+        -SourceDir $source
 
-PS C:\Users\Administrator>
+} else {
+
+    Write-Host "`nDANG TIM THU MUC APP-GUIDES..." -ForegroundColor Yellow
+
+    Get-ChildItem -LiteralPath "C:\TunerTools\Web" `
+        -Directory -Filter "app-guides" -Recurse `
+        -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+}
