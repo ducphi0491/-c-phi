@@ -1,11 +1,10 @@
 
-$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_Upload_TrucTiep_20261106.zip"
-$folder = "C:\TunerTools\BackupScripts\Drive_Documents"
+$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_GoogleDrive_UPLOAD_LAI_20261107.zip"
+$folder = "C:\TunerTools\BackupScripts\Drive_AI_Music"
 
-# Giai nen va cap nhat chuong trinh
+New-Item -ItemType Directory -Path $folder -Force | Out-Null
 Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
 
-# Upload du lieu that len Google Drive
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$folder\CHAY_UPLOAD_DOCUMENTS.ps1" `
-    -SourceDir "C:\TunerTools\Data\Documents"
+    -File "$folder\CHAY_UPLOAD_AI.ps1" `
+    -SourceDir "C:\TunerTools\Audio\AI_Music"
