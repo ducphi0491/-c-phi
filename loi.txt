@@ -1,11 +1,49 @@
-$folder = "C:\TunerTools\BackupScripts\Drive_Buoc2D"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\00_GiaiNen_Upload_Documents.ps1"
 
-if (-not (Test-Path "$folder\drive_token.json")) {
-    throw "Khong tim thay drive_token.json"
+
+
+
+$ErrorActionPreference = "Stop"
+
+# 1. Tim file ZIP trong Downloads
+$zip = Get-ChildItem "$env:USERPROFILE\Downloads\TunerTools_Documents_Upload_1Click_20261106*.zip" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if (-not $zip) {
+    throw "Khong tim thay ZIP trong Downloads"
 }
 
+# 2. Khai bao duong dan
+$folder = "C:\TunerTools\BackupScripts\Drive_Documents"
+$source = "C:\inetpub\wwwroot\document"
+$token = "C:\TunerTools\BackupScripts\Drive_Buoc2D\drive_token.json"
+$output = "C:\TunerTools\BackupPrep\Drive_Documents"
+
+if (-not (Test-Path $source)) {
+    throw "Khong tim thay thu muc tai lieu: $source"
+}
+
+if (-not (Test-Path $token)) {
+    throw "Khong tim thay OAuth token: $token"
+}
+
+# 3. Tao folder va giai nen ZIP
+New-Item -ItemType Directory -Path $folder -Force | Out-Null
+
+Expand-Archive -LiteralPath $zip.FullName `
+    -DestinationPath $folder -Force
+
+# 4. Bat dau upload Documents len Google Drive
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$folder\02_drive_appguides.ps1" `
-    -SourceDir "C:\TunerTools\Web\tunertools\app-guides" `
-    -TokenFile "$folder\drive_token.json" `
-    -Upload
+    -File "$folder\CHAY_UPLOAD_DOCUMENTS.ps1" `
+    -SourceDir $source `
+    -TokenFile $token `
+    -OutputDir $output
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Upload chua hoan tat. Kiem tra thong bao loi phia tren."
+}
+
+# 5. Hien thi bao cao
+Get-Content "$output\KET_QUA_UPLOAD_DOCUMENTS.txt" -Encoding UTF8
