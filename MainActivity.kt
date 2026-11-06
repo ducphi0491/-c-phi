@@ -48,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -71,6 +72,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -124,7 +126,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material3.Typography
 import kotlinx.coroutines.tasks.await
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.graphics.nativeCanvas
 import android.annotation.SuppressLint
 import androidx.compose.ui.graphics.toArgb
@@ -1298,6 +1299,7 @@ fun TunerScreen(
     var visibleTabs by remember { mutableStateOf(prefs.getStringSet("visibleTabs", defaultTabs) ?: defaultTabs) }
 
     var selectedTab by remember { mutableStateOf(shortcutTab ?: "tab") }
+    // The Settings screen owns its coffee animation; it stops when this tab leaves composition.
 
     // Khi shortcut được bấm lúc app đang chạy, chuyển thẳng đến đúng tab.
     LaunchedEffect(shortcutRequestId, shortcutTab) {
@@ -1307,7 +1309,6 @@ fun TunerScreen(
     }
 
     var sharedChordQuery by remember { mutableStateOf("") }
-    var activeTutorialStep by remember { mutableStateOf(TutorialStep.NONE) } // Trạng thái bài hướng dẫn hiện tại
 
     // Badge NEW được hiển thị trên tab Hợp âm thay vì tab Trò chơi.
     var showChorusNewBadge by remember { mutableStateOf(true) }
@@ -1936,7 +1937,6 @@ fun TunerScreen(
                                 selectedTab = tab
                             }
                         },
-                        onStartTutorial = { step -> activeTutorialStep = step },
                         visibleTabs = visibleTabs,
                         onVisibleTabsChange = { newTabs ->
                             visibleTabs = newTabs
@@ -1953,11 +1953,6 @@ fun TunerScreen(
                         textColor = textColor,
                         tunaGreen = tunaGreen,
                         initialDbInstallResult = startupDbInstallResult,
-                        activeTutorialStep = activeTutorialStep,
-                        onTutorialDismiss = {
-                            activeTutorialStep = TutorialStep.NONE
-                            isBottomBarVisible = true
-                        },
                         onNavigateToChords = { selectedTab = "Chorus" },
                         onChordClicked = { chord ->
                             sharedChordQuery = chord.replace("[", "").replace("]", "").trim()
@@ -2443,7 +2438,6 @@ fun SettingsScreen(
     surfaceColor: Color,
     bgColor: Color,
     onNavigateToTab: (String) -> Unit,
-    onStartTutorial: (TutorialStep) -> Unit,
     visibleTabs: Set<String>,
     onVisibleTabsChange: (Set<String>) -> Unit
 ) {
@@ -2451,6 +2445,29 @@ fun SettingsScreen(
     var showMenuConfigDialog by remember { mutableStateOf(false) }
     var showNotificationDialog by remember { mutableStateOf(false) } // Thêm dòng này
     var showShareDialog by remember { mutableStateOf(false) }
+    var showZaloGroupDialog by remember { mutableStateOf(false) }
+    var showCoffeeDialog by remember { mutableStateOf(false) }
+    // Pulse once per second while Settings is on screen. No layout resizing.
+    val coffeeCupScale = remember { Animatable(1f) }
+    LaunchedEffect(showCoffeeDialog) {
+        coffeeCupScale.snapTo(1f)
+        if (!showCoffeeDialog) {
+            while (true) {
+                coffeeCupScale.animateTo(
+                    targetValue = 1.10f,
+                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
+                )
+                coffeeCupScale.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
+                )
+                kotlinx.coroutines.delay(500L)
+            }
+        }
+    }
+    // Bank tab is remembered while the settings popup is active.
+    var selectedCoffeePayment by rememberSaveable { mutableStateOf("vietcombank") }
+    var coffeePendingSavePayment by rememberSaveable { mutableStateOf("vietcombank") }
     var showCopyrightDialog by remember { mutableStateOf(false) }
     var showGuideMenu by remember { mutableStateOf(false) }
     var showLoginPromptDialog by remember { mutableStateOf(false) }
@@ -2490,6 +2507,77 @@ fun SettingsScreen(
     // ----------------------------------------
 
     val coroutineScope = rememberCoroutineScope()
+
+    // Android Storage Access Framework: user chooses where to save the freshly
+    // generated card. No broad storage permission is required.
+    val saveCoffeeQrLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("image/png")
+    ) { selectedUri ->
+        if (selectedUri != null) {
+            val paymentMethodToSave = coffeePendingSavePayment
+            coroutineScope.launch {
+                val saveSucceeded = withContext(Dispatchers.IO) {
+                    runCatching {
+                        // Build the shareable card from the QR bitmap at save time.
+                        // Only coffee_momo_qr.png and coffee_vietqr_qr.png are required.
+                        val cardBitmap = createCoffeeQrSaveBitmap(context, paymentMethodToSave)
+                        try {
+                            val output = context.contentResolver.openOutputStream(selectedUri)
+                                ?: error("Cannot open destination URI")
+                            output.use { stream ->
+                                check(cardBitmap.compress(
+                                    android.graphics.Bitmap.CompressFormat.PNG,
+                                    100,
+                                    stream
+                                )) { "Cannot encode the QR image" }
+                            }
+                        } finally {
+                            cardBitmap.recycle()
+                        }
+                    }.isSuccess
+                }
+                val resultKey = if (saveSucceeded) "coffee_saved" else "coffee_save_error"
+                Toast.makeText(
+                    context,
+                    CoreTranslator.getString(resultKey, currentLang),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    // Save an offline-generated group QR with the Android document picker.
+    // The group link and QR are bundled in this Kotlin file: no new image/Gradle dependency.
+    val saveZaloQrLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("image/png")
+    ) { selectedUri ->
+        if (selectedUri != null) {
+            coroutineScope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val qrBitmap = createTunerZaloGroupQrBitmap()
+                        try {
+                            val output = context.contentResolver.openOutputStream(selectedUri)
+                                ?: error("Cannot open selected destination")
+                            output.use { stream ->
+                                check(qrBitmap.compress(
+                                    android.graphics.Bitmap.CompressFormat.PNG, 100, stream
+                                )) { "Cannot save Zalo QR" }
+                            }
+                        } finally {
+                            qrBitmap.recycle()
+                        }
+                    }.isSuccess
+                }
+                Toast.makeText(
+                    context,
+                    CoreTranslator.getString(if (saved) "coffee_saved" else "coffee_save_error", currentLang),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
     val deviceId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown_device" }
 
     val appLink = "https://play.google.com/store/apps/details?id=${context.packageName}"
@@ -2868,13 +2956,31 @@ fun SettingsScreen(
                     onClick = { showShareDialog = true }
                 )
 
+                // Join the TunerTools community on Zalo (QR, invite link, sharing).
+                ModernSettingRow(
+                    title = CoreTranslator.getString("zalo_menu", currentLang),
+                    icon = Icons.Default.Groups,
+                    iconTint = settingsIconColor,
+                    iconArtwork = {
+                        ZaloBrandIcon(
+                            modifier = Modifier.size(22.dp),
+                            tint = settingsIconColor,
+                            cutoutColor = settingsCardColor
+                        )
+                    },
+                    textColor = textColor,
+                    dividerColor = settingsBorderColor,
+                    showDivider = true,
+                    onClick = { showZaloGroupDialog = true }
+                )
+
                 ModernSettingRow(
                     title = CoreTranslator.getString("rate_app", currentLang),
                     icon = Icons.Default.ThumbUp,
                     iconTint = settingsIconColor,
                     textColor = textColor,
                     dividerColor = settingsBorderColor,
-                    showDivider = false,
+                    showDivider = true,
                     onClick = {
                         val activity = context as? Activity
                         if (activity != null) {
@@ -2935,6 +3041,19 @@ fun SettingsScreen(
                             }
                         }
                     }
+                )
+
+                // Mục mời cà phê: hiển thị ly cà phê màu ngay cả khi đổi ngôn ngữ.
+                ModernSettingRow(
+                    title = coffeeLabelWithoutEmoji("coffee_menu", currentLang),
+                    icon = Icons.Default.LocalCafe,
+                    iconEmoji = "☕",
+                    iconScale = coffeeCupScale.value,
+                    iconTint = settingsIconColor,
+                    textColor = textColor,
+                    dividerColor = settingsBorderColor,
+                    showDivider = false,
+                    onClick = { showCoffeeDialog = true }
                 )
             }
         }
@@ -3273,21 +3392,15 @@ fun SettingsScreen(
         )
     }
 
+    // Server-driven video guide center: one MP4 and localized WebVTT per lesson.
     if (showGuideMenu) {
-        GuideMenuDialog(
+        TunerVideoGuidesDialog(
             currentLang = currentLang,
-            bgColor = surfaceColor,
-            textColor = textColor,
+            isDarkMode = isDarkMode,
             tunaGreen = tunaGreen,
-            onDismiss = { showGuideMenu = false },
-            onSelectTutorial = { step ->
-                showGuideMenu = false
-                onStartTutorial(step)
-                onNavigateToTab("tab")
-            }
+            onDismiss = { showGuideMenu = false }
         )
     }
-
     if (isLangDialogVisible) {
         Dialog(onDismissRequest = { isLangDialogVisible = false }) {
             Surface(shape = RoundedCornerShape(12.dp), color = surfaceColor, modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp)) {
@@ -3389,6 +3502,89 @@ fun SettingsScreen(
             }
         )
     }
+    if (showZaloGroupDialog) {
+        ZaloGroupInviteDialog(
+            currentLang = currentLang,
+            isDarkMode = isDarkMode,
+            onDismiss = { showZaloGroupDialog = false },
+            onJoinGroup = {
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(TUNER_ZALO_GROUP_URL)))
+                } catch (_: Exception) {
+                    Toast.makeText(
+                        context,
+                        CoreTranslator.getString("cannot_open_link", currentLang),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            },
+            onCopyLink = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Zalo TunerTools group", TUNER_ZALO_GROUP_URL))
+                Toast.makeText(context, CoreTranslator.getString("link_copied", currentLang), Toast.LENGTH_SHORT).show()
+            },
+            onShareLink = {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, TUNER_ZALO_GROUP_URL)
+                }
+                context.startActivity(
+                    Intent.createChooser(shareIntent, CoreTranslator.getString("share_via", currentLang))
+                )
+            },
+            onSaveQr = { saveZaloQrLauncher.launch("TunerTools_Zalo_Group_QR.png") }
+        )
+    }
+
+    if (showCoffeeDialog) {
+        CoffeeSupportDialog(
+            currentLang = currentLang,
+            isDarkMode = isDarkMode,
+            tunaGreen = tunaGreen,
+            selectedMethod = selectedCoffeePayment,
+            onSelectMethod = { selectedCoffeePayment = it },
+            onDismiss = { showCoffeeDialog = false },
+            onCopyAccount = {
+                val accountId = if (selectedCoffeePayment == "momo") {
+                    "PSP2630215400000072"
+                } else {
+                    "0041000150638"
+                }
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                        as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("Payment receiver account", accountId)
+                )
+                Toast.makeText(
+                    context,
+                    CoreTranslator.getString("coffee_copied", currentLang),
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onCopyMomoPhone = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                        as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("MoMo registered phone", "0971832146")
+                )
+                Toast.makeText(
+                    context,
+                    CoreTranslator.getString("coffee_phone_copied", currentLang),
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onSaveQr = {
+                coffeePendingSavePayment = selectedCoffeePayment
+                val filename = if (selectedCoffeePayment == "momo") {
+                    "TunerTools_MoMo_QR.png"
+                } else {
+                    "TunerTools_Vietcombank_QR.png"
+                }
+                saveCoffeeQrLauncher.launch(filename)
+            }
+        )
+    }
+
     if (showShareDialog) {
         Dialog(onDismissRequest = { showShareDialog = false }) {
             Surface(shape = RoundedCornerShape(12.dp), color = surfaceColor, modifier = Modifier.fillMaxWidth()) {
@@ -3798,6 +3994,640 @@ fun SettingsScreen(
         }
     }
 }
+/**
+ * Create the image to export from one QR asset plus programmatically drawn text.
+ * This avoids two redundant *_card.png drawables and does not require network
+ * access or storage permissions (CreateDocument handles destination access).
+ * QR pixels are pasted at their native resolution to keep the code sharp.
+ */
+private fun createCoffeeQrSaveBitmap(
+    context: Context,
+    paymentMethod: String
+): android.graphics.Bitmap {
+    val isMomo = paymentMethod == "momo"
+    val qrDrawable = if (isMomo) R.drawable.coffee_momo_qr else R.drawable.coffee_vietqr_qr
+    val qrBitmap = BitmapFactory.decodeResource(context.resources, qrDrawable)
+        ?: error("QR bitmap is not available")
+
+    // The developer may replace *_qr.png with the earlier, taller QR cards.
+    // If so, export that complete, styled card as-is. Reframing a portrait
+    // card would duplicate or overlap its title and payment details.
+    // For the original square QR images, keep generating the shareable card.
+    if (qrBitmap.height > qrBitmap.width * 1.10f) {
+        return qrBitmap // The save launcher recycles the returned bitmap.
+    }
+
+    try {
+        val width = 1100
+        val height = 1530
+        val card = android.graphics.Bitmap.createBitmap(
+            width, height, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        val canvas = android.graphics.Canvas(card)
+        canvas.drawColor(android.graphics.Color.WHITE)
+
+        val accent = if (isMomo) {
+            android.graphics.Color.rgb(176, 28, 121)
+        } else {
+            android.graphics.Color.rgb(23, 121, 93)
+        }
+        val darkText = android.graphics.Color.rgb(32, 38, 44)
+        val headerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = accent
+        }
+        canvas.drawRect(0f, 0f, width.toFloat(), 212f, headerPaint)
+
+        fun centeredText(
+            value: String,
+            baseline: Float,
+            fontSize: Float,
+            ink: Int,
+            bold: Boolean = false
+        ) {
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = ink
+                textAlign = android.graphics.Paint.Align.CENTER
+                textSize = fontSize
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.DEFAULT,
+                    if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL
+                )
+            }
+            val maxWidth = width - 120f
+            val measured = paint.measureText(value)
+            if (measured > maxWidth) paint.textSize *= maxWidth / measured
+            canvas.drawText(value, width / 2f, baseline, paint)
+        }
+
+        centeredText(if (isMomo) "MoMo" else "Vietcombank", 103f, 67f,
+            android.graphics.Color.WHITE, true)
+        centeredText("TUNER TOOLS  -  THANK YOU FOR YOUR SUPPORT", 163f, 29f,
+            android.graphics.Color.WHITE)
+
+        // Both QR PNGs include their white quiet zones; never crop them.
+        val qrAreaTop = 255f
+        val qrAreaHeight = 950f
+        val left = ((width - qrBitmap.width) / 2).toFloat()
+        val top = qrAreaTop + ((qrAreaHeight.toInt() - qrBitmap.height) / 2).toFloat()
+        val qrPaint = android.graphics.Paint().apply { isFilterBitmap = false }
+        canvas.drawBitmap(qrBitmap, left, top, qrPaint)
+
+        val dividerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(222, 228, 231)
+            strokeWidth = 2f
+        }
+        canvas.drawLine(100f, 1250f, 1000f, 1250f, dividerPaint)
+        centeredText("NGUYEN DUC PHI", 1324f, 47f, darkText, true)
+        centeredText(
+            if (isMomo) "MoMo account: PSP2630215400000072"
+            else "Account: 0041000150638",
+            1400f, 39f, darkText
+        )
+        if (isMomo) {
+            centeredText("Phone: 0971832146", 1467f, 36f, darkText)
+        }
+        return card
+    } finally {
+        qrBitmap.recycle()
+    }
+}
+
+// Official TunerTools Zalo community invite link, supplied by the app owner.
+private const val TUNER_ZALO_GROUP_URL = "https://zalo.me/g/qm7pafocwwedr5xeilzf"
+private const val TUNER_ZALO_QR_SIDE = 45
+private const val TUNER_ZALO_QR_BITMAP_BITS = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD++jor+AQVW1nQQC6urIq6AXToPsXQC6cyTC6AQUJOvQQD+qqqr+AAFBopAAA6yjUvOAOlOtqIAAKdEr6mARh2TWUQBKkLj26AAnwyFrAAfE+Wf2AOrmsV8QAPBcZysAIBLJQJACmayo7OAdhNzxuACSlJB3+AdhQxUqAAyD2uWGAToTF0IQAjxX8D4AXOOWfbgC720ZCGAXvMARsgC2HxJv+AAFv7pEAD+MOYq2AQQYfFEwC6w87fqAXVBMFVAC6s0nFaAQTo9jkQD+LpNFeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+/** Render the QR matrix bundled above; works offline and needs no new drawable/dependency. */
+private fun createTunerZaloGroupQrBitmap(): android.graphics.Bitmap {
+    val side = TUNER_ZALO_QR_SIDE
+    val modulePixels = 14
+    val matrix = android.util.Base64.decode(TUNER_ZALO_QR_BITMAP_BITS, android.util.Base64.NO_WRAP)
+    require(matrix.size * 8 >= side * side) { "Invalid Zalo QR matrix" }
+    val bitmap = android.graphics.Bitmap.createBitmap(
+        side * modulePixels, side * modulePixels, android.graphics.Bitmap.Config.ARGB_8888
+    )
+    val canvas = android.graphics.Canvas(bitmap)
+    canvas.drawColor(android.graphics.Color.WHITE)
+    val ink = android.graphics.Paint().apply {
+        color = android.graphics.Color.BLACK
+        isAntiAlias = false
+    }
+    for (index in 0 until side * side) {
+        val bit = 128 ushr (index % 8)
+        if ((matrix[index / 8].toInt() and bit) == 0) continue
+        val x = (index % side) * modulePixels
+        val y = (index / side) * modulePixels
+        canvas.drawRect(
+            x.toFloat(), y.toFloat(),
+            (x + modulePixels).toFloat(), (y + modulePixels).toFloat(), ink
+        )
+    }
+    return bitmap
+}
+
+/** Full-screen invite view with the QR, join button, copy/share/save; no vertical scrolling. */
+@Composable
+private fun ZaloGroupInviteDialog(
+    currentLang: String,
+    isDarkMode: Boolean,
+    onDismiss: () -> Unit,
+    onJoinGroup: () -> Unit,
+    onCopyLink: () -> Unit,
+    onShareLink: () -> Unit,
+    onSaveQr: () -> Unit
+) {
+    val blue = Color(0xFF1683F5)
+    val foreground = if (isDarkMode) Color.White else Color(0xFF202124)
+    val background = if (isDarkMode) Color.Black else Color(0xFFF6F8FB)
+    val cardBackground = if (isDarkMode) Color(0xFF101619) else Color.White
+    val compact = LocalConfiguration.current.screenHeightDp < 700
+    val qrImage = remember { createTunerZaloGroupQrBitmap().asImageBitmap() }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = background, tonalElevation = 0.dp) {
+            Column(
+                modifier = Modifier.fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = if (compact) 8.dp else 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = CoreTranslator.getString("close", currentLang),
+                            tint = foreground
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(Icons.Default.Groups, contentDescription = null, tint = blue, modifier = Modifier.size(27.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = CoreTranslator.getString("zalo_title", currentLang),
+                        modifier = Modifier.weight(1f),
+                        fontSize = 19.sp, lineHeight = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = foreground,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(if (compact) 6.dp else 12.dp))
+                Text(
+                    text = CoreTranslator.getString("zalo_description", currentLang),
+                    color = foreground.copy(alpha = 0.70f),
+                    fontSize = 13.sp, lineHeight = 18.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(if (compact) 8.dp else 14.dp))
+
+                // The QR is centered and fitted into the remaining space, never cropped.
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                        .background(cardBackground, RoundedCornerShape(18.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        bitmap = qrImage,
+                        contentDescription = "TunerTools Zalo group QR",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                Spacer(modifier = Modifier.height(if (compact) 8.dp else 14.dp))
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable { onJoinGroup() },
+                    shape = RoundedCornerShape(12.dp),
+                    color = blue.copy(alpha = if (isDarkMode) 0.18f else 0.09f)
+                ) {
+                    Text(
+                        text = TUNER_ZALO_GROUP_URL.removePrefix("https://"),
+                        color = if (isDarkMode) Color(0xFF74B7FF) else Color(0xFF076FCE),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(if (compact) 8.dp else 14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ZaloGroupAction(
+                        icon = Icons.Default.ContentCopy,
+                        text = CoreTranslator.getString("zalo_copy", currentLang),
+                        foreground = foreground,
+                        onClick = onCopyLink,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ZaloGroupAction(
+                        icon = Icons.Default.Share,
+                        text = CoreTranslator.getString("zalo_share", currentLang),
+                        foreground = foreground,
+                        onClick = onShareLink,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ZaloGroupAction(
+                        icon = Icons.Default.Download,
+                        text = CoreTranslator.getString("coffee_save", currentLang),
+                        foreground = foreground,
+                        onClick = onSaveQr,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(if (compact) 8.dp else 16.dp))
+                Button(
+                    onClick = onJoinGroup,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = blue)
+                ) {
+                    Icon(Icons.Default.Groups, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = CoreTranslator.getString("zalo_join", currentLang),
+                        fontSize = 14.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ZaloGroupAction(
+    icon: ImageVector,
+    text: String,
+    foreground: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.clickable { onClick() }.padding(horizontal = 2.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier.size(42.dp)
+                .background(foreground.copy(alpha = 0.10f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = foreground, modifier = Modifier.size(21.dp))
+        }
+        Spacer(modifier = Modifier.height(5.dp))
+        Text(
+            text = text,
+            color = foreground,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+    }
+}
+
+/**
+ * Show two QR codes rebuilt from the original Vietcombank and MoMo payment
+ * payloads. Both assets are bundled locally and no payment is made in-app.
+ */
+@Composable
+private fun CoffeeSupportDialog(
+    currentLang: String,
+    isDarkMode: Boolean,
+    tunaGreen: Color,
+    selectedMethod: String,
+    onSelectMethod: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onCopyAccount: () -> Unit,
+    onCopyMomoPhone: () -> Unit,
+    onSaveQr: () -> Unit
+) {
+    val foreground = if (isDarkMode) Color.White else Color(0xFF1B1C20)
+    val fullScreenBackground = if (isDarkMode) Color.Black else Color(0xFFF5F5F7)
+    val imageBackground = if (isDarkMode) Color(0xFF101619) else Color.White
+    val isMomo = selectedMethod == "momo"
+    val bankName = if (isMomo) "MoMo" else "Vietcombank"
+    val accountId = if (isMomo) "PSP2630215400000072" else "0041000150638"
+    val bankAccent = if (isMomo) Color(0xFFB01C79) else Color(0xFF17795D)
+    val qrResource = if (isMomo) R.drawable.coffee_momo_qr else R.drawable.coffee_vietqr_qr
+
+    // Read device size before the dialog so the layout does not depend on
+    // BoxWithConstraints' subcomposition scope, which fails in some setups.
+    val coffeeScreenConfig = LocalConfiguration.current
+    val compactLayout = coffeeScreenConfig.screenHeightDp < 700
+    val sidePadding = if (coffeeScreenConfig.screenWidthDp < 350) 10.dp else 16.dp
+
+    // Measure with the same text style used by the header. Keep the complete title
+    // on one line by picking the largest font size that fits the available width.
+    // Header widths: Back 40dp + gap 8dp + cup 34dp + gap 7dp = 89dp.
+    val coffeeHeaderTitle = coffeeLabelWithoutEmoji("coffee_title", currentLang)
+    val coffeeHeaderStyle = MaterialTheme.typography.bodyLarge.copy(
+        fontWeight = FontWeight.Bold,
+        lineHeight = 20.sp
+    )
+    val coffeeHeaderMeasurer = rememberTextMeasurer()
+    val coffeeHeaderDensity = LocalDensity.current
+    val coffeeHeaderWidthPx = with(coffeeHeaderDensity) {
+        (coffeeScreenConfig.screenWidthDp.dp - sidePadding * 2 - 89.dp)
+            .roundToPx().coerceAtLeast(1)
+    }
+    val coffeeHeaderFontSize = remember(
+        coffeeHeaderTitle, coffeeHeaderWidthPx, coffeeHeaderStyle, coffeeHeaderMeasurer
+    ) {
+        (34 downTo 22).firstNotNullOfOrNull { halfSp ->
+            val candidate = (halfSp / 2f).sp
+            val result = coffeeHeaderMeasurer.measure(
+                text = coffeeHeaderTitle,
+                style = coffeeHeaderStyle.copy(fontSize = candidate),
+                maxLines = 1,
+                softWrap = false
+            )
+            if (result.size.width <= coffeeHeaderWidthPx) candidate else null
+        } ?: 11.sp
+    }
+
+    // Full-width Dialog instead of a centered, height-limited popup.
+    // It covers Settings and the bottom app menu, with Android Back to close.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = fullScreenBackground,
+            tonalElevation = 0.dp
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = sidePadding)
+                        .padding(
+                            top = if (compactLayout) 6.dp else 12.dp,
+                            bottom = if (compactLayout) 6.dp else 12.dp
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Dedicated full-screen header: back arrow replaces popup X.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = CoreTranslator.getString("close", currentLang),
+                                tint = foreground,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        // The coffee emoji needs extra width for its cup handle on Android fonts.
+                        // Keep it separate from the localized title so neither wraps.
+                        Box(
+                            modifier = Modifier.width(34.dp).height(28.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "☕",
+                                fontSize = 22.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Visible,
+                                modifier = Modifier.wrapContentSize(unbounded = true)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(7.dp))
+                        Text(
+                            text = coffeeHeaderTitle,
+                            modifier = Modifier.weight(1f),
+                            color = foreground,
+                            style = coffeeHeaderStyle.copy(fontSize = coffeeHeaderFontSize),
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // On short phones prioritize the QR and buttons over help text.
+                    if (!compactLayout) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = CoreTranslator.getString("coffee_message", currentLang),
+                            color = foreground.copy(alpha = 0.72f),
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    } else {
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    // Tabs have identical heights; switching does not move the QR.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        listOf("vietcombank" to "Vietcombank", "momo" to "MoMo").forEach { (method, label) ->
+                            val active = selectedMethod == method
+                            Surface(
+                                onClick = { onSelectMethod(method) },
+                                modifier = Modifier.weight(1f).height(46.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (active) tunaGreen.copy(alpha = 0.14f)
+                                else foreground.copy(alpha = 0.04f),
+                                border = BorderStroke(
+                                    if (active) 1.5.dp else 1.dp,
+                                    if (active) tunaGreen else foreground.copy(alpha = 0.11f)
+                                )
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = label,
+                                        color = if (active) tunaGreen else foreground,
+                                        fontSize = 13.5.sp,
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(if (compactLayout) 6.dp else 10.dp))
+
+                    // Key change: fill all remaining vertical space with the QR image.
+                    // The portrait cards the user chose are never cropped, stretched,
+                    // or replaced. Both methods share the same weighted image area.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(imageBackground),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(qrResource),
+                            contentDescription = "$bankName payment QR - $accountId",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(if (compactLayout) 3.dp else 6.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(if (compactLayout) 5.dp else 8.dp))
+                    Text(
+                        text = "$bankName  ·  NGUYEN DUC PHI",
+                        color = bankAccent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(26.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = accountId,
+                            color = foreground,
+                            fontSize = if (isMomo) 15.sp else 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // Keep this line reserved for both banks: equal fullscreen layout.
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(23.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isMomo) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onCopyMomoPhone() }
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = CoreTranslator.getString("coffee_momo_phone", currentLang) + ": 0971832146",
+                                    color = foreground.copy(alpha = 0.72f),
+                                    fontSize = 10.5.sp,
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = CoreTranslator.getString("coffee_copy", currentLang),
+                                    tint = bankAccent,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (!compactLayout) {
+                        Text(
+                            text = CoreTranslator.getString("coffee_scan_hint", currentLang),
+                            color = foreground.copy(alpha = 0.65f),
+                            fontSize = 10.5.sp,
+                            lineHeight = 14.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(if (compactLayout) 5.dp else 9.dp))
+
+                    // Action bar stays visible; it never overlays the QR.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onCopyAccount,
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
+                            border = BorderStroke(1.dp, tunaGreen.copy(alpha = 0.55f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                tint = tunaGreen,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = CoreTranslator.getString("coffee_copy", currentLang),
+                                fontSize = 11.5.sp,
+                                color = tunaGreen,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Button(
+                            onClick = onSaveQr,
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = tunaGreen)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = CoreTranslator.getString("coffee_save", currentLang),
+                                fontSize = 11.5.sp,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(if (compactLayout) 3.dp else 7.dp))
+                    Text(
+                        text = CoreTranslator.getString("coffee_optional", currentLang),
+                        color = foreground.copy(alpha = 0.55f),
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SettingsSectionHeader(
     icon: ImageVector,
@@ -3827,6 +4657,73 @@ private fun SettingsSectionHeader(
     }
 }
 
+/**
+ * Coffee labels used to contain a trailing coffee emoji in older translation files.
+ * Strip it from the localized label because the coffee cup is now a dedicated icon.
+ * This preserves both old and new translations without duplicate/miswrapped cups.
+ */
+private fun coffeeLabelWithoutEmoji(key: String, currentLang: String): String =
+    CoreTranslator.getString(key, currentLang)
+        .replace("☕️", "")
+        .replace("☕", "")
+        .trim()
+
+@Composable
+private fun ZaloBrandIcon(
+    modifier: Modifier = Modifier,
+    tint: Color,
+    cutoutColor: Color
+) {
+    // Monochrome Zalo logo for the Settings menu. Match the other icons in both
+    // dark and light themes; retain the original speech-bubble/logo silhouette.
+    Canvas(modifier = modifier) {
+        val diameter = size.minDimension
+        val originX = (size.width - diameter) / 2f
+        val originY = (size.height - diameter) / 2f
+        val bubbleLeft = originX + diameter * 0.16f
+        val bubbleTop = originY + diameter * 0.17f
+        val bubbleWidth = diameter * 0.68f
+        val bubbleHeight = diameter * 0.60f
+
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(originX, originY),
+            size = Size(diameter, diameter),
+            cornerRadius = CornerRadius(diameter * 0.25f)
+        )
+        drawRoundRect(
+            color = cutoutColor,
+            topLeft = Offset(bubbleLeft, bubbleTop),
+            size = Size(bubbleWidth, bubbleHeight),
+            cornerRadius = CornerRadius(diameter * 0.18f)
+        )
+        val bubbleTail = androidx.compose.ui.graphics.Path().apply {
+            moveTo(bubbleLeft + diameter * 0.17f, bubbleTop + bubbleHeight - diameter * 0.02f)
+            lineTo(bubbleLeft + diameter * 0.11f, bubbleTop + bubbleHeight + diameter * 0.13f)
+            lineTo(bubbleLeft + diameter * 0.31f, bubbleTop + bubbleHeight - diameter * 0.015f)
+            close()
+        }
+        drawPath(path = bubbleTail, color = cutoutColor)
+
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = tint.toArgb()
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = diameter * 0.245f
+            typeface = android.graphics.Typeface.create(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.BOLD
+            )
+        }
+        val metrics = textPaint.fontMetrics
+        val textCenterY = bubbleTop + bubbleHeight * 0.50f
+        val baseline = textCenterY - (metrics.ascent + metrics.descent) / 2f
+        drawContext.canvas.nativeCanvas.drawText(
+            "Zalo", originX + diameter * 0.50f, baseline, textPaint
+        )
+    }
+}
+
+
 @Composable
 private fun ModernSettingRow(
     title: String,
@@ -3839,6 +4736,9 @@ private fun ModernSettingRow(
     showChevron: Boolean = true,
     showDivider: Boolean = true,
     badgeCount: Int = 0,
+    iconEmoji: String? = null,
+    iconScale: Float = 1f,
+    iconArtwork: (@Composable () -> Unit)? = null,
     trailingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -3854,12 +4754,34 @@ private fun ModernSettingRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = title,
-                    tint = iconTint,
-                    modifier = Modifier.size(20.dp)
-                )
+                if (iconArtwork != null) {
+                    iconArtwork()
+                } else if (iconEmoji != null) {
+                    // The emoji can be wider than its font size (notably the cup handle).
+                    // Reserve enough width so Android does not clip its right edge.
+                    Box(
+                        modifier = Modifier.width(32.dp).height(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = iconEmoji,
+                            fontSize = 21.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Visible,
+                            modifier = Modifier
+                                .wrapContentSize(unbounded = true)
+                                .scale(iconScale)
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = iconTint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
                 if (badgeCount > 0) {
                     Box(
