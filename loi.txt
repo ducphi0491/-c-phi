@@ -1,28 +1,4 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
 
-PS C:\Users\Administrator>
->> $zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_GoogleDrive_UPLOAD_LAI.zip"
->> $folder = "C:\TunerTools\BackupScripts\Drive_Documents"
->>
->> New-Item -ItemType Directory -Path $folder -Force | Out-Null
->>
->> Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File "$folder\CHAY_UPLOAD_DOCUMENTS.ps1"
-============================================================
- TUNERTOOLS DOCUMENTS - GOOGLE DRIVE AUTO UPLOAD
-============================================================
-Khong tim thay thu muc: C:\inetpub\wwwroot\document. Hay chay tren Windows Server IIS, hoac truyen -SourceDir.
-At C:\TunerTools\BackupScripts\Drive_Documents\CHAY_UPLOAD_DOCUMENTS.ps1:14 char:5
-+     throw "Khong tim thay thu muc: $SourceDir. Hay chay tren Windows  ...
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OperationStopped: (Khong tim thay ...yen -SourceDir.:String) [], RuntimeException
-    + FullyQualifiedErrorId : Khong tim thay thu muc: C:\inetpub\wwwroot\document. Hay chay tren Windows Server IIS, h
-   oac truyen -SourceDir.
-
-PS C:\Users\Administrator>
-
-
-C:\TunerTools\Data\Documents
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File "C:\TunerTools\BackupScripts\Drive_Documents\CHAY_UPLOAD_DOCUMENTS.ps1" `
+    -SourceDir "C:\TunerTools\Data\Documents"
