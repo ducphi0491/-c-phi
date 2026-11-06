@@ -1,14 +1,11 @@
-PS C:\Users\Administrator>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File "C:\TunerTools\BackupScripts\Drive_Documents\CHAY_UPLOAD_DOCUMENTS.ps1" `
->>     -SourceDir "C:\TunerTools\Data\Documents"
-============================================================
- TUNERTOOLS DOCUMENTS - GOOGLE DRIVE AUTO UPLOAD
-============================================================
-Source : C:\TunerTools\Data\Documents
-Output : C:\TunerTools\BackupPrep\Drive_Documents
-Token  : existing private OAuth file (NOT copied or modified)
-Google : My Drive/TunerTools_AppBackup/document
-Upload is incremental: only new/changed files are transferred.
 
-Inventory: C:\TunerTools\Data\Documents
+$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_Upload_TrucTiep_20261106.zip"
+$folder = "C:\TunerTools\BackupScripts\Drive_Documents"
+
+# Giai nen va cap nhat chuong trinh
+Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
+
+# Upload du lieu that len Google Drive
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File "$folder\CHAY_UPLOAD_DOCUMENTS.ps1" `
+    -SourceDir "C:\TunerTools\Data\Documents"
