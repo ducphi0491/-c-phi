@@ -1,8 +1,79 @@
-Khong tim thay du 2 file PDF.
-At line:28 char:5
-+     throw "Khong tim thay du 2 file PDF."
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OperationStopped: (Khong tim thay du 2 file PDF.:String) [], RuntimeException
-    + FullyQualifiedErrorId : Khong tim thay du 2 file PDF.
 
-PS C:\Users\Administrator>
+$ErrorActionPreference = "Stop"
+
+# 1. Thu muc nguon
+$root = "C:\TunerTools\Data\Documents"
+
+# 2. Tu dong tim thu muc chua 2 file QUY*.pdf
+$candidates = @(
+    Get-ChildItem -LiteralPath $root -Directory |
+    Where-Object {
+        $folderFiles = @(
+            Get-ChildItem -LiteralPath $_.FullName -File -Filter "QUY*.pdf" |
+            Where-Object { $_.BaseName -match "\s[12]$" }
+        )
+        $folderFiles.Count -eq 2
+    }
+)
+
+if ($candidates.Count -ne 1) {
+    Get-ChildItem -LiteralPath $root -Recurse -File -Filter "QUY*.pdf" |
+        Select-Object FullName, Length
+    throw "Khong xac dinh duoc duy nhat thu muc chua 2 PDF."
+}
+
+$sourceDir = $candidates[0]
+
+$pdfs = @(
+    Get-ChildItem -LiteralPath $sourceDir.FullName -File -Filter "QUY*.pdf" |
+    Where-Object { $_.BaseName -match "\s[12]$" }
+)
+
+if (
+    $pdfs.Count -ne 2 -or
+    @($pdfs | Where-Object { $_.BaseName -match "\s1$" }).Count -ne 1 -or
+    @($pdfs | Where-Object { $_.BaseName -match "\s2$" }).Count -ne 1
+) {
+    throw "Khong tim thay dung hai file can upload."
+}
+
+Write-Host "TIM THAY 2 FILE:" -ForegroundColor Green
+$pdfs | Select-Object FullName, Length | Format-Table -AutoSize
+
+# 3. Tao ban sao on dinh, chi gom hai file
+$stage = "C:\TunerTools\BackupPrep\Documents_Only2_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+$dest = Join-Path (Join-Path $stage "Guitar") $sourceDir.Name
+
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
+
+foreach ($pdf in $pdfs) {
+    $target = Join-Path $dest $pdf.Name
+
+    Copy-Item -LiteralPath $pdf.FullName -Destination $target -Force
+
+    $originalHash = (Get-FileHash -LiteralPath $pdf.FullName -Algorithm SHA256).Hash
+    $copiedHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+
+    if ($originalHash -ne $copiedHash) {
+        throw "File thay doi khi sao chep: $($pdf.FullName)"
+    }
+
+    Write-Host "COPY OK: $($pdf.Name)" -ForegroundColor Green
+}
+
+# 4. Upload CHI HAI FILE len Google Drive
+$tool = "C:\TunerTools\BackupScripts\Drive_Documents"
+$report = "C:\TunerTools\BackupPrep\Drive_Documents_Only2"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File "$tool\CHAY_UPLOAD_DOCUMENTS.ps1" `
+    -SourceDir $stage `
+    -OutputDir $report
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Upload chua hoan tat. Kiem tra thong bao phia tren."
+}
+
+# 5. Xem bao cao
+Write-Host "UPLOAD HOAN TAT" -ForegroundColor Green
+Get-Content "$report\KET_QUA_UPLOAD_DOCUMENTS.txt"
