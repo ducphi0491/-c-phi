@@ -1,3 +1,18 @@
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1" -Apply
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\TEST_IIS_DRIVE_AUTH.ps1"
+PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1" -Apply
+=== TUNERTOOLS DOCUMENTS IIS REAL-PHP PATCH V1 ===
+Source : C:\TunerTools\Web\API\api_documents.php
+Mode   : APPLY
+Prepared: C:\TunerTools\Backups\DocumentsIIS_DriveAuth\api_documents.PREVIEW_20261107_143622.php
+PHP CLI: C:\PHP\php.exe
+No syntax errors detected in C:\TunerTools\Backups\DocumentsIIS_DriveAuth\api_documents.PREVIEW_20261107_143622.php
+PATCH APPLIED. PHP syntax check OK.
+ORIGINAL BACKUP: C:\TunerTools\Backups\DocumentsIIS_DriveAuth\api_documents.ORIGINAL_20261107_143622.php
+Do not delete the backup until public list and media are tested.
+PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\TEST_IIS_DRIVE_AUTH.ps1"
+=== IIS Documents Drive authorization check (NO LOGIN) ===
+HTTP: 401
+EXPECTED: endpoint exists and requires a valid session.
+PS C:\Users\Administrator>
