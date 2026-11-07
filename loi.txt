@@ -1,26 +1,54 @@
-$filename = "18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json"
-$encoded = [uri]::EscapeDataString($filename)
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lyrics&filename=$encoded"
+PS C:\Users\Administrator> $filename = "18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json"
+>> $encoded = [uri]::EscapeDataString($filename)
+>>
+>> $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lyrics&filename=$encoded"
+>>
+>> $json = Invoke-RestMethod -Uri $url -TimeoutSec 40
+>>
+>> [PSCustomObject]@{
+>>     ZingErrorCode = $json.err
+>>     SoCauKaraoke = @($json.data.sentences).Count
+>>     CoDuLieuLoi = (@($json.data.sentences).Count -gt 0)
+>> } | Format-List
 
-$json = Invoke-RestMethod -Uri $url -TimeoutSec 40
 
-[PSCustomObject]@{
-    ZingErrorCode = $json.err
-    SoCauKaraoke = @($json.data.sentences).Count
-    CoDuLieuLoi = (@($json.data.sentences).Count -gt 0)
-} | Format-List
+ZingErrorCode : 0
+SoCauKaraoke  : 42
+CoDuLieuLoi   : True
 
 
-$r = Invoke-RestMethod `
-  "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
-  -TimeoutSec 120
 
-$r | Select-Object ok, source, count,
-    audio_entries_scanned, json_entries_scanned
+PS C:\Users\Administrator> $r = Invoke-RestMethod `
+>>   "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
+>>   -TimeoutSec 120
+>>
+>> $r | Select-Object ok, source, count,
+>>     audio_entries_scanned, json_entries_scanned
+>>
+>> $r.songs |
+>>     Where-Object { $_.id -eq "18JJ0AEDF3CO" } |
+>>     Select-Object id, title, singer,
+>>         has_audio_cache, has_lyrics_cache |
+>>     Format-Table -AutoSize
 
-$r.songs |
-    Where-Object { $_.id -eq "18JJ0AEDF3CO" } |
-    Select-Object id, title, singer,
-        has_audio_cache, has_lyrics_cache |
-    Format-Table -AutoSize
+
+ok                    : True
+source                : google_drive
+count                 : 1285
+audio_entries_scanned : 1342
+json_entries_scanned  : 3
+
+
+
+
+id           title             singer         has_audio_cache has_lyrics_cache
+--           -----             ------         --------------- ----------------
+18JJ0AEDF3CO Dòng Sông Mùa Thu Nguyễn Hải Yến            True             True
+18JJ0AEDF3CO Dòng Sông Mùa Thu Quang Vinh                True             True
+18JJ0AEDF3CO Dòng Sông Mùa Thu Ông Cao Thắng             True             True
+
+
+PS C:\Users\Administrator>
