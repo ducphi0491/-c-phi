@@ -1,30 +1,107 @@
+C:\TunerTools\Web\API\api_documents.php 130162 05-11-2026 14:23:30
 
-$php = "C:\TunerTools\Web\API\api_documents.php"
 
-if (-not (Test-Path -LiteralPath $php)) {
-    throw "Khong tim thay PHP chinh"
-}
 
-Write-Host "=== PHP DOCUMENTS CHINH ===" -ForegroundColor Cyan
+LineNumber Keyword
+---------- -------
+         6 documents
+        19 action=list
+        36 Documents
+        50 Documents
+        71 Documents
+        78 Documents
+       131 Documents
+       132 Documents
+       445 is_dir
+       447 is_dir
+       456 is_dir
+      1171 DocumentS
+      1191 DocumentS
+      1214 DocumentS
+      1225 DocumentS
+      1332 DocumentS
+      1335 Documents
+      1336 Documents
+      1337 Documents
+      1451 documents
+      1457 documents
+      1458 documents
+      1460 documents
+      1536 is_dir
+      1557 is_dir
+      1562 is_dir
+      1568 is_dir
+      1575 is_dir
+      1634 is_dir
+      1638 is_dir
+      1655 is_dir
+      1656 is_dir
+      1681 is_dir
+      1682 scandir
+      1689 is_dir
+      1709 documents
+      1716 documents
+      1887 scandir
+      1900 is_dir
+      1926 scandir
+      1942 is_dir
+      1972 documentS
+      1990 documentS
+      2009 is_dir
+      2023 DocumentS
+      2026 is_dir
+      2093 is_dir
+      2109 documents
+      2127 is_dir
+      2132 DirectoryIterator
+      2330 auth_login
+      2331 auth_login
+      2332 auth_login
+      2333 auth_login
+      2334 permission_me
+      2335 permission_me
+      2336 permission_me
+      2351 documents
+      2368 is_dir
+      2380 documents
+      2458 documents
+      2479 documents
+      2481 documents
+      2482 documents
+      2487 document_root
+      2496 auth_login
+      2505 documents
+      2514 Documents
+      2516 documents
+      2525 documents
+      2536 Documents
+      2537 documents
+      2541 documents
+      2575 documents
+      2588 DocumentS
+      2589 auth_login
+      2603 permission_me
+      2604 documents
+      2605 DocumentS
+      2607 documents
+      2631 DocumentS
+      2641 DocumentS
+      2659 scandir
+      2668 is_dir
+      2694 DocumentS
+      2709 Documents
+      2720 Documents
+      2794 DocumentS
+      2877 is_dir
+      2916 DocumentS
+      2947 DocumentS
+      2985 is_dir
+      2992 is_dir
+      3006 DocumentS
+      3118 DocumentS
+      3203 scandir
+      3234 is_dir
+      3352 Documents
 
-Get-Item -LiteralPath $php |
-    Select-Object FullName, Length, LastWriteTime
 
-Write-Host "`n=== CAC CHUC NANG CAN KIEM TRA ===" -ForegroundColor Cyan
-
-$patterns = @(
-    "auth_login",
-    "permission_me",
-    "action=list",
-    "scandir",
-    "is_dir",
-    "DirectoryIterator",
-    "Documents",
-    "document_root",
-    "DOCUMENT_ROOT"
-)
-
-Select-String -LiteralPath $php -Pattern $patterns |
-    Select-Object LineNumber,
-        @{Name="Keyword";Expression={$_.Matches[0].Value}} |
-    Format-Table -AutoSize
+PS C:\Users\Administrator>
