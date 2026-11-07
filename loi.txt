@@ -1,10 +1,505 @@
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_GoogleDrive_UPLOAD_LAI_20261107.zip"
-$folder = "C:\TunerTools\BackupScripts\Drive_AI_Music"
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_Upload_TrucTiep_20261106.zip"
+>> $folder = "C:\TunerTools\BackupScripts\Drive_Documents"
+>>
+>> # Giai nen va cap nhat chuong trinh
+>> Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
+>>
+>> # Upload du lieu that len Google Drive
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File "$folder\CHAY_UPLOAD_DOCUMENTS.ps1" `
+>>     -SourceDir "C:\TunerTools\Data\Documents"
+============================================================
+ TUNERTOOLS DOCUMENTS - GOOGLE DRIVE AUTO UPLOAD
+============================================================
+Source : C:\TunerTools\Data\Documents
+Output : C:\TunerTools\BackupPrep\Drive_Documents
+Token  : existing private OAuth file (NOT copied or modified)
+Google : My Drive/TunerTools_AppBackup/document
+Upload is incremental: only new/changed files are transferred.
 
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
-Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
+Inventory metadata (quick scan; no MD5 of all files): C:\TunerTools\Data\Documents
+Found 232 media files, total 11816.21 MB
+Guitar 232
+Ukulele 0
+Piano 0
+Google OAuth: refreshing access token...
+Google OAuth: connected, locating destination folders...
+New/verified Drive documents root ID: 1mFkk0gyYCzkdILZFKRdQAuRjgxY7f53I
+Starting REAL upload now (new or changed files only)...
+[1/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 10 _ Hợp Âm Rải.mp4 (10.0 MB)
+[1/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 10 _ Hợp Âm Rải.mp4
+[2/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 11 _ Carulli 11.mp4 (10.6 MB)
+[2/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 11 _ Carulli 11.mp4
+[3/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 13 .mp4 (9.7 MB)
+[3/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 13 .mp4
+[4/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 3 _  Spanid Dance.mp4 (9.5 MB)
+[4/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 3 _  Spanid Dance.mp4
+[5/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 5 _ Nhịp 68.mp4 (18.2 MB)
+[5/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 5 _ Nhịp 68.mp4
+[6/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 6 _ Cả Nhà Thương Nhau.mp4 (11.5 MB)
+[6/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 6 _ Cả Nhà Thương Nhau.mp4
+[7/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 7  .mp4 (11.4 MB)
+[7/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 7  .mp4
+[8/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 8 _ Carulli 1.mp4 (5.2 MB)
+[8/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _  Bài 8 _ Carulli 1.mp4
+[9/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 1 _ Mở Đầu NỐT NHẠC NHỊP PHÁCH.mp4 (63.7 MB)
+[9/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 1 _ Mở Đầu NỐT NHẠC NHỊP PHÁCH.mp4
+[10/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 12 _ Carulli 6.mp4 (14.8 MB)
+[10/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 12 _ Carulli 6.mp4
+[11/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 15 .mp4 (59.2 MB)
+[11/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 15 .mp4
+[12/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 16 _ Chúc Bé Ngủ Ngon.mp4 (10.9 MB)
+[12/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 16 _ Chúc Bé Ngủ Ngon.mp4
+[13/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 17 _ Song From Secret Garden.mp4 (31.9 MB)
+[13/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 17 _ Song From Secret Garden.mp4
+[14/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 2 _ kỹ thuật luân phiên .mp4 (45.1 MB)
+[14/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 2 _ kỹ thuật luân phiên .mp4
+[15/232] Hashing and uploading: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 4  Điệu Valse.mp4 (10.4 MB)
+[15/232] uploaded: Guitar/1. Cơ Bản/Hướng dẫn guitar cổ điển cơ bản _ Bài 4  Điệu Valse.mp4
+[16/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/30 ngày biết đệm hát.pdf (30.6 MB)
+[16/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/30 ngày biết đệm hát.pdf
+[17/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khoá cơ bản 1 cũ.pdf (12.1 MB)
+[17/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khoá cơ bản 1 cũ.pdf
+[18/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khoá cơ bản 1 mới.pdf (10.0 MB)
+[18/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khoá cơ bản 1 mới.pdf
+[19/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khoá cơ bản 2 cũ.pdf (13.4 MB)
+[19/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khoá cơ bản 2 cũ.pdf
+[20/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa cơ bản 2 mới.pdf (5.6 MB)
+[20/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa cơ bản 2 mới.pdf
+[21/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Fife bolero.pdf (26.4 MB)
+[21/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Fife bolero.pdf
+[22/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Guitar level 1.pdf (12.9 MB)
+[22/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Guitar level 1.pdf
+[23/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Guitar level 2.pdf (13.7 MB)
+[23/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Guitar level 2.pdf
+[24/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Guitar level 3.pdf (11.3 MB)
+[24/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Guitar level 3.pdf
+[25/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Quyển 1.pdf (12.7 MB)
+[25/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Quyển 1.pdf
+[26/232] Hashing and uploading: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Quyển 2.pdf (28.1 MB)
+[26/232] uploaded: Guitar/1. Cơ Bản/Tài liệu giáo trình cơ bản/Khóa học nhạc sĩ Đức Thịnh/Quyển 2.pdf
+[27/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 10_ hợp âm chùm 3.mp4 (22.4 MB)
+[27/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 10_ hợp âm chùm 3.mp4
+[28/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 11_ Etude 1 Carulli.mp4 (51.5 MB)
+[28/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 11_ Etude 1 Carulli.mp4
+[29/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 2_ kỹ thuật luân phiên.mp4 (45.1 MB)
+[29/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 2_ kỹ thuật luân phiên.mp4
+[30/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 3_ luân phiên 2 ngón móc đơn.mp4 (4.7 MB)
+[30/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 3_ luân phiên 2 ngón móc đơn.mp4
+[31/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 4_ kết hợp nốt bass P1.mp4 (33.6 MB)
+[31/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 4_ kết hợp nốt bass P1.mp4
+[32/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 5_ kết hợp nốt bass P2.mp4 (23.0 MB)
+[32/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 5_ kết hợp nốt bass P2.mp4
+[33/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 6_ Valse.mp4 (5.9 MB)
+[33/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 6_ Valse.mp4
+[34/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 7_ dấu nối legato và kỹ thuât giữ ngón tay (1).mp4 (38.5 MB)
+[34/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 7_ dấu nối legato và kỹ thuât giữ ngón tay (1).mp4
+[35/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 7_ dấu nối legato và kỹ thuât giữ ngón tay.mp4 (38.5 MB)
+[35/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 7_ dấu nối legato và kỹ thuât giữ ngón tay.mp4
+[36/232] Hashing and uploading: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 9_ Ecossaise luyện tốc độ.mp4 (38.8 MB)
+[36/232] uploaded: Guitar/1. Cơ Bản/Tự tập guitar độc tấu, bài 9_ Ecossaise luyện tốc độ.mp4
+[37/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Giao trinh Carulli.pdf (30.2 MB)
+[37/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Giao trinh Carulli.pdf
+[38/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Giáo trình carulli/Giao trinh Carulli.pdf (30.2 MB)
+[38/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Giáo trình carulli/Giao trinh Carulli.pdf
+[39/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 1.mp4 (87.3 MB)
+[39/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 1.mp4
+[40/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 10.mp4 (58.7 MB)
+[40/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 10.mp4
+[41/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 11.mp4 (59.9 MB)
+[41/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 11.mp4
+[42/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình Guitar Carulli _ Bài 12.mp4 (56.8 MB)
+[42/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình Guitar Carulli _ Bài 12.mp4
+[43/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 13.mp4 (47.6 MB)
+[43/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 13.mp4
+[44/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 14 _ Ballet.mp4 (81.1 MB)
+[44/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 14 _ Ballet.mp4
+[45/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 15.mp4 (63.1 MB)
+[45/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 15.mp4
+[46/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 16.mp4 (64.2 MB)
+[46/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 16.mp4
+[47/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 17.mp4 (64.9 MB)
+[47/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 17.mp4
+[48/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 18.mp4 (70.9 MB)
+[48/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 18.mp4
+[49/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 19.mp4 (72.3 MB)
+[49/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 19.mp4
+[50/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 2.mp4 (120.2 MB)
+[50/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 2.mp4
+[51/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 20.mp4 (75.3 MB)
+[51/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 20.mp4
+[52/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 21.mp4 (41.1 MB)
+[52/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 21.mp4
+[53/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 22.mp4 (57.7 MB)
+[53/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 22.mp4
+[54/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 23.mp4 (76.3 MB)
+[54/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 23.mp4
+[55/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 24 .mp4 (86.8 MB)
+[55/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 24 .mp4
+[56/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 25.mp4 (113.5 MB)
+[56/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 25.mp4
+[57/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 26.mp4 (66.1 MB)
+[57/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 26.mp4
+[58/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 27.mp4 (66.5 MB)
+[58/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 27.mp4
+[59/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 3.mp4 (72.3 MB)
+[59/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 3.mp4
+[60/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 4.mp4 (91.0 MB)
+[60/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 4.mp4
+[61/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 5.mp4 (123.5 MB)
+[61/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 5.mp4
+[62/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 6.mp4 (76.7 MB)
+[62/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 6.mp4
+[63/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 7.mp4 (89.4 MB)
+[63/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 7.mp4
+[64/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 8.mp4 (49.3 MB)
+[64/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ Bài 8.mp4
+[65/232] Hashing and uploading: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 9.mp4 (51.0 MB)
+[65/232] uploaded: Guitar/2. Hướng dẫn giáo trình Carulli/Hướng dẫn giáo trình guitar Carulli _ bài 9.mp4
+[66/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 1 Giới thiệu chung về khoá học.MP4 (16.8 MB)
+[66/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 1 Giới thiệu chung về khoá học.MP4
+[67/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 10 Điệu Boston.MP4 (14.4 MB)
+[67/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 10 Điệu Boston.MP4
+[68/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 10.1 Điệu Boston với “Niệm khúc cuối”.MP4 (27.5 MB)
+[68/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 10.1 Điệu Boston với “Niệm khúc cuối”.MP4
+[69/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 11 Điệu Slow Rock.MP4 (16.6 MB)
+[69/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 11 Điệu Slow Rock.MP4
+[70/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 11.1 Điệu Slow Rock với “Giọt nắng bên thềm”.MP4 (29.0 MB)
+[70/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 11.1 Điệu Slow Rock với “Giọt nắng bên thềm”.MP4
+[71/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 11.2 Điệu Slow Rock với “Diễm xưa”.MP4 (32.9 MB)
+[71/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 11.2 Điệu Slow Rock với “Diễm xưa”.MP4
+[72/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 12 Điệu Surf Ballad.MP4 (17.0 MB)
+[72/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 12 Điệu Surf Ballad.MP4
+[73/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 12.1 Điệu Surf Ballad với “Đêm nằm mơ phố”.MP4 (32.5 MB)
+[73/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 12.1 Điệu Surf Ballad với “Đêm nằm mơ phố”.MP4
+[74/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 13 Điệu Ballad và cách gảy (fingering).MP4 (28.3 MB)
+[74/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 13 Điệu Ballad và cách gảy (fingering).MP4
+[75/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 14 Làm quen với hoà thanh G Em C D.MP4 (19.9 MB)
+[75/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 14 Làm quen với hoà thanh G Em C D.MP4
+[76/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 15 Điệu Ballad và “Payphone”.MP4 (29.9 MB)
+[76/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 15 Điệu Ballad và “Payphone”.MP4
+[77/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 16 Điệu Ballad và “Forever”.MP4 (51.1 MB)
+[77/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 16 Điệu Ballad và “Forever”.MP4
+[78/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 17 Quạt Ballad (Ballad Strumming).MP4 (33.7 MB)
+[78/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 17 Quạt Ballad (Ballad Strumming).MP4
+[79/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 17.1 Ballad và “Đối với anh em vẫn là cô bé”.MP4 (56.6 MB)
+[79/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 17.1 Ballad và “Đối với anh em vẫn là cô bé”.MP4
+[80/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 17.2 Ballad và “Price tag”.MP4 (35.2 MB)
+[80/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 17.2 Ballad và “Price tag”.MP4
+[81/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 18 Điệu Disco.MP4 (50.9 MB)
+[81/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 18 Điệu Disco.MP4
+[82/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 18.1 Điệu Disco và “I’m yours”.MP4 (41.8 MB)
+[82/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 18.1 Điệu Disco và “I’m yours”.MP4
+[83/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 19 Những vòng hoà thanh hay dùng trong Guitar đệm hát.MP4 (46.1 MB)
+[83/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 19 Những vòng hoà thanh hay dùng trong Guitar đệm hát.MP4
+[84/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 2 Kiến thức cơ bản về nhạc lý trong guitar đệm hát.MP4 (27.3 MB)
+[84/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 2 Kiến thức cơ bản về nhạc lý trong guitar đệm hát.MP4
+[85/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 20 Tổng kết chương 2.MP4 (29.4 MB)
+[85/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 20 Tổng kết chương 2.MP4
+[86/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 21 Guitar fingerstyle và áp dụng với đệm hát.MP4 (39.5 MB)
+[86/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 21 Guitar fingerstyle và áp dụng với đệm hát.MP4
+[87/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 22 Áp dụng với intro của “Đêm nằm mơ phố”.MP4 (38.4 MB)
+[87/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 22 Áp dụng với intro của “Đêm nằm mơ phố”.MP4
+[88/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 23 Đệm hát Nâng cao thì cần những gì.MP4 (41.3 MB)
+[88/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 23 Đệm hát Nâng cao thì cần những gì.MP4
+[89/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 24 Tổng Kết.MP4 (8.5 MB)
+[89/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 24 Tổng Kết.MP4
+[90/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 3 Âm giai của Đô trưởng (C) và La thứ (Am).MP4 (21.6 MB)
+[90/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 3 Âm giai của Đô trưởng (C) và La thứ (Am).MP4
+[91/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 4 Chỉnh dây đàn Guitar.MP4 (27.6 MB)
+[91/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 4 Chỉnh dây đàn Guitar.MP4
+[92/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 5 Một vài hợp âm cơ bản.MP4 (39.1 MB)
+[92/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 5 Một vài hợp âm cơ bản.MP4
+[93/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 6 Thế tay bấm hợp âm.MP4 (30.5 MB)
+[93/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 6 Thế tay bấm hợp âm.MP4
+[94/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 7 Hợp âm cơ bản trong C và Am.MP4 (47.5 MB)
+[94/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 7 Hợp âm cơ bản trong C và Am.MP4
+[95/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 8 Các điệu cơ bản trong guitar.MP4 (34.9 MB)
+[95/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 8 Các điệu cơ bản trong guitar.MP4
+[96/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 9 Điệu Valse (Waltz).MP4 (10.7 MB)
+[96/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 9 Điệu Valse (Waltz).MP4
+[97/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 9.1 Điệu Valse với “Hãy yêu nhau đi”.MP4 (26.7 MB)
+[97/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 9.1 Điệu Valse với “Hãy yêu nhau đi”.MP4
+[98/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 9.2 Điệu Valse với “Bước chân lẻ loi”.MP4 (31.1 MB)
+[98/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Cơ Bản/Bài 9.2 Điệu Valse với “Bước chân lẻ loi”.MP4
+[99/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 1. Mở đầu giáo trình, tổng quan giáo trình.MP4 (28.5 MB)
+[99/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 1. Mở đầu giáo trình, tổng quan giáo trình.MP4
+[100/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 10. Áp dụng Palm và Slap vào Ballad (Surf Metal) (phần 2).MP4 (17.8 MB)
+[100/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 10. Áp dụng Palm và Slap vào Ballad (Surf Metal) (phần 2).MP4
+[101/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 11. Áp dụng Palm và Slap vào Ballad (phần 3).MP4 (23.9 MB)
+[101/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 11. Áp dụng Palm và Slap vào Ballad (phần 3).MP4
+[102/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 12. Áp dụng Palm và Slap vào Ballad (phần 4) - hẫng phách 3, palm kép.MP4 (22.6 MB)
+[102/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 12. Áp dụng Palm và Slap vào Ballad (phần 4) - hẫng phách 3, palm kép.MP4
+[103/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 13. Thực hành Ballad (Palm) vào “Dù có cách xa” - Đinh Mạnh Ninh.MP4 (24.4 MB)
+[103/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 13. Thực hành Ballad (Palm) vào “Dù có cách xa” - Đinh Mạnh Ninh.MP4
+[104/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 14. Thực hành Ballad (Palm) vào “Một nhà” - Dalab.MP4 (23.3 MB)
+[104/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 14. Thực hành Ballad (Palm) vào “Một nhà” - Dalab.MP4
+[105/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 15. Thực hành Ballad (Palm) vào “Ông bà anh” - Lê Thiện Hiếu.MP4 (22.1 MB)
+[105/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 15. Thực hành Ballad (Palm) vào “Ông bà anh” - Lê Thiện Hiếu.MP4
+[106/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 16. Thực hành Ballad (Palm) vào “Bâng khuâng” - Justa Tee (Palm kép).MP4 (25.9 MB)
+[106/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 16. Thực hành Ballad (Palm) vào “Bâng khuâng” - Justa Tee (Palm kép).MP4
+[107/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 18. Thực hành Disco (Palm) với “Tìm lại”.MP4 (23.6 MB)
+[107/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 18. Thực hành Disco (Palm) với “Tìm lại”.MP4
+[108/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 19. Thực hành Disco (Palm) với “Tình yêu màu nắng” - Đoàn Thúy Trang.MP4 (28.0 MB)
+[108/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 19. Thực hành Disco (Palm) với “Tình yêu màu nắng” - Đoàn Thúy Trang.MP4
+[109/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 2- Yêu cầu để học giáo trình guitar nâng cao.mp4 (24.3 MB)
+[109/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 2- Yêu cầu để học giáo trình guitar nâng cao.mp4
+[110/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 20. Slow, Valse, Boston có áp dụng Palm được không.MP4 (23.9 MB)
+[110/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 20. Slow, Valse, Boston có áp dụng Palm được không.MP4
+[111/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 21. Tổng quan về hợp âm.MP4 (24.5 MB)
+[111/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 21. Tổng quan về hợp âm.MP4
+[112/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 22. Cách sử dụng hợp âm 7.MP4 (27.5 MB)
+[112/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 22. Cách sử dụng hợp âm 7.MP4
+[113/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 23. Áp dụng hợp âm 7 với “Chiều nay không có mưa bay”.MP4 (27.1 MB)
+[113/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 23. Áp dụng hợp âm 7 với “Chiều nay không có mưa bay”.MP4
+[114/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 24. Cách sử dụng hợp âm Major7.MP4 (22.5 MB)
+[114/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 24. Cách sử dụng hợp âm Major7.MP4
+[115/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 25. Áp dụng Major7 với “Trót yêu” - Trung Quân.MP4 (25.1 MB)
+[115/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 25. Áp dụng Major7 với “Trót yêu” - Trung Quân.MP4
+[116/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 27. Áp dụng sus4 với “Mưa hồng” - Trịnh Công Sơn.MP4 (28.3 MB)
+[116/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 27. Áp dụng sus4 với “Mưa hồng” - Trịnh Công Sơn.MP4
+[117/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 28. Cách sử dụng hợp âm sus2.MP4 (28.6 MB)
+[117/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 28. Cách sử dụng hợp âm sus2.MP4
+[118/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/bài 3 Ôn lại một số kiến thức về âm giai.MP4 (30.9 MB)
+[118/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/bài 3 Ôn lại một số kiến thức về âm giai.MP4
+[119/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 30. Hợp âm powerr.MP4 (27.6 MB)
+[119/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 30. Hợp âm powerr.MP4
+[120/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 31. Áp dụng hợp âm power + palm với Bay - Thu Minh.MP4 (29.2 MB)
+[120/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 31. Áp dụng hợp âm power + palm với Bay - Thu Minh.MP4
+[121/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 37. Áp dụng Ballad nâng cao với “Em sẽ là giấc mơ”.MP4 (29.7 MB)
+[121/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 37. Áp dụng Ballad nâng cao với “Em sẽ là giấc mơ”.MP4
+[122/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 39. Điệu Slow và những cách rải khác.MP4 (14.9 MB)
+[122/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 39. Điệu Slow và những cách rải khác.MP4
+[123/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 4. Xác định hợp âm chủ cho bài hát thế nào.MP4 (24.0 MB)
+[123/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 4. Xác định hợp âm chủ cho bài hát thế nào.MP4
+[124/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 40. Điệu Slow và những cách strumming khác.MP4 (20.4 MB)
+[124/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 40. Điệu Slow và những cách strumming khác.MP4
+[125/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 41. Áp dụng Slow với “Bông hồng thủy tinh” - Bức Tường.MP4 (30.4 MB)
+[125/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 41. Áp dụng Slow với “Bông hồng thủy tinh” - Bức Tường.MP4
+[126/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 42. Hãy dùng kỹ thuật harmonic.MP4 (19.2 MB)
+[126/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 42. Hãy dùng kỹ thuật harmonic.MP4
+[127/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 43. Hãy học fingerstyle - áp dụng với tạo intro.MP4 (22.6 MB)
+[127/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 43. Hãy học fingerstyle - áp dụng với tạo intro.MP4
+[128/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 5. Xác định hòa thanh cho bài hát thế nào.MP4 (27.0 MB)
+[128/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 5. Xác định hòa thanh cho bài hát thế nào.MP4
+[129/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 6. Xác định nhịp cho bài hát thế nào.MP4 (18.4 MB)
+[129/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 6. Xác định nhịp cho bài hát thế nào.MP4
+[130/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 7. Ôn lại về tay phải và tay trái trong guitar.MP4 (21.2 MB)
+[130/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 7. Ôn lại về tay phải và tay trái trong guitar.MP4
+[131/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 8. Palm là gì, Nail attack là gì, Slap là gì.MP4 (24.3 MB)
+[131/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 8. Palm là gì, Nail attack là gì, Slap là gì.MP4
+[132/232] Hashing and uploading: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 9. Áp dụng Palm và Slap vào Ballad (phần 1).MP4 (18.3 MB)
+[132/232] uploaded: Guitar/3. Hướng Dẫn Đệm hát/Haketu Nâng Cao/Bài 9. Áp dụng Palm và Slap vào Ballad (phần 1).MP4
+[133/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 0 DẪN NHẬP.mp4 (18.6 MB)
+[133/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 0 DẪN NHẬP.mp4
+[134/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 1 GIỚI THIỆU KHÓA HỌC.mp4 (9.9 MB)
+[134/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 1 GIỚI THIỆU KHÓA HỌC.mp4
+[135/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 10 ÂM GIAI LÀ GÌ.mp4 (56.1 MB)
+[135/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 10 ÂM GIAI LÀ GÌ.mp4
+[136/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 11 ÂM GIAI C-Am.mp4 (75.2 MB)
+[136/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 11 ÂM GIAI C-Am.mp4
+[137/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 12 ÂM GIAI G-Em.mp4 (49.7 MB)
+[137/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 12 ÂM GIAI G-Em.mp4
+[138/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 13 MỘT SỐ THẾ TAY GUITAR CỔ ĐIỂN.mp4 (99.6 MB)
+[138/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 13 MỘT SỐ THẾ TAY GUITAR CỔ ĐIỂN.mp4
+[139/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 14 ÂM GIAI C - HPBD (ĐIỆU VALSE).mp4 (98.6 MB)
+[139/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 14 ÂM GIAI C - HPBD (ĐIỆU VALSE).mp4
+[140/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 15 ÂM GIAI C - CANON IN C (BALLAD).mp4 (104.8 MB)
+[140/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 15 ÂM GIAI C - CANON IN C (BALLAD).mp4
+[141/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 16 ÂM GIAI Em - 13 Jours en France (BOSTON).mp4 (70.7 MB)
+[141/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 16 ÂM GIAI Em - 13 Jours en France (BOSTON).mp4
+[142/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 17 ĐÊM NẰM MƠ PHỐ - Am (BALLAD).mp4 (131.6 MB)
+[142/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 17 ĐÊM NẰM MƠ PHỐ - Am (BALLAD).mp4
+[143/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 18 8 CHỮ CÓ - Em (SURF BALLAD).mp4 (52.8 MB)
+[143/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 18 8 CHỮ CÓ - Em (SURF BALLAD).mp4
+[144/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 19 STEPPING ON THE RAINY STREET - C (BOSTON).mp4 (113.0 MB)
+[144/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 19 STEPPING ON THE RAINY STREET - C (BOSTON).mp4
+[145/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 2 GIỚI THIỆU FINGERSTYLE.mp4 (27.5 MB)
+[145/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 2 GIỚI THIỆU FINGERSTYLE.mp4
+[146/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 20 TÔI THẤY HOA VÀNG TRÊN CỎ XANH - Am (SURF BALLAD).mp4 (124.2 MB)
+[146/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 20 TÔI THẤY HOA VÀNG TRÊN CỎ XANH - Am (SURF BALLAD).mp4
+[147/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 21 FOREVER - Am (BALLAD).mp4 (75.0 MB)
+[147/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 21 FOREVER - Am (BALLAD).mp4
+[148/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 22 ANH CỨ ĐI ĐI - Em (BALLAD).mp4 (89.5 MB)
+[148/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 22 ANH CỨ ĐI ĐI - Em (BALLAD).mp4
+[149/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 23 YÊU XA - C (BALLAD).mp4 (84.6 MB)
+[149/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 23 YÊU XA - C (BALLAD).mp4
+[150/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 24 NHẬT KÝ CỦA MẸ - Am.mp4 (58.9 MB)
+[150/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 24 NHẬT KÝ CỦA MẸ - Am.mp4
+[151/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 25 PERCUSSION FINGERSTYLE.mp4 (46.3 MB)
+[151/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 25 PERCUSSION FINGERSTYLE.mp4
+[152/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 26 ÁP DỤNG PERCUSSION - BÂNG KHUÂNG.mp4 (50.0 MB)
+[152/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 26 ÁP DỤNG PERCUSSION - BÂNG KHUÂNG.mp4
+[153/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 27 ÁP DỤNG PERCUSSION - TELL ME WHY.mp4 (52.0 MB)
+[153/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 27 ÁP DỤNG PERCUSSION - TELL ME WHY.mp4
+[154/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 28 NHỮNG BÀI TẬP CẦN THIẾT.mp4 (19.9 MB)
+[154/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 28 NHỮNG BÀI TẬP CẦN THIẾT.mp4
+[155/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 29 TỔNG KẾT GIÁO TRÌNH VÀ ĐỊNH HƯỚNG.mp4 (19.7 MB)
+[155/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 29 TỔNG KẾT GIÁO TRÌNH VÀ ĐỊNH HƯỚNG.mp4
+[156/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 3 NHỮNG THỂ LOẠI FINGERSTYLE.mp4 (36.7 MB)
+[156/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 3 NHỮNG THỂ LOẠI FINGERSTYLE.mp4
+[157/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 4 YÊU CẦU TỐI THIỂU.mp4 (39.2 MB)
+[157/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 4 YÊU CẦU TỐI THIỂU.mp4
+[158/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 5 CÁC KỸ THUẬT CƠ BẢN.mp4 (80.0 MB)
+[158/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 5 CÁC KỸ THUẬT CƠ BẢN.mp4
+[159/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 6 NHỮNG ĐIỆU GUITAR CƠ BẢN.mp4 (117.3 MB)
+[159/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 6 NHỮNG ĐIỆU GUITAR CƠ BẢN.mp4
+[160/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 7 NHỊP VÀ ĐIỆU.mp4 (56.9 MB)
+[160/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 7 NHỊP VÀ ĐIỆU.mp4
+[161/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 8 CHÈN BASS.mp4 (48.7 MB)
+[161/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 8 CHÈN BASS.mp4
+[162/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 9 TẠO GIAI ĐIỆU.mp4 (33.8 MB)
+[162/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/BÀI 9 TẠO GIAI ĐIỆU.mp4
+[163/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/13 jours en france in E minor.pdf (0.1 MB)
+[163/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/13 jours en france in E minor.pdf
+[164/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/8 chu co (Le Cat Trong Ly) in E minor.pdf (0.1 MB)
+[164/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/8 chu co (Le Cat Trong Ly) in E minor.pdf
+[165/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Anh cu di di FULL in E minor.pdf (0.1 MB)
+[165/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Anh cu di di FULL in E minor.pdf
+[166/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Bang Khuang - Solo in C Major FULL.pdf (0.1 MB)
+[166/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Bang Khuang - Solo in C Major FULL.pdf
+[167/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Canon in C Major (short version) in C.pdf (0.1 MB)
+[167/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Canon in C Major (short version) in C.pdf
+[168/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Dem nam mo pho in A minor.pdf (0.1 MB)
+[168/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Dem nam mo pho in A minor.pdf
+[169/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Forever (Stratovarius) in A minor.pdf (0.1 MB)
+[169/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Forever (Stratovarius) in A minor.pdf
+[170/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Happy Birthday (Easy version) in C Major.pdf (0.0 MB)
+[170/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Happy Birthday (Easy version) in C Major.pdf
+[171/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Happy Birthday in C Major (Boston).pdf (0.0 MB)
+[171/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Happy Birthday in C Major (Boston).pdf
+[172/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Stepping on the rainy street C Major.pdf (0.1 MB)
+[172/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Stepping on the rainy street C Major.pdf
+[173/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Toi thay hoa vang tren co xanh in A minor.pdf (0.1 MB)
+[173/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Toi thay hoa vang tren co xanh in A minor.pdf
+[174/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Yeu xa - Solo in C Major.pdf (0.1 MB)
+[174/232] uploaded: Guitar/4. fimgerstype/HAKETU - FINGERSTYLE I/Tài Liệu/Yeu xa - Solo in C Major.pdf
+[175/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 1 INTRO.avi (111.5 MB)
+[175/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 1 INTRO.avi
+[176/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 10 MAD WORLD.mkv (73.3 MB)
+[176/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 10 MAD WORLD.mkv
+[177/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 11 VỀ QUÊ.mkv (64.2 MB)
+[177/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 11 VỀ QUÊ.mkv
+[178/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 12 NƠI TÌNH YÊU BẮT ĐẦU.avi (416.2 MB)
+[178/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 12 NƠI TÌNH YÊU BẮT ĐẦU.avi
+[179/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 13 YESTERDAY.mkv (60.8 MB)
+[179/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 13 YESTERDAY.mkv
+[180/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 14 IM LẶNG.mkv (29.0 MB)
+[180/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 14 IM LẶNG.mkv
+[181/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 15 EVERYDAY I LOVE YOU.mkv (77.1 MB)
+[181/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 15 EVERYDAY I LOVE YOU.mkv
+[182/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 16 TA HỨA SẼ NHẬN RA.mkv (118.1 MB)
+[182/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 16 TA HỨA SẼ NHẬN RA.mkv
+[183/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 17 NOTHING GONNA.mkv (110.5 MB)
+[183/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 17 NOTHING GONNA.mkv
+[184/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 18 BẺ NGÓN F VÀ G.avi (216.5 MB)
+[184/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 18 BẺ NGÓN F VÀ G.avi
+[185/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 19 BẺ NGÓN F VÀ G ÁP DỤNG.avi (476.5 MB)
+[185/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 19 BẺ NGÓN F VÀ G ÁP DỤNG.avi
+[186/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 2 YÊU CẦU.avi (181.5 MB)
+[186/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 2 YÊU CẦU.avi
+[187/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 20 GIẤC MƠ TRƯA.avi (557.2 MB)
+[187/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 20 GIẤC MƠ TRƯA.avi
+[188/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 21 LỜI KHUYÊN TRONG GIÁO TRÌNH 2.avi (225.1 MB)
+[188/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 21 LỜI KHUYÊN TRONG GIÁO TRÌNH 2.avi
+[189/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 22 NHỮNG BÀI TẬP CẦN THIẾT.avi (323.9 MB)
+[189/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 22 NHỮNG BÀI TẬP CẦN THIẾT.avi
+[190/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 23 TỔNG KẾT VÀ ĐỊNH HƯỚNG.avi (80.5 MB)
+[190/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 23 TỔNG KẾT VÀ ĐỊNH HƯỚNG.avi
+[191/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 3 ÔN LẠI KỸ NĂNG CƠ BẢN.mkv (90.3 MB)
+[191/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 3 ÔN LẠI KỸ NĂNG CƠ BẢN.mkv
+[192/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 4 BÀI TẬP CHO TAY PHẢI.mkv (65.1 MB)
+[192/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 4 BÀI TẬP CHO TAY PHẢI.mkv
+[193/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 5 SLAP.mkv (50.1 MB)
+[193/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 5 SLAP.mkv
+[194/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 6 HARMONIC.mkv (54.9 MB)
+[194/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 6 HARMONIC.mkv
+[195/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 7 BÈ ĐỘC LẬP.mkv (32.4 MB)
+[195/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 7 BÈ ĐỘC LẬP.mkv
+[196/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 8 PHỐ THỊ.mkv (101.9 MB)
+[196/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 8 PHỐ THỊ.mkv
+[197/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 9 BETRAYAL.mkv (76.5 MB)
+[197/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/bài 9 BETRAYAL.mkv
+[198/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Betrayal - Solo in C Major - Haketu.pdf (0.1 MB)
+[198/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Betrayal - Solo in C Major - Haketu.pdf
+[199/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Everyday I love you (Solo) - Haketu.pdf (0.1 MB)
+[199/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Everyday I love you (Solo) - Haketu.pdf
+[200/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Giac mo trua Solo in G (FULL).pdf (0.1 MB)
+[200/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Giac mo trua Solo in G (FULL).pdf
+[201/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Im lang Guitar Solo.pdf (0.1 MB)
+[201/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Im lang Guitar Solo.pdf
+[202/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Mad World Solo in E minor - Haketu.pdf (0.1 MB)
+[202/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Mad World Solo in E minor - Haketu.pdf
+[203/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Noi tinh yeu bat dau Solo - haketu.pdf (0.1 MB)
+[203/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Noi tinh yeu bat dau Solo - haketu.pdf
+[204/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Nothing's Gonna Change - Solo.pdf (0.1 MB)
+[204/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Nothing's Gonna Change - Solo.pdf
+[205/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Pho Thi G Major .pdf (0.1 MB)
+[205/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Pho Thi G Major .pdf
+[206/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Ta hua se nhan ra Solo .pdf (0.1 MB)
+[206/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Ta hua se nhan ra Solo .pdf
+[207/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Ve Que [Solo] by Haketu.pdf (0.1 MB)
+[207/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Ve Que [Solo] by Haketu.pdf
+[208/232] Hashing and uploading: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Yesterday Solo in G Major - Haketu.pdf (0.1 MB)
+[208/232] uploaded: Guitar/4. fimgerstype/HAKETU FINGERSTYLE II/TÀI LIỆU/Yesterday Solo in G Major - Haketu.pdf
+[209/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 1 _ Kỹ Thuật Tay Trái.mp4 (24.7 MB)
+[209/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 1 _ Kỹ Thuật Tay Trái.mp4
+[210/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 10 _ KỸ NĂNG LƯỚT NGÓN, BẤM HỢP ÂM.mp4 (95.5 MB)
+[210/232] uploaded: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 10 _ KỸ NĂNG LƯỚT NGÓN, BẤM HỢP ÂM.mp4
+[211/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 11 _ Cách dũa móng tay.mp4 (75.7 MB)
+[211/232] uploaded: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 11 _ Cách dũa móng tay.mp4
+[212/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ phần 12 _ Tuyệt kỹ thả lỏng_ Thiền bàn tay.mp4 (88.7 MB)
+[212/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ phần 12 _ Tuyệt kỹ thả lỏng_ Thiền bàn tay.mp4
+[213/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ PHẦN 2 _ KỸ THUẬT TAY TRÁI.mp4 (73.5 MB)
+[213/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ PHẦN 2 _ KỸ THUẬT TAY TRÁI.mp4
+[214/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 3 _ Kỹ Thuật Tay Phải Và T_remolo.mp4 (92.7 MB)
+[214/232] uploaded: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 3 _ Kỹ Thuật Tay Phải Và T_remolo.mp4
+[215/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 4 _ Cách chạy ngón hiệu quả.mp4 (76.1 MB)
+[215/232] uploaded: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 4 _ Cách chạy ngón hiệu quả.mp4
+[216/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 5 _ Hơi Thở _ Vũ Hiển.mp4 (83.7 MB)
+[216/232] uploaded: Guitar/5. Bí kíp Guitar/Bí Kíp Guitar _ Phần 5 _ Hơi Thở _ Vũ Hiển.mp4
+[217/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 6 _ CÁCH TẠO TIẾNG ĐÀN ĐẸP.mp4 (59.0 MB)
+[217/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 6 _ CÁCH TẠO TIẾNG ĐÀN ĐẸP.mp4
+[218/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 7 _ Phát Huy Điểm Mạnh Nhất Của Guitar.mp4 (91.0 MB)
+[218/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 7 _ Phát Huy Điểm Mạnh Nhất Của Guitar.mp4
+[219/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ PHẦN 8 _ Cách Kích Hoạt Ngón tay, Tiếng Đàn.mp4 (81.1 MB)
+[219/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ PHẦN 8 _ Cách Kích Hoạt Ngón tay, Tiếng Đàn.mp4
+[220/232] Hashing and uploading: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 9  _ Cách Có Nhịp Trong Cơ Thể.mp4 (126.3 MB)
+[220/232] uploaded: Guitar/5. Bí kíp Guitar/Bí kíp Guitar _ Phần 9  _ Cách Có Nhịp Trong Cơ Thể.mp4
+[221/232] Hashing and uploading: Guitar/6. Luyện ngón/2 kỹ thuật căn bản quan trọng nhất của guitar cổ điển.mp4 (58.4 MB)
+[221/232] uploaded: Guitar/6. Luyện ngón/2 kỹ thuật căn bản quan trọng nhất của guitar cổ điển.mp4
+[222/232] Hashing and uploading: Guitar/6. Luyện ngón/Cách tập tremolo guitar để không bị phi ngựa.mp4 (155.4 MB)
+[222/232] uploaded: Guitar/6. Luyện ngón/Cách tập tremolo guitar để không bị phi ngựa.mp4
+[223/232] Hashing and uploading: Guitar/6. Luyện ngón/Hướng dẫn cách tập kỹ thuật reo dây Tremolo của guitar P1.mp4 (129.7 MB)
+[223/232] uploaded: Guitar/6. Luyện ngón/Hướng dẫn cách tập kỹ thuật reo dây Tremolo của guitar P1.mp4
+[224/232] Hashing and uploading: Guitar/6. Luyện ngón/Luyện ngón Guitar _ Phần 1_ Chạy Gam Cromatic.mp4 (28.5 MB)
+[224/232] uploaded: Guitar/6. Luyện ngón/Luyện ngón Guitar _ Phần 1_ Chạy Gam Cromatic.mp4
+[225/232] Hashing and uploading: Guitar/6. Luyện ngón/Luyện ngón guitar _ Phần 2_  Chạy chùm nốt.mp4 (34.0 MB)
+[225/232] uploaded: Guitar/6. Luyện ngón/Luyện ngón guitar _ Phần 2_  Chạy chùm nốt.mp4
+[226/232] Hashing and uploading: Guitar/6. Luyện ngón/Luyện ngón guitar _ Phần 3 _ Cách tăng tốc độ chạy ngón.mp4 (66.8 MB)
+[226/232] uploaded: Guitar/6. Luyện ngón/Luyện ngón guitar _ Phần 3 _ Cách tăng tốc độ chạy ngón.mp4
+[227/232] Hashing and uploading: Guitar/Cộng đồng/Guitar lv 1.pdf (12.9 MB)
+[227/232] uploaded: Guitar/Cộng đồng/Guitar lv 1.pdf
+[228/232] Hashing and uploading: Guitar/Cộng đồng/Guitar lv 2.pdf (13.7 MB)
+[228/232] uploaded: Guitar/Cộng đồng/Guitar lv 2.pdf
+[229/232] Hashing and uploading: Guitar/Cộng đồng/Guitar lv3.pdf (11.3 MB)
+[229/232] uploaded: Guitar/Cộng đồng/Guitar lv3.pdf
+[230/232] Hashing and uploading: Guitar/Cộng đồng/Hướng dẫn tách Vocal _ Beat siêu siêu sạch bằng Ultimate Vocal Remover  UVR5  DZUS School - DZUS School - Học làm nhạc (720p, h264, youtube).mp4 (51.4 MB)
+[230/232] uploaded: Guitar/Cộng đồng/Hướng dẫn tách Vocal _ Beat siêu siêu sạch bằng Ultimate Vocal Remover  UVR5  DZUS School - DZUS School - Học làm nhạc (720p, h264, youtube).mp4
+[231/232] ERROR Guitar/Cộng đồng/QUYỂN 1.pdf: File changed during upload; retry backup after files stop changing
+[232/232] ERROR Guitar/Cộng đồng/QUYỂN 2.pdf: File changed during upload; retry backup after files stop changing
+Partial upload: Drive index was NOT regenerated. Re-run to finish failed files.
+Completed: partial_failure failed: 2
+Local manifest: C:\TunerTools\BackupPrep\Drive_Documents\documents_drive_manifest.json
+Documents backup stopped with error 1
+At C:\TunerTools\BackupScripts\Drive_Documents\03_drive_documents.ps1:30 char:28
++ ... DE -ne 0) { throw "Documents backup stopped with error $LASTEXITCODE" ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Documents backup stopped with error 1:String) [], RuntimeException
+    + FullyQualifiedErrorId : Documents backup stopped with error 1
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$folder\CHAY_UPLOAD_AI.ps1" `
-    -SourceDir "C:\TunerTools\Audio\AI_Music"
+PS C:\Users\Administrator>
+
