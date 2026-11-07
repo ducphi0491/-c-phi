@@ -1,23 +1,29 @@
-$url = "https://tunertools.top/api_songs.php?action=ai_cached_songs"
-
-try {
-    $response = Invoke-WebRequest `
-        -Uri $url -UseBasicParsing -TimeoutSec 120
-
-    Write-Host "HTTP STATUS:" $response.StatusCode
-    Write-Host "CONTENT TYPE:" $response.Headers["Content-Type"]
-
-    $body = [string]$response.Content
-    Write-Host "BODY LENGTH:" $body.Length
-
-    if ($body.Length -gt 0) {
-        Write-Host "RESPONSE:"
-        Write-Host $body.Substring(
-            0, [Math]::Min(1200, $body.Length)
-        )
-    } else {
-        Write-Host "RESPONSE BODY IS EMPTY"
-    }
-} catch {
-    Write-Host "ERROR:" $_.Exception.Message
-}
+PS C:\Users\Administrator> $url = "https://tunertools.top/api_songs.php?action=ai_cached_songs"
+>>
+>> try {
+>>     $response = Invoke-WebRequest `
+>>         -Uri $url -UseBasicParsing -TimeoutSec 120
+>>
+>>     Write-Host "HTTP STATUS:" $response.StatusCode
+>>     Write-Host "CONTENT TYPE:" $response.Headers["Content-Type"]
+>>
+>>     $body = [string]$response.Content
+>>     Write-Host "BODY LENGTH:" $body.Length
+>>
+>>     if ($body.Length -gt 0) {
+>>         Write-Host "RESPONSE:"
+>>         Write-Host $body.Substring(
+>>             0, [Math]::Min(1200, $body.Length)
+>>         )
+>>     } else {
+>>         Write-Host "RESPONSE BODY IS EMPTY"
+>>     }
+>> } catch {
+>>     Write-Host "ERROR:" $_.Exception.Message
+>> }
+HTTP STATUS: 200
+CONTENT TYPE: application/json; charset=utf-8
+BODY LENGTH: 64
+RESPONSE:
+{"error":"H\u00e0nh \u0111\u1ed9ng kh\u00f4ng h\u1ee3p l\u1ec7"}
+PS C:\Users\Administrator>
