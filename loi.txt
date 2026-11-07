@@ -1,36 +1,24 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$r = Invoke-RestMethod `
+  "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
+  -TimeoutSec 120
 
-PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_AI_JSON_Drive_Retry_20261107.zip"
->> $dest = "C:\TunerTools\Tools\AI_JSON_Drive_Sync"
->>
->> if (!(Test-Path $zip)) {
->>     throw "Chua tim thay file ZIP trong Downloads"
->> }
->>
->> Expand-Archive -LiteralPath $zip `
->>     -DestinationPath $dest -Force
->>
->> $script = Join-Path $dest "CHAY_UPLOAD_AI_JSON.ps1"
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File $script -Upload -PauseSeconds 1.5
-MODE: UPLOAD
-LOCAL VALID JSON: 1820
-TOKEN FILE: Found (private; contents not printed)
-GOOGLE DRIVE lyrics existing entries: 36
-ALREADY ON DRIVE: 36
-MISSING: 1784
-  1QOA5DDUTXQE_MANIAC_Stray Kids.json
-  3BDNPYZCTH00_Giọng Ca Dĩ Vãng_Giao Linh.json
-  3BJ5NK4MVHKQ_Hai Lối Mộng_Giao Linh.json
-  3BJ5NK4MVHKQ_Hai Lối Mộng_Thúy Anh.json
-  3BJ5NK4MVHKQ_Hai Lối Mộng_Trung Quang.json
-  3BJ5NK4MVHKQ_Hai Lối Mộng_Trường Vũ.json
-  3BJ5NK4MVHKQ_Hai Lối Mộng_Tuấn Vũ.json
-  3BJ5NK4MVHKQ_Hai Lối Mộng_Vân Anh.json
-[1/1784] uploaded=1 failed=0
-[20/1784] uploaded=20 failed=0
-[40/1784] uploaded=40 failed=0
-[46/1784] ERROR 5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json: URLError: <urlopen error [WinError 10054] An existing connection was forcibly closed by the remote host>
-[50/1784] ERROR 5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json: RemoteDisconnected: Remote end closed connection without response
+[PSCustomObject]@{
+    Nguon = $r.source
+    TongBai = @($r.songs).Count
+    CoAmThanh = @(
+        $r.songs | Where-Object {
+            $_.has_audio_cache -eq $true
+        }
+    ).Count
+    CoLoi = @(
+        $r.songs | Where-Object {
+            $_.has_lyrics_cache -eq $true
+        }
+    ).Count
+    CoCaAmThanhVaLoi = @(
+        $r.songs | Where-Object {
+            $_.has_audio_cache -eq $true -and
+            $_.has_lyrics_cache -eq $true
+        }
+    ).Count
+} | Format-List
