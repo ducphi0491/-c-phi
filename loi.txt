@@ -1,10 +1,9 @@
-HTTP           : 206
-ContentType    : audio/ogg
-ContentRange   : bytes 0-1023/5598867
-BytesReceived  : 1024
-FileSignature  : OggS
-DriveFileBytes : 5598867
+$r = Invoke-RestMethod `
+  "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
+  -TimeoutSec 120
 
+$r | Select-Object ok, source, count, audio_entries_scanned, json_entries_scanned
 
-
-PS C:\Users\Administrator>
+$r.songs |
+Where-Object { $_.id -eq "18JJ0AEDF3CO" } |
+Select-Object id, title, singer, has_audio_cache, has_lyrics_cache
