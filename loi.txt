@@ -1,31 +1,14 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> $r = Invoke-RestMethod `
->>   "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
->>   -TimeoutSec 120
->>
->> $r | Select-Object ok, source, count, audio_entries_scanned, json_entries_scanned
->>
->> $r.songs |
->> Where-Object { $_.id -eq "18JJ0AEDF3CO" } |
->> Select-Object id, title, singer, has_audio_cache, has_lyrics_cache
-
-
-ok                    : True
-source                : google_drive
-count                 : 1283
-audio_entries_scanned : 1342
-json_entries_scanned  : 0
-
-id               : 18JJ0AEDF3CO
-title            : Zing 18JJ0AEDF3CO
-singer           :
-has_audio_cache  : True
-has_lyrics_cache : False
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\CHAY_UPLOAD_AI_JSON.ps1 `
+  -OnlyId "18JJ0AEDF3CO"
 
 
 
-PS C:\Users\Administrator>
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\CHAY_UPLOAD_AI_JSON.ps1 `
+  -OnlyId "18JJ0AEDF3CO" -Upload
 
 
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\CHAY_UPLOAD_AI_JSON.ps1 -Upload
