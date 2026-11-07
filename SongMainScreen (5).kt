@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -67,9 +68,16 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
@@ -107,6 +115,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 // --- BIẾN TOÀN CỤC ĐỂ LƯU TRẠNG THÁI XUYÊN SUỐT CÁC TAB ---
 var globalLastCheckTime = 0L // Lưu mốc thời gian kiểm tra cuối cùng
 var globalHasNewUpdate = false
@@ -119,6 +128,336 @@ private enum class GpServerHealthState {
     BOTH_DOWN
 }
 
+
+// --- AI cached media: Android -> Google Drive/Alwaysdata -> Python fallback. ---
+// Drive ONLY contains previously generated media. The Python service remains responsible for AI.
+private const val AI_DRIVE_MEDIA_GATEWAY =
+    "https://tuner.alwaysdata.net/api_ai_media_drive.php"
+private const val AI_ORIGINAL_STREAM_BASE =
+    "https://api.tunertools.top/api/stream_cache/"
+private const val AI_MEDIA_MIN_BYTES = 100L * 1024L
+private val aiDriveProbeClient by lazy {
+    okhttp3.OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+}
+
+private fun aiCachedMediaFilenameSafe(filename: String, lyrics: Boolean = false): Boolean {
+    if (filename.isBlank() || filename.length > 185 ||
+        filename.toByteArray(Charsets.UTF_8).size > 220 ||
+        filename.contains('/') || filename.contains('\\') || filename.any { it.isISOControl() }) return false
+    // Match the Alwaysdata PHP gateway's allowed filename characters, not just the file extension.
+    val pattern = if (lyrics)
+        Regex("""^[\p{L}\p{N}][\p{L}\p{N} ._()+\-]{0,180}\.json$""", RegexOption.IGNORE_CASE)
+    else
+        Regex("""^[\p{L}\p{N}][\p{L}\p{N} ._()+\-]{0,180}\.(ogg|mp3|wav|m4a|aac|flac|opus|webm)$""", RegexOption.IGNORE_CASE)
+    return pattern.matches(filename)
+}
+
+private data class AiDriveFile(val filename: String, val streamUrl: String, val sizeBytes: Long)
+
+/** Exact filename lookup, only to the fixed HTTPS Alwaysdata gateway. Call on Dispatchers.IO. */
+private fun findAiDriveMediaFile(filename: String, lyrics: Boolean = false): AiDriveFile? {
+    if (!aiCachedMediaFilenameSafe(filename, lyrics)) return null
+    val kindSuffix = if (lyrics) "&kind=lyrics" else ""
+    val lookupUrl = "$AI_DRIVE_MEDIA_GATEWAY?action=lookup&filename=${Uri.encode(filename)}$kindSuffix"
+    return try {
+        aiDriveProbeClient.newCall(okhttp3.Request.Builder().url(lookupUrl).get().build())
+            .execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val json = org.json.JSONObject(response.body?.string() ?: "{}")
+                if (!json.optBoolean("ok") || !json.optBoolean("found") ||
+                    json.optString("source") != "google_drive") return@use null
+                val streamUrl = json.optString("stream_url")
+                val parsed = Uri.parse(streamUrl)
+                if (parsed.scheme != "https" || parsed.host != "tuner.alwaysdata.net" ||
+                    parsed.path != "/api_ai_media_drive.php" ||
+                    parsed.getQueryParameter("action") != (if (lyrics) "lyrics" else "stream") ||
+                    parsed.getQueryParameter("filename") != filename) return@use null
+                AiDriveFile(filename, streamUrl, json.optLong("size_bytes", -1L))
+            }
+    } catch (e: Exception) {
+        android.util.Log.w("AiDriveSource", "Drive lookup failed for ${filename.take(64)}", e)
+        null
+    }
+}
+
+private fun findFirstAiDriveAudio(filenames: List<String>): AiDriveFile? {
+    for (filename in filenames) {
+        val found = findAiDriveMediaFile(filename) ?: continue
+        if (found.sizeBytes > 0 && found.sizeBytes < AI_MEDIA_MIN_BYTES) continue
+        return found
+    }
+    return null
+}
+
+private fun isValidZingId(id: String): Boolean = Regex("^[A-Za-z0-9_-]{4,64}$").matches(id)
+private fun isValidYoutubeId(id: String): Boolean = Regex("^[A-Za-z0-9_-]{11}$").matches(id)
+
+private fun extractAiYoutubeVideoId(value: String): String? {
+    val input = value.trim()
+    if (isValidYoutubeId(input)) return input
+    return runCatching {
+        val uri = Uri.parse(input)
+        val host = uri.host?.lowercase(java.util.Locale.ROOT)?.removePrefix("www.") ?: return@runCatching null
+        val candidate = when (host) {
+            "youtu.be" -> uri.pathSegments.firstOrNull()
+            "youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com" -> {
+                if (uri.path == "/watch") uri.getQueryParameter("v")
+                else if (uri.pathSegments.firstOrNull() in listOf("shorts", "embed", "live")) uri.pathSegments.getOrNull(1)
+                else null
+            }
+            else -> null
+        }
+        candidate?.takeIf(::isValidYoutubeId)
+    }.getOrNull()
+}
+
+private fun zingSafeCacheName(text: String): String =
+    text.replace(Regex("""[\\/*?:"<>|]"""), "").trim()
+
+private fun normalizeZingLyrics(text: String): String =
+    java.text.Normalizer.normalize(text.replace('Đ', 'D').replace('đ', 'd'), java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .lowercase(java.util.Locale.ROOT)
+        .replace(Regex("[^a-z0-9]"), "")
+
+/** Use only matching Zing karaoke JSON, never another artist's lyrics. */
+private fun zingKaraokeJsonMatches(json: org.json.JSONObject, expectedFirstSentence: String): Boolean {
+    val sentences = json.optJSONObject("data")?.optJSONArray("sentences") ?: return false
+    if (sentences.length() == 0) return false
+    if (expectedFirstSentence.isBlank()) return true
+    val actual = buildString {
+        for (i in 0 until minOf(4, sentences.length())) {
+            val words = sentences.optJSONObject(i)?.optJSONArray("words") ?: continue
+            for (j in 0 until words.length()) {
+                append(words.optJSONObject(j)?.optString("data").orEmpty())
+                append(' ')
+            }
+        }
+    }
+    val expectedNormalized = normalizeZingLyrics(expectedFirstSentence)
+    val actualNormalized = normalizeZingLyrics(actual)
+    return expectedNormalized.isNotBlank() && actualNormalized.contains(expectedNormalized)
+}
+
+private fun readAiJsonFromDrive(filename: String): org.json.JSONObject? {
+    val entry = findAiDriveMediaFile(filename, lyrics = true) ?: return null
+    if (entry.sizeBytes > 2_000_000L) return null
+    return try {
+        aiDriveProbeClient.newCall(okhttp3.Request.Builder().url(entry.streamUrl).get().build())
+            .execute().use { response ->
+                if (!response.isSuccessful || response.code != 200) return@use null
+                val raw = response.body?.string() ?: return@use null
+                if (raw.length > 2_000_000) return@use null
+                org.json.JSONObject(raw)
+            }
+    } catch (e: Exception) {
+        android.util.Log.w("AiDriveSource", "Cannot read Drive lyrics: ${filename.take(48)}", e)
+        null
+    }
+}
+
+/** The current Python writer uses <ZingId>_<Title>_<Singer>.json; legacy caches may use <ZingId>.json. */
+private fun getZingKaraokeJsonFromDrive(
+    zingId: String, title: String, singer: String, expectedFirstSentence: String
+): org.json.JSONObject? {
+    if (!isValidZingId(zingId)) return null
+    val safeTitle = zingSafeCacheName(title)
+    val safeSinger = zingSafeCacheName(singer)
+    val candidates = linkedSetOf<String>()
+    if (safeTitle.isNotBlank() && safeSinger.isNotBlank()) {
+        candidates.add("${zingId}_${safeTitle}_${safeSinger}.json")
+    }
+    candidates.add("$zingId.json")
+    for (filename in candidates) {
+        val json = readAiJsonFromDrive(filename) ?: continue
+        if (zingKaraokeJsonMatches(json, expectedFirstSentence)) {
+            android.util.Log.i("AiDriveSource", "Zing karaoke JSON: google_drive")
+            return json
+        }
+    }
+    return null
+}
+
+/** YouTube lyrics are stored as lyrics_<videoId>.json (and sometimes <videoId>.json). */
+private fun getAiLyricsJsonFromDrive(videoId: String): org.json.JSONObject? {
+    if (!isValidYoutubeId(videoId)) return null
+    for (name in listOf("lyrics_$videoId.json", "$videoId.json")) {
+        val json = readAiJsonFromDrive(name) ?: continue
+        if ((json.optJSONArray("lyrics")?.length() ?: 0) > 0) {
+            android.util.Log.i("AiDriveSource", "YouTube timed lyrics: google_drive")
+            return json
+        }
+    }
+    return null
+}
+
+private data class AiReadyPlayer(val player: android.media.MediaPlayer, val source: String)
+
+/** Prepare streamed Zing audio from Drive first; Python origin is always the fallback. */
+private fun prepareZingAiPlayer(filename: String, context: Context, alreadyFoundDriveUrl: String? = null): AiReadyPlayer {
+    require(aiCachedMediaFilenameSafe(filename)) { "Invalid Zing audio filename" }
+    val localBase = filename.substringBeforeLast('.')
+    val localFile = findExistingAiLocalAudio(context.cacheDir, localBase)
+    if (localFile != null) {
+        val player = android.media.MediaPlayer()
+        try {
+            player.setDataSource(localFile.absolutePath)
+            player.prepare()
+            android.util.Log.i("AiDriveSource", "Zing audio prepared: android_cache")
+            return AiReadyPlayer(player, "android_cache")
+        } catch (error: Exception) {
+            stopAndReleaseSongPlayer(player)
+            localFile.delete()
+        }
+    }
+    val driveUrl = alreadyFoundDriveUrl?.takeIf { it.isNotBlank() }
+        ?: findAiDriveMediaFile(filename)?.streamUrl
+    if (driveUrl != null) {
+        val player = android.media.MediaPlayer()
+        try {
+            player.setDataSource(driveUrl)
+            player.prepare()
+            android.util.Log.i("AiDriveSource", "Zing audio prepared: google_drive")
+            return AiReadyPlayer(player, "google_drive")
+        } catch (e: Exception) {
+            stopAndReleaseSongPlayer(player)
+            android.util.Log.w("AiDriveSource", "Drive stream not playable; trying local download", e)
+        }
+        val downloaded = downloadAiAudioFromDriveIfAvailable(
+            listOf(filename), context.cacheDir, filename.substringBeforeLast('.'), aiDriveProbeClient
+        )
+        if (downloaded != null) {
+            val localPlayer = android.media.MediaPlayer()
+            try {
+                localPlayer.setDataSource(downloaded.absolutePath)
+                localPlayer.prepare()
+                android.util.Log.i("AiDriveSource", "Zing audio prepared: google_drive_download")
+                return AiReadyPlayer(localPlayer, "google_drive_download")
+            } catch (error: Exception) {
+                stopAndReleaseSongPlayer(localPlayer)
+                downloaded.delete()
+                android.util.Log.w("AiDriveSource", "Drive download is not playable; trying Python", error)
+            }
+        }
+    }
+    val player = android.media.MediaPlayer()
+    try {
+        player.setDataSource(AI_ORIGINAL_STREAM_BASE + Uri.encode(filename))
+        player.prepare()
+        android.util.Log.i("AiDriveSource", "Zing audio prepared: python_origin")
+        return AiReadyPlayer(player, "python_origin")
+    } catch (e: Exception) {
+        stopAndReleaseSongPlayer(player)
+        throw e
+    }
+}
+
+/** Avoid writing .ogg or .mp3 bytes into a .wav file. */
+private fun findExistingAiLocalAudio(dir: java.io.File, basename: String): java.io.File? {
+    for (ext in listOf("wav", "ogg", "mp3", "m4a", "aac", "opus", "flac", "webm")) {
+        val file = java.io.File(dir, "$basename.$ext")
+        if (!file.isFile || file.length() <= AI_MEDIA_MIN_BYTES) continue
+        // Older builds sometimes placed OGG bytes into a .wav cache file.
+        if (ext == "wav") {
+            val header = ByteArray(4)
+            val count = runCatching { file.inputStream().use { it.read(header) } }.getOrDefault(0)
+            val realExtension = when {
+                count == 4 && header.contentEquals("OggS".toByteArray(Charsets.US_ASCII)) -> "ogg"
+                count == 4 && header.take(3).toByteArray().contentEquals("ID3".toByteArray(Charsets.US_ASCII)) -> "mp3"
+                else -> null
+            }
+            if (realExtension != null) {
+                val repaired = java.io.File(dir, "$basename.$realExtension")
+                if (repaired.isFile && repaired.length() == file.length()) return repaired
+                if (!repaired.exists()) {
+                    if (file.renameTo(repaired)) return repaired
+                    runCatching {
+                        file.copyTo(repaired)
+                        if (repaired.length() == file.length()) file.delete()
+                    }
+                    if (repaired.isFile && repaired.length() == file.length()) return repaired
+                }
+            }
+        }
+        return file
+    }
+    return null
+}
+
+private fun saveAiAudioToCache(
+    response: okhttp3.Response, directory: java.io.File, localBaseName: String,
+    extension: String? = null, expectedSizeBytes: Long = -1L
+): java.io.File? {
+    if (!response.isSuccessful || response.code != 200) return null
+    val mime = response.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase(java.util.Locale.ROOT)
+    val fromMime = when (mime) {
+        "audio/ogg", "audio/opus" -> "ogg"
+        "audio/mpeg", "audio/mp3" -> "mp3"
+        "audio/wav", "audio/x-wav", "audio/wave" -> "wav"
+        "audio/mp4", "audio/m4a", "audio/x-m4a" -> "m4a"
+        "audio/aac" -> "aac"
+        "audio/webm" -> "webm"
+        "audio/flac", "audio/x-flac" -> "flac"
+        else -> null
+    }
+    val ext = extension ?: fromMime ?: return null
+    if (ext !in setOf("ogg", "mp3", "wav", "m4a", "aac", "opus", "flac", "webm")) return null
+    if (mime !in setOf("application/octet-stream") && !mime.startsWith("audio/")) return null
+    val target = java.io.File(directory, "$localBaseName.$ext")
+    val partial = java.io.File(directory, "$localBaseName.$ext.partial")
+    return try {
+        partial.delete()
+        val input = response.body?.byteStream() ?: return null
+        input.use { stream -> partial.outputStream().use { output -> stream.copyTo(output) } }
+        val length = partial.length()
+        if (length <= AI_MEDIA_MIN_BYTES || (expectedSizeBytes > 0L && expectedSizeBytes != length)) return null
+        if (ext == "ogg" || ext == "opus") {
+            val header = ByteArray(4)
+            val headerLength = partial.inputStream().use { it.read(header) }
+            if (headerLength != 4 || !header.contentEquals("OggS".toByteArray(Charsets.US_ASCII))) return null
+        }
+        if (!partial.renameTo(target)) partial.copyTo(target, overwrite = true)
+        target.takeIf { it.isFile && it.length() == length }
+    } catch (e: Exception) {
+        android.util.Log.w("AiDriveSource", "Could not cache audio", e)
+        null
+    } finally {
+        partial.delete()
+    }
+}
+
+/** Download a full audio file from Drive atomically, or return null and let Python handle it. */
+private fun downloadAiAudioFromDriveIfAvailable(
+    filenames: List<String>, directory: java.io.File, localBaseName: String,
+    client: okhttp3.OkHttpClient
+): java.io.File? {
+    for (filename in filenames) {
+        val drive = findAiDriveMediaFile(filename) ?: continue
+        if (drive.sizeBytes > 0 && drive.sizeBytes < AI_MEDIA_MIN_BYTES) continue
+        val extension = filename.substringAfterLast('.').lowercase(java.util.Locale.ROOT)
+        if (extension !in setOf("ogg", "mp3", "wav", "m4a", "aac", "opus", "flac", "webm")) continue
+        try {
+            client.newCall(okhttp3.Request.Builder().url(drive.streamUrl).get().build())
+                .execute().use { response ->
+                    val cached = saveAiAudioToCache(
+                        response, directory, localBaseName, extension, drive.sizeBytes
+                    )
+                    if (cached != null) {
+                        android.util.Log.i("AiDriveSource", "Audio saved: google_drive ${filename.take(48)}")
+                        return cached
+                    }
+                }
+        } catch (e: Exception) {
+            android.util.Log.w("AiDriveSource", "Drive media download failed: ${filename.take(48)}", e)
+        }
+    }
+    return null
+}
+// --- End AI Drive cached media helpers. ---
+
 private const val GP_PRIMARY_HEALTH_URL =
     "https://tunertools.top/api_gp_search.php?action=health"
 private const val GP_BACKUP_HEALTH_URL =
@@ -128,9 +467,1100 @@ private const val GP_BACKUP_HEALTH_URL =
 private const val SONG_DETAIL_BANNER_AD_UNIT_ID =
     "ca-app-pub-3156289270309336/8322342489"
 
+// Cài một lần và dùng chung cho toàn bộ bài hát trong Kho nhạc.
+private const val AUTO_SKIP_INTRO_ENABLED_KEY = "song_auto_skip_intro_enabled"
+private const val AUTO_SKIP_INTRO_FALLBACK_MS_KEY = "song_auto_skip_intro_fallback_ms"
+
 private object SongDetailBannerAdsRuntime {
     @Volatile
     var initialized: Boolean = false
+}
+
+/**
+ * Điều phối toàn bộ tác vụ bất đồng bộ gắn với bài hát đang mở.
+ *
+ * Mỗi lần mở/thoát bài, generation được tăng. Kết quả của request cũ chỉ được
+ * phép cập nhật giao diện khi token của nó vẫn trùng generation hiện tại.
+ */
+private class SongAsyncCoordinator {
+    private val generation = AtomicLong(0L)
+
+    var detailJob: Job? = null
+        private set
+    var aiJob: Job? = null
+        private set
+    var mediaJob: Job? = null
+        private set
+
+    fun beginNewSong(): Long {
+        val token = generation.incrementAndGet()
+        cancelAllJobs()
+        return token
+    }
+
+    fun invalidate(): Long = beginNewSong()
+
+    fun currentToken(): Long = generation.get()
+
+    fun isCurrent(token: Long): Boolean = generation.get() == token
+
+    fun isCurrentSong(token: Long, expectedSongId: String, currentSongId: String?): Boolean {
+        return isCurrent(token) && currentSongId == expectedSongId
+    }
+
+    fun replaceDetailJob(job: Job) {
+        detailJob?.cancel()
+        detailJob = job
+    }
+
+    fun replaceAiJob(job: Job) {
+        aiJob?.cancel()
+        aiJob = job
+    }
+
+    fun replaceMediaJob(job: Job) {
+        mediaJob?.cancel()
+        mediaJob = job
+    }
+
+    fun cancelAiAndMedia() {
+        aiJob?.cancel()
+        mediaJob?.cancel()
+        aiJob = null
+        mediaJob = null
+    }
+
+    fun cancelAllJobs() {
+        detailJob?.cancel()
+        aiJob?.cancel()
+        mediaJob?.cancel()
+        detailJob = null
+        aiJob = null
+        mediaJob = null
+    }
+}
+
+private fun stopAndReleaseSongPlayer(player: android.media.MediaPlayer?) {
+    if (player == null) return
+    runCatching {
+        if (player.isPlaying) player.stop()
+    }
+    runCatching { player.reset() }
+    runCatching { player.release() }
+}
+
+/**
+ * Chỉ request mở bài mới nhất được phép ghi kết quả vào Compose state.
+ */
+private fun <T> launchLatestSongRequest(
+    scope: CoroutineScope,
+    coordinator: SongAsyncCoordinator,
+    loader: suspend () -> T,
+    onResult: (T) -> Unit,
+    onError: (Throwable) -> Unit = {},
+    onLoadingChanged: (Boolean) -> Unit = {}
+) {
+    val requestToken = coordinator.beginNewSong()
+    onLoadingChanged(true)
+
+    val job = scope.launch(start = CoroutineStart.LAZY) {
+        try {
+            val result = withContext(Dispatchers.IO) { loader() }
+            ensureActive()
+            if (coordinator.isCurrent(requestToken)) {
+                onResult(result)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (coordinator.isCurrent(requestToken)) {
+                onError(error)
+            }
+        } finally {
+            if (coordinator.isCurrent(requestToken)) {
+                onLoadingChanged(false)
+            }
+        }
+    }
+
+    coordinator.replaceDetailJob(job)
+    job.start()
+}
+
+
+private fun launchLatestSongAiJob(
+    scope: CoroutineScope,
+    coordinator: SongAsyncCoordinator,
+    block: suspend CoroutineScope.() -> Unit
+) {
+    val job = scope.launch(
+        context = Dispatchers.IO,
+        start = CoroutineStart.LAZY,
+        block = block
+    )
+    coordinator.replaceAiJob(job)
+    job.start()
+}
+
+
+private class SongPlaybackUiBindings(
+    private val currentSongDataGetter: () -> SongDetails?,
+    private val currentSongDataSetter: (SongDetails?) -> Unit,
+    private val showPlayModeDialogGetter: () -> Boolean,
+    private val showPlayModeDialogSetter: (Boolean) -> Unit,
+    private val isFastLoadingCacheGetter: () -> Boolean,
+    private val isFastLoadingCacheSetter: (Boolean) -> Unit,
+    private val aiAnalysisModeGetter: () -> String,
+    private val aiAnalysisModeSetter: (String) -> Unit,
+    private val mediaPlayerGetter: () -> android.media.MediaPlayer?,
+    private val mediaPlayerSetter: (android.media.MediaPlayer?) -> Unit,
+    private val isAudioPlayingGetter: () -> Boolean,
+    private val isAudioPlayingSetter: (Boolean) -> Unit,
+    private val syncedKaraokeLinesGetter: () -> List<SyncedDbLine>?,
+    private val syncedKaraokeLinesSetter: (List<SyncedDbLine>?) -> Unit,
+    private val activeMediaTypeGetter: () -> String,
+    private val activeMediaTypeSetter: (String) -> Unit,
+    private val isAiAnalyzingGetter: () -> Boolean,
+    private val isAiAnalyzingSetter: (Boolean) -> Unit,
+    private val aiProgressGetter: () -> Float,
+    private val aiProgressSetter: (Float) -> Unit,
+    private val aiAnalysisStatusGetter: () -> String,
+    private val aiAnalysisStatusSetter: (String) -> Unit,
+    private val totalAudioDurationMsGetter: () -> Long,
+    private val totalAudioDurationMsSetter: (Long) -> Unit,
+    private val currentVideoTimeMsGetter: () -> Long,
+    private val currentVideoTimeMsSetter: (Long) -> Unit,
+    private val syncOffsetMsGetter: () -> Long,
+    private val syncOffsetMsSetter: (Long) -> Unit,
+    private val showChordAIGetter: () -> Boolean,
+    private val showChordAISetter: (Boolean) -> Unit
+) {
+    var currentSongData: SongDetails?
+        get() = currentSongDataGetter()
+        set(value) = currentSongDataSetter(value)
+    var showPlayModeDialog: Boolean
+        get() = showPlayModeDialogGetter()
+        set(value) = showPlayModeDialogSetter(value)
+    var isFastLoadingCache: Boolean
+        get() = isFastLoadingCacheGetter()
+        set(value) = isFastLoadingCacheSetter(value)
+    var aiAnalysisMode: String
+        get() = aiAnalysisModeGetter()
+        set(value) = aiAnalysisModeSetter(value)
+    var mediaPlayer: android.media.MediaPlayer?
+        get() = mediaPlayerGetter()
+        set(value) = mediaPlayerSetter(value)
+    var isAudioPlaying: Boolean
+        get() = isAudioPlayingGetter()
+        set(value) = isAudioPlayingSetter(value)
+    var syncedKaraokeLines: List<SyncedDbLine>?
+        get() = syncedKaraokeLinesGetter()
+        set(value) = syncedKaraokeLinesSetter(value)
+    var activeMediaType: String
+        get() = activeMediaTypeGetter()
+        set(value) = activeMediaTypeSetter(value)
+    var isAiAnalyzing: Boolean
+        get() = isAiAnalyzingGetter()
+        set(value) = isAiAnalyzingSetter(value)
+    var aiProgress: Float
+        get() = aiProgressGetter()
+        set(value) = aiProgressSetter(value)
+    var aiAnalysisStatus: String
+        get() = aiAnalysisStatusGetter()
+        set(value) = aiAnalysisStatusSetter(value)
+    var totalAudioDurationMs: Long
+        get() = totalAudioDurationMsGetter()
+        set(value) = totalAudioDurationMsSetter(value)
+    var currentVideoTimeMs: Long
+        get() = currentVideoTimeMsGetter()
+        set(value) = currentVideoTimeMsSetter(value)
+    var syncOffsetMs: Long
+        get() = syncOffsetMsGetter()
+        set(value) = syncOffsetMsSetter(value)
+    var showChordAI: Boolean
+        get() = showChordAIGetter()
+        set(value) = showChordAISetter(value)
+}
+
+/** If Drive fails during streaming, resume once from Python without restarting the song. */
+private fun installZingDrivePlaybackFailover(
+    ready: AiReadyPlayer,
+    filename: String,
+    scope: CoroutineScope,
+    coordinator: SongAsyncCoordinator,
+    requestToken: Long,
+    expectedSongId: String,
+    ui: SongPlaybackUiBindings,
+    context: Context
+) {
+    if (ready.source != "google_drive" || !aiCachedMediaFilenameSafe(filename)) return
+    val fallbackStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+    ready.player.setOnErrorListener { failedPlayer, what, extra ->
+        if (fallbackStarted.compareAndSet(false, true) && coordinator.isCurrentSong(
+                requestToken, expectedSongId, ui.currentSongData?.songId
+            )) {
+            val resumePosition = runCatching { failedPlayer.currentPosition.toLong() }.getOrDefault(0L)
+            android.util.Log.w("AiDriveSource", "Google Drive media error $what/$extra; fallback to Python")
+            ui.isAudioPlaying = false
+            scope.launch(Dispatchers.IO) {
+                val candidate = android.media.MediaPlayer()
+                val recovered = try {
+                    candidate.setDataSource(AI_ORIGINAL_STREAM_BASE + Uri.encode(filename))
+                    candidate.prepare()
+                    candidate
+                } catch (e: Exception) {
+                    stopAndReleaseSongPlayer(candidate)
+                    android.util.Log.e("AiDriveSource", "Python playback fallback unavailable", e)
+                    null
+                }
+                var transferred = false
+                try {
+                    withContext(Dispatchers.Main) {
+                        val current = coordinator.isCurrentSong(
+                            requestToken, expectedSongId, ui.currentSongData?.songId
+                        ) && ui.mediaPlayer === failedPlayer
+                        if (!current) return@withContext
+                        if (recovered == null) {
+                            stopAndReleaseSongPlayer(failedPlayer)
+                            ui.mediaPlayer = null
+                            ui.isAudioPlaying = false
+                            Toast.makeText(
+                                context, "Mất kết nối âm thanh, vui lòng thử lại", Toast.LENGTH_SHORT
+                            ).show()
+                            return@withContext
+                        }
+                        ui.mediaPlayer = recovered
+                        transferred = true
+                        stopAndReleaseSongPlayer(failedPlayer)
+                        ui.totalAudioDurationMs = recovered.duration.toLong()
+                        val resume = resumePosition.coerceIn(
+                            0L, (recovered.duration.toLong() - 1L).coerceAtLeast(0L)
+                        )
+                        ui.currentVideoTimeMs = resume
+                        ui.isAudioPlaying = false
+                        try {
+                            if (resume > 0L) {
+                                recovered.setOnSeekCompleteListener { player ->
+                                    player.setOnSeekCompleteListener(null)
+                                    if (coordinator.isCurrentSong(
+                                            requestToken, expectedSongId, ui.currentSongData?.songId
+                                        ) && ui.mediaPlayer === player) {
+                                        runCatching {
+                                            player.start()
+                                            ui.isAudioPlaying = player.isPlaying
+                                        }.onFailure {
+                                            android.util.Log.e("AiDriveSource", "Cannot resume after seek", it)
+                                            ui.isAudioPlaying = false
+                                        }
+                                    }
+                                }
+                                recovered.seekTo(resume.toInt())
+                            } else {
+                                recovered.start()
+                                ui.isAudioPlaying = recovered.isPlaying
+                            }
+                            android.util.Log.i("AiDriveSource", "Zing playback source: python_origin (resumed)")
+                        } catch (e: Exception) {
+                            android.util.Log.e("AiDriveSource", "Cannot start recovered media", e)
+                            ui.isAudioPlaying = false
+                            ui.mediaPlayer = null
+                            stopAndReleaseSongPlayer(recovered)
+                        }
+                    }
+                } finally {
+                    // Switching songs cancels the coroutine; do not leak the unused player.
+                    if (!transferred) stopAndReleaseSongPlayer(recovered)
+                }
+            }
+        }
+        true
+    }
+}
+
+private fun handleSongPlayMode(
+    mode: String,
+    isFromCache: Boolean,
+    context: Context,
+    currentLang: String,
+    scope: CoroutineScope,
+    coordinator: SongAsyncCoordinator,
+    songRepository: SongRepository,
+    ui: SongPlaybackUiBindings
+) {
+    val songSnapshot = ui.currentSongData ?: run {
+        ui.showPlayModeDialog = false
+        return
+    }
+    // Mỗi lần chọn chế độ là một phiên xử lý mới, kể cả cùng một bài.
+    val requestToken = coordinator.beginNewSong()
+
+    ui.showPlayModeDialog = false
+    ui.isFastLoadingCache = isFromCache
+    ui.aiAnalysisMode = mode
+
+    // Tắt nhạc cũ an toàn trước khi chạy Mode mới.
+    stopAndReleaseSongPlayer(ui.mediaPlayer)
+    ui.mediaPlayer = null
+    ui.isAudioPlaying = false
+
+    when (mode) {
+        "ZING_ACAPELLA_SYNC", "ZING_ACAPELLA_NO_LYRICS" -> {
+            ui.syncedKaraokeLines = null
+            ui.activeMediaType = ""
+            ui.isAiAnalyzing = true
+            ui.aiProgress = 0.1f
+            ui.aiAnalysisStatus = "Đang tải dữ liệu..."
+
+            launchLatestSongAiJob(scope, coordinator) {
+                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                    return@launchLatestSongAiJob
+                }
+
+                // Drive-first: use the Zing ID already stored in SQLite, without starting Python.
+                // Singer-only needs audio. Karaoke requires BOTH audio and correctly matched JSON.
+                val zingId = songSnapshot.zingMp3Id.trim()
+                val firstSentence = SongScraper.getLyricsSample(songSnapshot.lyrics)
+                val cachedDriveAudio = if (isValidZingId(zingId)) {
+                    val local = findExistingAiLocalAudio(context.cacheDir, "zing_acapella_$zingId")
+                    if (local != null) AiDriveFile(local.name, "", local.length())
+                    else findFirstAiDriveAudio(listOf(
+                        "zing_acapella_${zingId}.ogg", "zing_acapella_${zingId}.mp3",
+                        "zing_acapella_${zingId}.wav"
+                    ))
+                } else null
+                val cachedDriveKaraoke = if (mode == "ZING_ACAPELLA_SYNC" && cachedDriveAudio != null) {
+                    getZingKaraokeJsonFromDrive(zingId, songSnapshot.title, songSnapshot.singer, firstSentence)
+                } else null
+                val canUseDriveWithoutPython = cachedDriveAudio != null &&
+                    (mode == "ZING_ACAPELLA_NO_LYRICS" || cachedDriveKaraoke != null)
+
+                val responseObj = if (canUseDriveWithoutPython) {
+                    android.util.Log.i("AiDriveSource", "Zing AI: Drive cache complete; Python skipped")
+                    org.json.JSONObject().apply {
+                        put("success", true)
+                        put("id", zingId)
+                        put("acapella_filename", cachedDriveAudio!!.filename)
+                        put("drive_stream_url", cachedDriveAudio.streamUrl)
+                        put("served_by", "android_drive_cache")
+                        if (cachedDriveKaraoke != null) put("karaoke_data", cachedDriveKaraoke)
+                    }
+                } else {
+                    // Partial/missing Drive cache: preserve the old Python flow and server-side AI cache.
+                    SongScraper.getZingAcapellaSync(
+                        zingId, songSnapshot.title, songSnapshot.singer, firstSentence, mode
+                    ) { progress, message ->
+                        scope.launch(Dispatchers.Main.immediate) {
+                            if (coordinator.isCurrentSong(
+                                    requestToken, songSnapshot.songId, ui.currentSongData?.songId
+                                )) {
+                                ui.aiProgress = progress
+                                ui.aiAnalysisStatus = message
+                            }
+                        }
+                    }
+                }
+
+                ensureActive()
+                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                    return@launchLatestSongAiJob
+                }
+
+                if (responseObj != null && responseObj.optBoolean("success", false)) {
+                    val filename = responseObj.optString("acapella_filename", "")
+
+                    // Tự động lưu Zing ID mới vào CSDL nếu trước đó chưa có
+                    val returnedZingId = responseObj.optString("id", "")
+                    if (returnedZingId.isNotBlank() && songSnapshot.zingMp3Id != returnedZingId) {
+                        SongScraper.updateZingIdOnline(songSnapshot.songId, returnedZingId)
+                        if (songSnapshot.zingMp3Id != returnedZingId) {
+                            songRepository.updateZingIdOffline(songSnapshot.songId, returnedZingId)
+                            withContext(Dispatchers.Main) {
+                                val activeSong = ui.currentSongData
+                                if (
+                                    coordinator.isCurrentSong(
+                                        requestToken,
+                                        songSnapshot.songId,
+                                        activeSong?.songId
+                                    ) && activeSong != null &&
+                                    activeSong.zingMp3Id != returnedZingId
+                                ) {
+                                    ui.currentSongData = activeSong.copy(zingMp3Id = returnedZingId)
+                                }
+                            }
+                        }
+                    }
+
+                    // ========================================================
+                    // TAB 2: KARAOKE (CẦN TẢI AUDIO + XỬ LÝ GHÉP JSON)
+                    // ========================================================
+                    if (mode == "ZING_ACAPELLA_SYNC") {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            ui.aiProgress = 0.8f
+                            ui.aiAnalysisStatus = "Đang đồng bộ lời vào hợp âm..."
+                        }
+
+                        val zingCaptions = mutableListOf<YoutubeCaptionEvent>()
+                        try {
+                            val karaokeData = responseObj.optJSONObject("karaoke_data")
+                            val dataObj = karaokeData?.optJSONObject("data")
+                            val sentences = dataObj?.optJSONArray("sentences")
+
+                            if (sentences != null) {
+                                for (i in 0 until sentences.length()) {
+                                    val sentenceObj = sentences.getJSONObject(i)
+                                    val wordsArr = sentenceObj.optJSONArray("words")
+                                    val aiWords = mutableListOf<AiWordTime>()
+                                    var sentenceText = ""
+                                    var sStart = 0L
+                                    var sEnd = 0L
+
+                                    if (wordsArr != null) {
+                                        for (j in 0 until wordsArr.length()) {
+                                            val wObj = wordsArr.getJSONObject(j)
+                                            val wData = wObj.optString("data", "")
+                                            val wStart = wObj.optLong("startTime", 0L)
+                                            val wEnd = wObj.optLong("endTime", 0L)
+
+                                            sentenceText += wData
+                                            aiWords.add(AiWordTime(wData.trim(), wStart, wEnd))
+
+                                            if (j == 0) sStart = wStart
+                                            if (j == wordsArr.length() - 1) sEnd = wEnd
+                                        }
+                                    }
+                                    if (aiWords.isNotEmpty()) {
+                                        zingCaptions.add(YoutubeCaptionEvent(sStart, sEnd, sentenceText.trim(), aiWords))
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) { e.printStackTrace() }
+
+                        if (zingCaptions.isNotEmpty()) {
+                            // ĐÃ SỬA: Ép gọn lời bài hát bằng formatRawLyrics trước khi đưa vào AI phân tích
+                            val compactedLyrics = formatRawLyrics(songSnapshot.lyrics)
+                            val mappedLines = robustMapTimingLocal(compactedLyrics, zingCaptions)
+                            val ready = try {
+                                prepareZingAiPlayer(
+                                    filename,
+                                    context,
+                                    responseObj.optString("drive_stream_url").takeIf {
+                                        responseObj.optString("served_by") == "android_drive_cache"
+                                    }
+                                )
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    ui.isAiAnalyzing = false
+                                    Toast.makeText(context, "Không phát được âm thanh AI", Toast.LENGTH_SHORT).show()
+                                }
+                                return@launchLatestSongAiJob
+                            }
+                            var acceptedPlayer = false
+                            try {
+                                withContext(Dispatchers.Main) {
+                                    if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                                        return@withContext
+                                    }
+                                    ui.aiProgress = 1.0f
+                                    ui.syncedKaraokeLines = mappedLines
+                                    ui.isAiAnalyzing = false
+                                    stopAndReleaseSongPlayer(ui.mediaPlayer)
+                                    ui.mediaPlayer = null
+                                    installZingDrivePlaybackFailover(
+                                        ready, filename, scope, coordinator, requestToken,
+                                        songSnapshot.songId, ui, context
+                                    )
+                                    ready.player.start()
+                                    ui.mediaPlayer = ready.player
+                                    acceptedPlayer = true
+                                    ui.totalAudioDurationMs = ready.player.duration.toLong()
+                                    ui.currentVideoTimeMs = 0L
+                                    ui.syncOffsetMs = 0L
+                                    ui.isAudioPlaying = ready.player.isPlaying
+                                    ui.activeMediaType = "ZING_KARAOKE"
+                                }
+                            } finally {
+                                if (!acceptedPlayer) stopAndReleaseSongPlayer(ready.player)
+                            }
+                        } else {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                ui.isAiAnalyzing = false
+                                Toast.makeText(context, "Không đọc được dữ liệu Karaoke từ Zing", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+
+                    // ========================================================
+                    // TAB 1: CA SĨ (CHỈ TẢI AUDIO, ÉP BỎ QUA JSON HOÀN TOÀN)
+                    // ========================================================
+                    else {
+                        // KHẮC PHỤC LỖI: Tải audio trên IO Thread và ép phát ngay lập tức
+                        try {
+                            val ready = prepareZingAiPlayer(
+                                filename,
+                                context,
+                                responseObj.optString("drive_stream_url").takeIf {
+                                    responseObj.optString("served_by") == "android_drive_cache"
+                                }
+                            )
+                            val mp = ready.player
+                            var acceptedPlayer = false
+                            try {
+                                withContext(Dispatchers.Main) {
+                                    if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                                        return@withContext
+                                    }
+                                    ui.aiProgress = 1.0f
+                                    ui.syncedKaraokeLines = null
+                                    ui.isAiAnalyzing = false
+                                    stopAndReleaseSongPlayer(ui.mediaPlayer)
+                                    ui.mediaPlayer = null
+                                    installZingDrivePlaybackFailover(
+                                        ready, filename, scope, coordinator, requestToken,
+                                        songSnapshot.songId, ui, context
+                                    )
+                                    mp.start()
+                                    ui.mediaPlayer = mp
+                                    acceptedPlayer = true
+                                    ui.totalAudioDurationMs = mp.duration.toLong()
+                                    ui.currentVideoTimeMs = mp.currentPosition.toLong()
+                                    ui.syncOffsetMs = 0L
+                                    ui.isAudioPlaying = mp.isPlaying
+                                    ui.activeMediaType = "ACAPELLA_AUDIO"
+                                }
+                            } finally {
+                                if (!acceptedPlayer) stopAndReleaseSongPlayer(mp)
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (e: Exception) {
+                            if (coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                                withContext(Dispatchers.Main) {
+                                    ui.isAiAnalyzing = false
+                                    Toast.makeText(context, "Lỗi phát âm thanh: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                } else if (coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                    val errorMsg = responseObj?.optString("error") ?: "Không thể kết nối"
+                    withContext(Dispatchers.Main) {
+                        ui.isAiAnalyzing = false
+                        Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        "ZING_MP3" -> {
+            ui.syncedKaraokeLines = null
+            ui.activeMediaType = ""
+
+            ui.isAiAnalyzing = true
+            ui.aiProgress = 0.1f // Khởi tạo 10%
+            ui.aiAnalysisStatus = "Đang tìm kiếm dữ liệu lời bài hát (10%)..."
+
+            launchLatestSongAiJob(scope, coordinator) {
+                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                    return@launchLatestSongAiJob
+                }
+
+                val zingId = songSnapshot.zingMp3Id.trim()
+                val firstSentence = SongScraper.getLyricsSample(songSnapshot.lyrics)
+                val cachedZingJson = getZingKaraokeJsonFromDrive(
+                    zingId, songSnapshot.title, songSnapshot.singer, firstSentence
+                )
+                val responseObj = if (cachedZingJson != null) {
+                    android.util.Log.i("AiDriveSource", "Zing timed lyrics: google_drive, no Python")
+                    org.json.JSONObject().apply {
+                        put("success", true)
+                        put("id", zingId)
+                        put("karaoke_data", cachedZingJson)
+                    }
+                } else SongScraper.getZingMp3Karaoke(
+                    zingId, songSnapshot.title, songSnapshot.singer, firstSentence
+                )
+
+                ensureActive()
+                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                    return@launchLatestSongAiJob
+                }
+
+                if (responseObj != null && responseObj.optBoolean("success", false)) {
+                    // Tự động lưu Zing ID mới vào CSDL nếu trước đó chưa có
+                    val returnedZingId = responseObj.optString("id", "")
+                    if (returnedZingId.isNotBlank() && songSnapshot.zingMp3Id != returnedZingId) {
+                        SongScraper.updateZingIdOnline(songSnapshot.songId, returnedZingId)
+                        if (songSnapshot.zingMp3Id != returnedZingId) {
+                            songRepository.updateZingIdOffline(songSnapshot.songId, returnedZingId)
+                            withContext(Dispatchers.Main) {
+                                val activeSong = ui.currentSongData
+                                if (
+                                    coordinator.isCurrentSong(
+                                        requestToken,
+                                        songSnapshot.songId,
+                                        activeSong?.songId
+                                    ) && activeSong != null &&
+                                    activeSong.zingMp3Id != returnedZingId
+                                ) {
+                                    ui.currentSongData = activeSong.copy(zingMp3Id = returnedZingId)
+                                }
+                            }
+                        }
+                    }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        ui.aiProgress = 0.5f // Chuyển sang bước Đồng bộ (50%)
+                        ui.aiAnalysisStatus = "Đang đồng bộ lời vào hợp âm (50%)..."
+                    }
+
+                    val zingCaptions = mutableListOf<YoutubeCaptionEvent>()
+                    try {
+                        val karaokeData = responseObj.optJSONObject("karaoke_data")
+                        val dataObj = karaokeData?.optJSONObject("data")
+                        val sentences = dataObj?.optJSONArray("sentences")
+
+                        if (sentences != null) {
+                            for (i in 0 until sentences.length()) {
+                                val sentenceObj = sentences.getJSONObject(i)
+                                val wordsArr = sentenceObj.optJSONArray("words")
+                                val aiWords = mutableListOf<AiWordTime>()
+                                var sentenceText = ""
+                                var sStart = 0L
+                                var sEnd = 0L
+
+                                if (wordsArr != null) {
+                                    for (j in 0 until wordsArr.length()) {
+                                        val wObj = wordsArr.getJSONObject(j)
+                                        val wData = wObj.optString("data", "")
+                                        val wStart = wObj.optLong("startTime", 0L)
+                                        val wEnd = wObj.optLong("endTime", 0L)
+
+                                        sentenceText += wData
+                                        aiWords.add(AiWordTime(wData.trim(), wStart, wEnd))
+
+                                        if (j == 0) sStart = wStart
+                                        if (j == wordsArr.length() - 1) sEnd = wEnd
+                                    }
+                                }
+                                if (aiWords.isNotEmpty()) {
+                                    zingCaptions.add(YoutubeCaptionEvent(sStart, sEnd, sentenceText.trim(), aiWords))
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    if (zingCaptions.isNotEmpty()) {
+                        // ĐÃ SỬA: Ép gọn lời bài hát bằng formatRawLyrics trước khi đưa vào AI phân tích
+                        val compactedLyrics = formatRawLyrics(songSnapshot.lyrics)
+                        val mappedLines = robustMapTimingLocal(compactedLyrics, zingCaptions)
+
+                        // --- BẮT ĐẦU: IN LOG TOÀN BỘ BÀI HÁT ---
+                        android.util.Log.d("KaraokeLog_FullSong", "=== BẮT ĐẦU DỮ LIỆU TOÀN BÀI ===")
+                        mappedLines.forEachIndexed { index, line ->
+                            android.util.Log.d(
+                                "KaraokeLog_FullSong",
+                                "[Dòng ${index + 1}] ${line.originalTextWithChords} | ${line.startTimeMs}ms -> ${line.endTimeMs}ms"
+                            )
+                        }
+                        android.util.Log.d("KaraokeLog_FullSong", "=== KẾT THÚC DỮ LIỆU TOÀN BÀI ===")
+                        // --- KẾT THÚC: IN LOG ---
+
+                        // --- BẮT ĐẦU: IN LOG TOÀN BỘ BÀI HÁT ---
+                        android.util.Log.d("KaraokeLog_FullSong", "=== BẮT ĐẦU DỮ LIỆU TOÀN BÀI ===")
+                        mappedLines.forEachIndexed { index, line ->
+                            android.util.Log.d(
+                                "KaraokeLog_FullSong",
+                                "[Dòng ${index + 1}] ${line.originalTextWithChords} | ${line.startTimeMs}ms -> ${line.endTimeMs}ms"
+                            )
+                        }
+                        android.util.Log.d("KaraokeLog_FullSong", "=== KẾT THÚC DỮ LIỆU TOÀN BÀI ===")
+                        // --- KẾT THÚC: IN LOG ---
+                        val lastTime = mappedLines.lastOrNull()?.endTimeMs ?: 0L
+
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            ui.aiProgress = 1.0f
+                            ui.syncedKaraokeLines = mappedLines
+                            ui.isAiAnalyzing = false
+
+                            // Bơm dữ liệu vào Máy đếm ảo để chạy Karaoke
+                            ui.totalAudioDurationMs = lastTime + 5000L // Thêm 5 giây Outro
+                            ui.currentVideoTimeMs = 0L
+                            ui.syncOffsetMs = 0L
+                            ui.isAudioPlaying = true
+                            ui.activeMediaType = "ZING_KARAOKE"
+                        }
+                    } else {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            ui.isAiAnalyzing = false
+                            Toast.makeText(context, "Bài hát này chưa thể phân tích", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        ui.isAiAnalyzing = false
+                        Toast.makeText(context, "Không lấy được dữ liệu Karaoke bài hát này", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        "CHORD_AI" -> {
+            ui.showChordAI = true
+        }
+        // CHỈ CÒN 3 MODE: Giọng Ca sĩ + Chữ, Chỉ Giọng ca sĩ, Chỉ chạy chữ
+        "ACAPELLA", "ACAPELLA_NO_LYRICS", "LYRICS_ONLY" -> {
+            val targetMedia = when (mode) {
+                "ACAPELLA", "ACAPELLA_NO_LYRICS" -> "ACAPELLA_AUDIO"
+                "LYRICS_ONLY" -> "LYRICS_ONLY_AUDIO"
+                else -> "ACAPELLA_AUDIO"
+            }
+
+            if (ui.activeMediaType != targetMedia || ui.mediaPlayer == null) {
+                ui.isAiAnalyzing = true
+                ui.aiProgress = 0.1f // 👈 BẮT ĐẦU: 10%
+                ui.aiAnalysisStatus = CoreTranslator.getString("ai_checking_storage", currentLang)
+                launchLatestSongAiJob(scope, coordinator) {
+                    if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                        return@launchLatestSongAiJob
+                    }
+
+                    val t0_StartTime = System.currentTimeMillis()
+                    android.util.Log.d("KaraokeLog", "========================================")
+                    android.util.Log.d("KaraokeLog", "🚀 BẮT ĐẦU XỬ LÝ CHẾ ĐỘ: $mode")
+
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                        .writeTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+
+                    val videoId = extractAiYoutubeVideoId(songSnapshot.videoUrl)
+                    if (videoId == null) {
+                        withContext(Dispatchers.Main) {
+                            ui.isAiAnalyzing = false
+                            ui.aiProgress = 0f
+                            Toast.makeText(context, "Đường dẫn YouTube không hợp lệ", Toast.LENGTH_SHORT).show()
+                        }
+                        return@launchLatestSongAiJob
+                    }
+
+                    try {
+                        // ========================================================
+                        // BƯỚC 0: TẦNG CACHE ĐIỆN THOẠI (LOCAL CACHE)
+                        // ========================================================
+                        val localAudioBase = "track_${videoId}_${targetMedia}"
+                        var targetFile = findExistingAiLocalAudio(context.cacheDir, localAudioBase)
+                            ?: java.io.File(context.cacheDir, "$localAudioBase.wav")
+                        val audioFile = java.io.File(context.cacheDir, "temp_audio_$videoId.m4a")
+                        var hasLocalAudio = targetFile.isFile && targetFile.length() > AI_MEDIA_MIN_BYTES
+                        if (!hasLocalAudio) {
+                            val drivePrefix = if (mode == "LYRICS_ONLY") "beat_karaoke" else "acapella"
+                            val candidates = listOf(
+                                "${drivePrefix}_${videoId}.ogg", "${drivePrefix}_${videoId}.mp3",
+                                "${drivePrefix}_${videoId}.wav"
+                            )
+                            val restored = downloadAiAudioFromDriveIfAvailable(
+                                candidates, context.cacheDir, localAudioBase, client
+                            )
+                            if (restored != null) {
+                                targetFile = restored
+                                hasLocalAudio = true
+                                android.util.Log.i("AiDriveSource", "YouTube audio cache: google_drive")
+                            }
+                        }
+                        if (hasLocalAudio) {
+                            android.util.Log.i("AiDriveSource", "YouTube audio ready: android_cache_or_google_drive")
+                        }
+
+                        // ========================================================
+                        // BƯỚC 1: LẤY CHỮ (Bỏ qua nếu chọn ACAPELLA_NO_LYRICS)
+                        // ========================================================
+                        val cacheCheckBody = MultipartBody.Builder()
+                            .setType(MultipartBody.FORM)
+                            .addFormDataPart("video_id", videoId)
+                            .addFormDataPart("title", songSnapshot.title)
+                            .addFormDataPart("singer", songSnapshot.singer)
+                            .build()
+                        var hasLyricsCache = mode == "ACAPELLA_NO_LYRICS"
+                        val subtitlesList = mutableListOf<YoutubeCaptionEvent>()
+
+                        if (!hasLyricsCache) {
+                            val driveLyrics = getAiLyricsJsonFromDrive(videoId)
+                            val originLyrics = if (driveLyrics == null) {
+                                try {
+                                    val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(cacheCheckBody).build()
+                                    client.newCall(req).execute().use { res ->
+                                        if (res.isSuccessful) res.body?.string()?.let { org.json.JSONObject(it) } else null
+                                    }
+                                } catch (_: Exception) { null }
+                            } else null
+                            val jsonObject = driveLyrics ?: originLyrics
+                            if (jsonObject != null) {
+                                val lyricsArray = jsonObject.optJSONArray("lyrics")
+                                if (lyricsArray != null) {
+                                    for (i in 0 until lyricsArray.length()) {
+                                        val lObj = lyricsArray.optJSONObject(i) ?: continue
+                                        val aiWords = mutableListOf<AiWordTime>()
+                                        val wordsArray = lObj.optJSONArray("words")
+                                        if (wordsArray != null) {
+                                            for (j in 0 until wordsArray.length()) {
+                                                val word = wordsArray.optJSONObject(j) ?: continue
+                                                aiWords.add(AiWordTime(
+                                                    word.optString("word", ""),
+                                                    word.optLong("start_time_ms", 0L),
+                                                    word.optLong("end_time_ms", 0L)
+                                                ))
+                                            }
+                                        }
+                                        subtitlesList.add(YoutubeCaptionEvent(
+                                            lObj.optLong("start_time_ms", 0L), lObj.optLong("end_time_ms", 2000L),
+                                            lObj.optString("text", "").replace("\n", " ").trim(), aiWords
+                                        ))
+                                    }
+                                }
+                                hasLyricsCache = subtitlesList.isNotEmpty()
+                            }
+                        }
+
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { ui.aiProgress = 0.3f } // 👈 KIỂM TRA CHỮ XONG: 30%
+                        val t1_CheckCache = System.currentTimeMillis()
+                        android.util.Log.d("KaraokeLog", "⏱️ [1] Thời gian lấy Chữ: ${t1_CheckCache - t0_StartTime} ms.")
+
+                        // ========================================================
+                        // BƯỚC 2: TỔNG HỢP NHU CẦU & TẢI YOUTUBE (NẾU CẦN)
+                        // ========================================================
+                        var hasAudioCache = false
+                        val targetAudioUrl = "https://api.tunertools.top/api/get_vocals_only"
+
+                        if (!hasLocalAudio && (mode == "ACAPELLA_NO_LYRICS" || mode == "ACAPELLA")) {
+                            val req = okhttp3.Request.Builder().url(targetAudioUrl).post(cacheCheckBody).build()
+                            try {
+                                client.newCall(req).execute().use { response ->
+                                    if (response.isSuccessful) {
+                                        val type = response.header("Content-Type").orEmpty().lowercase()
+                                        if (type.startsWith("audio/") || type == "application/octet-stream") {
+                                            val cached = saveAiAudioToCache(response, context.cacheDir, localAudioBase)
+                                            if (cached != null) {
+                                                targetFile = cached
+                                                hasAudioCache = true
+                                                android.util.Log.i("AiDriveSource", "YouTube audio fetched: python_cache")
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) {
+                                hasAudioCache = false
+                            }
+                            if (!hasAudioCache && targetFile.exists() && targetFile.length() <= AI_MEDIA_MIN_BYTES) targetFile.delete()
+                        }
+
+                        val needAudioProcessing = !hasLocalAudio && !hasAudioCache && (mode == "ACAPELLA_NO_LYRICS" || mode == "ACAPELLA")
+                        val needLyricsProcessing = !hasLyricsCache && mode != "ACAPELLA_NO_LYRICS"
+                        val needOriginalAudio = !hasLocalAudio && mode == "LYRICS_ONLY"
+
+                        val needYoutubeFile = needAudioProcessing || needLyricsProcessing || needOriginalAudio
+                        var isDownloadSuccess = true
+
+                        if (needYoutubeFile) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                ui.aiAnalysisStatus = CoreTranslator.getString("ai_downloading_original", currentLang)
+                                ui.aiProgress = 0.5f // 👈 BẮT ĐẦU TẢI YOUTUBE: 50%
+                            }
+                            val json = org.json.JSONObject().apply { put("url", "https://www.youtube.com/watch?v=$videoId") }
+                            val linkReqBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                            val linkReq = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_direct_link").post(linkReqBody).build()
+                            var directUrl = ""
+                            client.newCall(linkReq).execute().use { linkRes ->
+                                if (linkRes.isSuccessful) {
+                                    val linkBody = linkRes.body?.string()?.trim() ?: ""
+                                    if (linkBody.startsWith("{")) {
+                                        directUrl = runCatching {
+                                            org.json.JSONObject(linkBody).optString("url", "")
+                                        }.getOrDefault("")
+                                    }
+                                }
+                            }
+                            if (directUrl.isNotBlank()) {
+                                val downloadReq = okhttp3.Request.Builder().url(directUrl).build()
+                                client.newCall(downloadReq).execute().use { downloadRes ->
+                                    if (downloadRes.isSuccessful) {
+                                        downloadRes.body?.byteStream()?.use { input ->
+                                            audioFile.outputStream().use { output -> input.copyTo(output) }
+                                        }
+                                        if (audioFile.length() < AI_MEDIA_MIN_BYTES) isDownloadSuccess = false
+                                    } else isDownloadSuccess = false
+                                }
+                            } else isDownloadSuccess = false
+                        }
+
+                        if (needYoutubeFile && !isDownloadSuccess) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                ui.isAiAnalyzing = false
+                                ui.aiProgress = 0f
+                                Toast.makeText(context, CoreTranslator.getString("youtube_blocked_download", currentLang), Toast.LENGTH_LONG).show()
+                            }
+                            if (audioFile.exists()) audioFile.delete()
+                            return@launchLatestSongAiJob
+                        }
+
+                        // ========================================================
+                        // BƯỚC 3: UPLOAD FILE CHO PYTHON XỬ LÝ PHẦN CÒN THIẾU
+                        // ========================================================
+                        if (needYoutubeFile && isDownloadSuccess) {
+                            if (needAudioProcessing) {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    ui.aiAnalysisStatus = CoreTranslator.getString("ai_extracting_vocals", currentLang)
+                                    ui.aiProgress = 0.75f
+                                }
+                                val splitReqBody = MultipartBody.Builder()
+                                    .setType(MultipartBody.FORM)
+                                    .addFormDataPart("video_id", videoId)
+                                    .addFormDataPart("title", songSnapshot.title)
+                                    .addFormDataPart("singer", songSnapshot.singer)
+                                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody("audio/*".toMediaTypeOrNull()))
+                                    .build()
+
+                                val req = okhttp3.Request.Builder().url(targetAudioUrl).post(splitReqBody).build()
+
+                                // 👉 SỬA Ở ĐÂY: Dùng block .use {} để ghi file và đóng kết nối NGAY LẬP TỨC
+                                client.newCall(req).execute().use { response ->
+                                    val cached = saveAiAudioToCache(response, context.cacheDir, localAudioBase)
+                                    hasAudioCache = cached != null
+                                    if (cached != null) {
+                                        targetFile = cached
+                                        android.util.Log.i("AiDriveSource", "YouTube audio analyzed: python_origin")
+                                    }
+                                }
+                            } else if (mode == "LYRICS_ONLY") {
+                                hasAudioCache = true
+                            }
+
+                            if (needLyricsProcessing) {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    ui.aiAnalysisStatus = CoreTranslator.getString("ai_syncing_lyrics", currentLang)
+                                    ui.aiProgress = 0.85f
+                                }
+                                val lyricsReqBody = MultipartBody.Builder()
+                                    .setType(MultipartBody.FORM)
+                                    .addFormDataPart("video_id", videoId)
+                                    .addFormDataPart("title", songSnapshot.title)
+                                    .addFormDataPart("singer", songSnapshot.singer)
+                                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody("audio/*".toMediaTypeOrNull()))
+                                    .build()
+                                val jsonObject = getAiLyricsJsonFromDrive(videoId) ?: try {
+                                    val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(lyricsReqBody).build()
+                                    client.newCall(req).execute().use { res ->
+                                        if (res.isSuccessful) res.body?.string()?.let { org.json.JSONObject(it) } else null
+                                    }
+                                } catch (_: Exception) { null }
+                                if (jsonObject != null) {
+                                    hasLyricsCache = true
+                                    if (jsonObject.has("lyrics")) {
+                                        val lyricsArray = jsonObject.optJSONArray("lyrics")
+                                        if (lyricsArray != null) {
+                                            for (i in 0 until lyricsArray.length()) {
+                                                val lObj = lyricsArray.getJSONObject(i)
+                                                val wordsArray = lObj.optJSONArray("words")
+                                                val aiWords = mutableListOf<AiWordTime>()
+                                                if (wordsArray != null) {
+                                                    for (j in 0 until wordsArray.length()) {
+                                                        val wObj = wordsArray.getJSONObject(j)
+                                                        aiWords.add(AiWordTime(wObj.optString("word", ""), wObj.optLong("start_time_ms", 0L), wObj.optLong("end_time_ms", 0L)))
+                                                    }
+                                                }
+                                                subtitlesList.add(YoutubeCaptionEvent(lObj.optLong("start_time_ms", 0L), lObj.optLong("end_time_ms", 2000L), lObj.optString("text", "").replace("\n", " ").trim(), aiWords))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        val t3_AudioReady = System.currentTimeMillis()
+                        android.util.Log.d("KaraokeLog", "⏱️ [2+3] Thời gian chuẩn bị Âm thanh: ${t3_AudioReady - t1_CheckCache} ms.")
+
+                        // ========================================================
+                        // BƯỚC 4: LƯU FILE VÀ PHÁT NHẠC
+                        // ========================================================
+                        if (hasLocalAudio || hasAudioCache) {
+                            if (!hasLocalAudio && mode == "LYRICS_ONLY") {
+                                // Nếu chỉ chạy chữ, copy trực tiếp file gốc sang file đích
+                                targetFile = java.io.File(context.cacheDir, "$localAudioBase.m4a")
+                                audioFile.copyTo(targetFile, overwrite = true)
+                            }
+
+                            // Xóa file gốc thừa mứa
+                            if (audioFile.exists()) audioFile.delete()
+
+                            val mappedLines = if (subtitlesList.isNotEmpty()) robustMapTimingLocal(songSnapshot.lyrics, subtitlesList) else null
+
+                            // --- BẮT ĐẦU: IN LOG TOÀN BỘ BÀI HÁT TỪ CACHE OFFLINE ---
+                            if (mappedLines != null) {
+                                android.util.Log.d("KaraokeLog_FullSong", "=== BẮT ĐẦU DỮ LIỆU TOÀN BÀI (CACHE) ===")
+                                mappedLines.forEachIndexed { index, line ->
+                                    android.util.Log.d(
+                                        "KaraokeLog_FullSong",
+                                        "[Dòng ${index + 1}] ${line.originalTextWithChords} | ${line.startTimeMs}ms -> ${line.endTimeMs}ms"
+                                    )
+                                }
+                                android.util.Log.d("KaraokeLog_FullSong", "=== KẾT THÚC DỮ LIỆU TOÀN BÀI ===")
+                            }
+                            // --- KẾT THÚC: IN LOG ---
+
+                            val t4_FinalSetup = System.currentTimeMillis()
+                            android.util.Log.d("KaraokeLog", "⏱️ [4] Thời gian Ghi File + Đồng bộ Lời: ${t4_FinalSetup - t3_AudioReady} ms.")
+                            android.util.Log.d("KaraokeLog", "🎉 TỔNG THỜI GIAN ĐÁP ỨNG: ${t4_FinalSetup - t0_StartTime} ms.")
+                            android.util.Log.d("KaraokeLog", "========================================")
+
+                            withContext(Dispatchers.Main) {
+                                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                                    return@withContext
+                                }
+                                ui.aiProgress = 1.0f
+                                ui.syncedKaraokeLines = mappedLines
+                                ui.isAiAnalyzing = false
+                                stopAndReleaseSongPlayer(ui.mediaPlayer)
+                                ui.mediaPlayer = android.media.MediaPlayer().apply {
+                                    setDataSource(targetFile.absolutePath)
+                                    prepare()
+                                    if (mode == "LYRICS_ONLY") setVolume(0f, 0f)
+                                    start()
+                                }
+                                ui.totalAudioDurationMs = ui.mediaPlayer?.duration?.toLong() ?: 0L
+                                ui.currentVideoTimeMs = ui.mediaPlayer?.currentPosition?.toLong() ?: 0L
+                                ui.syncOffsetMs = 0L
+                                ui.isAudioPlaying = true
+                                ui.activeMediaType = targetMedia
+                            }
+                        } else {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                ui.isAiAnalyzing = false
+                                ui.aiProgress = 0f
+                                Toast.makeText(context, CoreTranslator.getString("audio_processing_error", currentLang), Toast.LENGTH_SHORT).show()
+                            }
+                            if (audioFile.exists()) audioFile.delete()
+                        }
+
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (e: Exception) {
+                        if (coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                            withContext(Dispatchers.Main) {
+                                ui.isAiAnalyzing = false
+                                ui.aiProgress = 0f
+                                Toast.makeText(
+                                    context,
+                                    CoreTranslator.getString("network_server_error", currentLang),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                }
+            } else {
+                ui.mediaPlayer?.start()
+            }
+        }
+    }
 }
 
 private fun probeGpServer(urlString: String, requiredTrueFlag: String?): Boolean {
@@ -801,244 +2231,6 @@ private fun SongSearchInputField(
     )
 }
 
-// ---- BAT DAU BAI HAT / DEM NGUOC: dung chung, khong tao them file Kotlin ----
-private const val SONG_INTRO_PREF_NAME = "SongIntroCountdownPrefs"
-
-private fun introSongPreferenceId(song: SongDetails?): String {
-    if (song == null) return ""
-    val identity = song.songId.ifBlank { "${song.title}|${song.singer}" }
-    return java.lang.Integer.toHexString(identity.hashCode())
-}
-
-private fun firstRealVocalStartMs(lines: List<SyncedDbLine>?): Long? {
-    // Chi lay tu co noi dung + thoi gian that. Khong lay dong Outro duoc noi suy.
-    return lines.orEmpty()
-        .flatMap { it.words }
-        .filter { it.word.isNotBlank() && it.startTimeMs > 0L }
-        .minOfOrNull { it.startTimeMs }
-}
-
-private fun configuredVocalStartMs(manualStartMs: Long, lines: List<SyncedDbLine>?): Long? {
-    return manualStartMs.takeIf { it >= 0L } ?: firstRealVocalStartMs(lines)
-}
-
-private fun introPlaybackStartMs(skipIntro: Boolean, firstVocalMs: Long?, durationMs: Long): Long {
-    // Khong tua neu file chua co duration hoac moc loi AI nam ngoai thoi luong bai hat.
-    if (!skipIntro || firstVocalMs == null || firstVocalMs <= 3_000L || durationMs <= 0L ||
-        firstVocalMs > durationMs - 1_000L) return 0L
-    return (firstVocalMs - 3_000L).coerceAtLeast(0L)
-}
-
-// Chi start sau khi seek hoan tat, tranh nhac phat tu 00:00 roi nhay bat ngo.
-private fun startSongMediaPlayerAtIntro(
-    player: android.media.MediaPlayer,
-    skipIntro: Boolean,
-    firstVocalMs: Long?,
-    onStarted: (Long) -> Unit
-) {
-    val durationMs = runCatching { player.duration.toLong() }.getOrDefault(0L)
-    val seekStartMs = introPlaybackStartMs(skipIntro, firstVocalMs, durationMs)
-    if (seekStartMs == 0L) {
-        runCatching { player.start(); onStarted(0L) }
-        return
-    }
-    player.setOnSeekCompleteListener { completedPlayer ->
-        completedPlayer.setOnSeekCompleteListener(null)
-        runCatching { completedPlayer.start(); onStarted(seekStartMs) }
-    }
-    runCatching { player.seekTo(seekStartMs.toInt()) }.onFailure {
-        player.setOnSeekCompleteListener(null)
-        runCatching { player.start(); onStarted(0L) }
-    }
-}
-
-private fun formatSongIntroTime(ms: Long): String {
-    val seconds = ms.coerceAtLeast(0L) / 1000L
-    return "%02d:%02d".format(java.util.Locale.US, seconds / 60, seconds % 60)
-}
-
-@Composable
-private fun SongIntroSettingsQuickAccess(
-    currentLang: String,
-    firstVocalMs: Long?,
-    tunaGreen: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 7.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            if (firstVocalMs != null) {
-                "${if (currentLang == "vi") "Bắt đầu hát" else "Vocals"}: ${formatSongIntroTime(firstVocalMs)}"
-            } else {
-                if (currentLang == "vi") "Chưa đặt mốc hát" else "Vocal time not set"
-            },
-            modifier = Modifier.weight(1f),
-            color = Color.Gray, fontSize = 10.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
-        TextButton(
-            onClick = onClick,
-            modifier = Modifier.height(32.dp),
-            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)
-        ) {
-            Icon(Icons.Default.Tune, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                if (currentLang == "vi") "Dạo đầu · 3-2-1" else "Intro · 3-2-1",
-                color = tunaGreen, fontSize = 11.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun SongIntroCountdownOverlay(
-    countdownNumber: Int,
-    currentLang: String,
-    tunaGreen: Color
-) {
-    Column(
-        modifier = Modifier.background(Color.Black.copy(alpha = 0.80f), RoundedCornerShape(22.dp))
-            .border(1.dp, tunaGreen.copy(alpha = 0.65f), RoundedCornerShape(22.dp))
-            .padding(horizontal = 28.dp, vertical = 14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(if (currentLang == "vi") "Chuẩn bị vào lời" else "Vocals in", color = Color.White, fontSize = 12.sp)
-        Text("$countdownNumber", color = tunaGreen, fontSize = 64.sp, fontWeight = FontWeight.ExtraBold)
-    }
-}
-
-@Composable
-private fun SongIntroCountdownSettingsDialog(
-    songId: String,
-    currentLang: String,
-    currentTimeMs: Long,
-    durationMs: Long,
-    autoVocalMs: Long?,
-    initialManualStartMs: Long,
-    initialSkipIntro: Boolean,
-    initialCountdown: Boolean,
-    surfaceColor: Color,
-    textColor: Color,
-    tunaGreen: Color,
-    onDismiss: () -> Unit,
-    onSave: (Boolean, Boolean, Long) -> Unit,
-    onPreview: (Long) -> Unit
-) {
-    var draftSkip by remember(songId) { mutableStateOf(initialSkipIntro) }
-    var draftCountdown by remember(songId) { mutableStateOf(initialCountdown) }
-    var draftManualMs by remember(songId) { mutableLongStateOf(initialManualStartMs) }
-    val vocalStartMs = configuredVocalStartMs(draftManualMs, null) ?: autoVocalMs
-    val maxSeconds = if (durationMs > 0L) (durationMs / 1000f).coerceIn(10f, 300f) else 180f
-    val currentSliderSec = ((vocalStartMs ?: 0L) / 1000f).coerceIn(0f, maxSeconds)
-    val canPreview = vocalStartMs != null && vocalStartMs > 0L
-    val isVietnamese = currentLang == "vi"
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            color = surfaceColor,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 610.dp).verticalScroll(rememberScrollState()).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    if (isVietnamese) "Dạo đầu & Đếm ngược" else "Intro & Countdown",
-                    color = tunaGreen, fontSize = 19.sp, fontWeight = FontWeight.Bold
-                )
-                Text(
-                    if (isVietnamese) "Điều chỉnh riêng cho bài hát này; lưu lại cho lần phát sau."
-                    else "Settings are saved for this song.",
-                    color = Color.Gray, fontSize = 12.sp
-                )
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(if (isVietnamese) "Bỏ đoạn dạo đầu" else "Skip long intro", color = textColor, fontSize = 14.sp)
-                        Text(if (isVietnamese) "Phát từ 3 giây trước lúc ca sĩ hát" else "Start 3 seconds before singing", color = Color.Gray, fontSize = 11.sp)
-                    }
-                    Switch(checked = draftSkip, onCheckedChange = { draftSkip = it })
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(if (isVietnamese) "Đếm ngược 3 · 2 · 1" else "Count down 3 · 2 · 1", color = textColor, fontSize = 14.sp)
-                        Text(if (isVietnamese) "Hiện số theo thời gian phát nhạc" else "Synced to the playback position", color = Color.Gray, fontSize = 11.sp)
-                    }
-                    Switch(checked = draftCountdown, onCheckedChange = { draftCountdown = it })
-                }
-                HorizontalDivider(color = Color.Gray.copy(alpha = 0.25f))
-                Text(
-                    if (isVietnamese) "Thời điểm ca sĩ bắt đầu hát" else "First vocal entry",
-                    color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 14.sp
-                )
-                Text(
-                    if (vocalStartMs == null) {
-                        if (isVietnamese) "Chưa có mốc lời đồng bộ. Hãy chỉnh thủ công hoặc đánh dấu lúc ca sĩ hát."
-                        else "No synced lyric timestamp; set the time manually."
-                    } else {
-                        val source = if (draftManualMs >= 0L) {
-                            if (isVietnamese) "Thủ công" else "Manual"
-                        } else {
-                            if (isVietnamese) "Từ lời đồng bộ" else "Synced lyrics"
-                        }
-                        "$source: ${formatSongIntroTime(vocalStartMs)}"
-                    },
-                    color = if (vocalStartMs == null) Color(0xFFFFC107) else tunaGreen,
-                    fontSize = 12.sp
-                )
-                Slider(
-                    value = currentSliderSec,
-                    onValueChange = { draftManualMs = (it * 1000f).toLong() },
-                    valueRange = 0f..maxSeconds,
-                    colors = SliderDefaults.colors(thumbColor = tunaGreen, activeTrackColor = tunaGreen)
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("00:00", color = Color.Gray, fontSize = 11.sp)
-                    Text(formatSongIntroTime((maxSeconds * 1000f).toLong()), color = Color.Gray, fontSize = 11.sp)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = { draftManualMs = currentTimeMs.coerceAtLeast(0L) },
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 5.dp)
-                    ) {
-                        Text(if (isVietnamese) "Lấy giây hiện tại" else "Mark now", fontSize = 11.sp)
-                    }
-                    if (autoVocalMs != null) {
-                        OutlinedButton(
-                            modifier = Modifier.weight(1f),
-                            onClick = { draftManualMs = -1L },
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 5.dp)
-                        ) {
-                            Text(if (isVietnamese) "Mốc tự động" else "Auto timing", fontSize = 11.sp)
-                        }
-                    }
-                }
-                Text(
-                    if (isVietnamese) "Lưu ý: Mốc lời AI có thể lệch. Hãy chỉnh lại nếu đếm ngược quá sớm hoặc quá muộn."
-                    else "AI lyric timestamps may not match the exact first vocal; adjust as needed.",
-                    color = Color.Gray, fontSize = 11.sp
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text(if (isVietnamese) "Hủy" else "Cancel", color = Color.Gray) }
-                    if (canPreview) {
-                        TextButton(onClick = {
-                            onSave(draftSkip, draftCountdown, draftManualMs)
-                            onPreview(vocalStartMs!!)
-                        }) { Text(if (isVietnamese) "Lưu & nghe thử" else "Save & preview", color = tunaGreen, fontSize = 12.sp) }
-                    }
-                    Button(onClick = { onSave(draftSkip, draftCountdown, draftManualMs) }) {
-                        Text(if (isVietnamese) "Lưu" else "Save")
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 internal fun SongDetailBottomBannerAd(
     currentLang: String,
@@ -1063,110 +2255,564 @@ internal fun SongDetailBottomBannerAd(
 
         // Dùng đúng chiều rộng thực tế của vùng đặt banner. Cách này hoạt động
         // ổn định ở trang bài hát, thư mục tài liệu, trình xem PDF/video và TAB.
-        BoxWithConstraints(
-            modifier = Modifier.fillMaxWidth(),
+        var bannerWidthPx by remember { mutableIntStateOf(0) }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { size -> bannerWidthPx = size.width },
             contentAlignment = Alignment.Center
         ) {
-            val adWidthDp = maxWidth.value.roundToInt().coerceAtLeast(1)
-            val adSize = remember(context, adWidthDp) {
-                com.google.android.gms.ads.AdSize
-                    .getCurrentOrientationAnchoredAdaptiveBannerAdSize(
-                        context,
-                        adWidthDp
-                    )
-            }
-
-            val adHeightDp = remember(context, adSize, density) {
-                with(density) {
-                    adSize.getHeightInPixels(context).toDp()
-                }.let { measuredHeight ->
-                    if (measuredHeight.value > 0f) measuredHeight else 50.dp
-                }
-            }
-
-            var adLoaded by remember(adWidthDp) { mutableStateOf(false) }
-            var adLoadFailed by remember(adWidthDp) { mutableStateOf(false) }
-            val loadRequested = remember(adWidthDp) {
-                java.util.concurrent.atomic.AtomicBoolean(false)
-            }
-
-            val adView = remember(context, adWidthDp) {
-                com.google.android.gms.ads.AdView(context).apply {
-                    adUnitId = SONG_DETAIL_BANNER_AD_UNIT_ID
-                    setAdSize(adSize)
-                }
-            }
-
-            DisposableEffect(adView) {
-                adView.adListener = object : com.google.android.gms.ads.AdListener() {
-                    override fun onAdLoaded() {
-                        adLoaded = true
-                        adLoadFailed = false
-                    }
-
-                    override fun onAdFailedToLoad(
-                        adError: com.google.android.gms.ads.LoadAdError
-                    ) {
-                        adLoaded = false
-                        adLoadFailed = true
-                        Log.w(
-                            "SongDetailBanner",
-                            "Banner failed to load: ${adError.code} ${adError.message}"
+            // Use measured pixel width; avoid BoxWithConstraints scope lint errors.
+            val adWidthDp = with(density) { bannerWidthPx.toDp().value.toInt() }
+            if (adWidthDp > 0) {
+                val adSize = remember(context, adWidthDp) {
+                    com.google.android.gms.ads.AdSize
+                        .getCurrentOrientationAnchoredAdaptiveBannerAdSize(
+                            context,
+                            adWidthDp
                         )
+                }
+
+                val adHeightDp = remember(context, adSize, density) {
+                    with(density) {
+                        adSize.getHeightInPixels(context).toDp()
+                    }.let { measuredHeight ->
+                        if (measuredHeight.value > 0f) measuredHeight else 50.dp
                     }
                 }
 
-                onDispose {
-                    adView.destroy()
+                var adLoaded by remember(adWidthDp) { mutableStateOf(false) }
+                var adLoadFailed by remember(adWidthDp) { mutableStateOf(false) }
+                val loadRequested = remember(adWidthDp) {
+                    java.util.concurrent.atomic.AtomicBoolean(false)
                 }
-            }
 
-            LaunchedEffect(adView) {
-                fun requestBanner() {
-                    if (loadRequested.compareAndSet(false, true)) {
-                        adView.loadAd(
-                            com.google.android.gms.ads.AdRequest.Builder().build()
-                        )
+                val adView = remember(context, adWidthDp) {
+                    com.google.android.gms.ads.AdView(context).apply {
+                        adUnitId = SONG_DETAIL_BANNER_AD_UNIT_ID
+                        setAdSize(adSize)
                     }
                 }
 
-                if (SongDetailBannerAdsRuntime.initialized) {
-                    requestBanner()
-                } else {
-                    com.google.android.gms.ads.MobileAds.initialize(
-                        context.applicationContext
-                    ) {
-                        SongDetailBannerAdsRuntime.initialized = true
-                        adView.post { requestBanner() }
+                DisposableEffect(adView) {
+                    adView.adListener = object : com.google.android.gms.ads.AdListener() {
+                        override fun onAdLoaded() {
+                            adLoaded = true
+                            adLoadFailed = false
+                        }
+
+                        override fun onAdFailedToLoad(
+                            adError: com.google.android.gms.ads.LoadAdError
+                        ) {
+                            adLoaded = false
+                            adLoadFailed = true
+                            Log.w(
+                                "SongDetailBanner",
+                                "Banner failed to load: ${adError.code} ${adError.message}"
+                            )
+                        }
+                    }
+
+                    onDispose {
+                        adView.destroy()
                     }
                 }
-            }
 
-            if (!adLoadFailed) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(adHeightDp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(surfaceColor.copy(alpha = 0.58f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AndroidView(
-                        factory = { adView },
+                LaunchedEffect(adView) {
+                    fun requestBanner() {
+                        if (loadRequested.compareAndSet(false, true)) {
+                            adView.loadAd(
+                                com.google.android.gms.ads.AdRequest.Builder().build()
+                            )
+                        }
+                    }
+
+                    if (SongDetailBannerAdsRuntime.initialized) {
+                        requestBanner()
+                    } else {
+                        com.google.android.gms.ads.MobileAds.initialize(
+                            context.applicationContext
+                        ) {
+                            SongDetailBannerAdsRuntime.initialized = true
+                            adView.post { requestBanner() }
+                        }
+                    }
+                }
+
+                if (!adLoadFailed) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(adHeightDp)
-                    )
-
-                    if (!adLoaded) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = textColor.copy(alpha = 0.45f),
-                            strokeWidth = 1.5.dp
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(surfaceColor.copy(alpha = 0.58f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AndroidView(
+                            factory = { adView },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(adHeightDp)
                         )
+
+                        if (!adLoaded) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = textColor.copy(alpha = 0.45f),
+                                strokeWidth = 1.5.dp
+                            )
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+// Keep MediaPlayer callbacks separate from the very large SongTabScreen Compose tree.
+// This avoids adding nested callback bytecode to SongTabScreen's UI lambda.
+private fun playAudioAfterCountIn(
+    player: android.media.MediaPlayer?,
+    positionMs: Long,
+    isCurrentPlayer: (android.media.MediaPlayer) -> Boolean,
+    onPositionChange: (Long) -> Unit,
+    onPlayingChange: (Boolean) -> Unit,
+    onSeekingChange: (Boolean) -> Unit
+) {
+    if (player == null) return
+    try {
+        player.pause()
+        onPlayingChange(false)
+        onSeekingChange(true)
+
+        val lengthMs = player.duration.toLong().coerceAtLeast(1L)
+        val targetMs = positionMs.coerceIn(0L, lengthMs - 1L)
+        onPositionChange(targetMs)
+        player.setOnSeekCompleteListener { readyPlayer ->
+            readyPlayer.setOnSeekCompleteListener(null)
+            if (isCurrentPlayer(readyPlayer)) {
+                try {
+                    onPositionChange(readyPlayer.currentPosition.toLong())
+                    readyPlayer.start()
+                    onPlayingChange(readyPlayer.isPlaying)
+                } catch (error: Exception) {
+                    Log.w("SongCountIn", "Playback after seeking failed", error)
+                } finally {
+                    onSeekingChange(false)
+                }
+            }
+        }
+        // Do not call start() before the async seek is complete.
+        player.seekTo(targetMs.toInt())
+    } catch (error: Exception) {
+        onSeekingChange(false)
+        Log.e("SongCountIn", "Unable to seek to countdown start", error)
+    }
+}
+
+@Composable
+private fun SongIntroAudioControls(
+    songId: String,
+    mediaType: String,
+    preferences: android.content.SharedPreferences,
+    detectedVocalMs: Long?,
+    player: android.media.MediaPlayer?,
+    isCurrentPlayer: (android.media.MediaPlayer) -> Boolean,
+    currentMs: Long,
+    durationMs: Long,
+    playing: Boolean,
+    seeking: Boolean,
+    tunaGreen: Color,
+    textColor: Color,
+    dialogSurfaceColor: Color,
+    autoStartFromCachedList: Boolean,
+    onPositionChange: (Long) -> Unit,
+    onPlayingChange: (Boolean) -> Unit,
+    onSeekingChange: (Boolean) -> Unit
+) {
+    val introKey = remember(songId, mediaType) {
+        "vocal_start_${songId}_${mediaType}"
+    }
+    var savedVocalMs by remember(introKey) {
+        mutableLongStateOf(preferences.getLong(introKey, -1L))
+    }
+    var globalFallbackVocalMs by remember {
+        mutableLongStateOf(preferences.getLong(AUTO_SKIP_INTRO_FALLBACK_MS_KEY, -1L))
+    }
+    var skipIntroEnabled by remember {
+        mutableStateOf(preferences.getBoolean(AUTO_SKIP_INTRO_ENABLED_KEY, false))
+    }
+
+    // Ưu tiên mốc đã chỉnh riêng cho bài, sau đó tới lời đồng bộ; mốc toàn cục chỉ là dự phòng.
+    val vocalStartMs = when {
+        savedVocalMs >= 0L -> savedVocalMs
+        detectedVocalMs != null -> detectedVocalMs
+        globalFallbackVocalMs >= 0L -> globalFallbackVocalMs
+        else -> null
+    }
+    val autoStartSessionKey = remember(songId, mediaType, player) {
+        if (player == null) "$songId|$mediaType|virtual"
+        else "$songId|$mediaType|${System.identityHashCode(player)}"
+    }
+
+    key(introKey, autoStartSessionKey) {
+        AudioPlayerBar(
+            currentMs = currentMs,
+            totalMs = durationMs,
+            isPlaying = playing,
+            tunaGreen = tunaGreen,
+            textColor = textColor,
+            surfaceColor = Color.Transparent,
+            dialogSurfaceColor = dialogSurfaceColor,
+            skipIntroEnabled = skipIntroEnabled,
+            autoStartSkipIntro = autoStartFromCachedList && skipIntroEnabled,
+            autoStartSessionKey = autoStartSessionKey,
+            vocalStartMs = vocalStartMs,
+            detectedVocalStartMs = detectedVocalMs,
+            onVocalStartChange = { value ->
+                savedVocalMs = value
+                globalFallbackVocalMs = value
+                preferences.edit()
+                    .putLong(introKey, value)
+                    .putLong(AUTO_SKIP_INTRO_FALLBACK_MS_KEY, value)
+                    .apply()
+            },
+            onSkipIntroEnabledChange = { enabled ->
+                skipIntroEnabled = enabled
+                preferences.edit().putBoolean(AUTO_SKIP_INTRO_ENABLED_KEY, enabled).apply()
+            },
+            onPrepareCountIn = {
+                try {
+                    player?.pause()
+                    onPlayingChange(false)
+                } catch (error: Exception) {
+                    Log.w("SongCountIn", "Unable to pause before countdown", error)
+                }
+            },
+            onCountInPlay = { position ->
+                if (player != null) {
+                    playAudioAfterCountIn(
+                        player = player,
+                        positionMs = position,
+                        isCurrentPlayer = isCurrentPlayer,
+                        onPositionChange = onPositionChange,
+                        onPlayingChange = onPlayingChange,
+                        onSeekingChange = onSeekingChange
+                    )
+                } else {
+                    // Chế độ Chạy Chữ dùng đồng hồ ảo, không có MediaPlayer.
+                    onSeekingChange(false)
+                    onPositionChange(position)
+                    onPlayingChange(true)
+                }
+            },
+            onPlayPause = {
+                if (!seeking) {
+                    if (player != null) {
+                        try {
+                            if (player.isPlaying) player.pause() else player.start()
+                            onPlayingChange(player.isPlaying)
+                        } catch (error: Exception) {
+                            Log.w("SongCountIn", "Unable to toggle playback", error)
+                        }
+                    } else {
+                        onPlayingChange(!playing)
+                    }
+                }
+            },
+            onSeek = { position ->
+                if (!seeking) {
+                    try {
+                        if (player != null) player.seekTo(position.toInt())
+                        onPositionChange(position)
+                    } catch (error: Exception) {
+                        Log.w("SongCountIn", "Unable to seek", error)
+                    }
+                }
+            }
+        )
+    }
+}
+
+
+@Composable
+private fun SongHeaderMediaButtons(
+    hasSong: Boolean,
+    isFullScreen: Boolean,
+    surfaceColor: Color,
+    tunaGreen: Color,
+    showFloatingCamera: Boolean,
+    onOpenAlphaTab: () -> Unit,
+    onOpenPlayMode: () -> Unit,
+    onCameraClick: () -> Unit
+) {
+    Spacer(modifier = Modifier.width(6.dp))
+
+    val tabInfiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(
+        label = "tab_blink"
+    )
+    val tabHue by tabInfiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(
+                2000,
+                easing = androidx.compose.animation.core.LinearEasing
+            ),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+        ),
+        label = "tabHue"
+    )
+    val tabAlphaBlink by tabInfiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.2f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(500),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "tabAlphaBlink"
+    )
+    val tabBlinkColor = Color(
+        android.graphics.Color.HSVToColor(floatArrayOf(tabHue, 1f, 1f))
+    )
+
+    Button(
+        onClick = onOpenAlphaTab,
+        colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            Color.Gray.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.size(40.dp),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = CustomIcons.MusicScore,
+                contentDescription = "Guitar Pro Tab",
+                tint = tunaGreen,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = "Tab",
+                color = tabBlinkColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 2.dp, top = 2.dp)
+                    .alpha(tabAlphaBlink)
+            )
+        }
+    }
+
+    if (hasSong) {
+        Spacer(modifier = Modifier.width(6.dp))
+        val aiTransition = androidx.compose.animation.core.rememberInfiniteTransition(
+            label = "blink"
+        )
+        val aiAlpha by aiTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.2f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(500),
+                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+            ),
+            label = "alphaBlink"
+        )
+
+        Button(
+            onClick = onOpenPlayMode,
+            colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                Color.Gray.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.size(40.dp),
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                ChordAIIcon(modifier = Modifier.size(20.dp))
+                Text(
+                    text = "Ai",
+                    color = Color.Red,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(end = 4.dp, top = 2.dp)
+                        .alpha(aiAlpha)
+                )
+            }
+        }
+    }
+
+    if (hasSong && !isFullScreen) {
+        Spacer(modifier = Modifier.width(6.dp))
+        Button(
+            onClick = onCameraClick,
+            colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (showFloatingCamera) {
+                    Color.Red.copy(alpha = 0.5f)
+                } else {
+                    Color.Gray.copy(alpha = 0.5f)
+                }
+            ),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.size(40.dp),
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Icon(
+                Icons.Default.Videocam,
+                contentDescription = "Camera",
+                tint = if (showFloatingCamera) Color.Red else tunaGreen
+            )
+        }
+    }
+}
+
+@Composable
+private fun SongHeaderSupportAndAddButtons(
+    context: Context,
+    showSupportChatIcon: Boolean,
+    supportChatBadgeCount: Int,
+    hasUnreadNotification: Boolean,
+    userRole: String,
+    hasAcceptedPolicyThisSession: Boolean,
+    currentLang: String,
+    surfaceColor: Color,
+    tunaGreen: Color,
+    bgColor: Color,
+    bellRotation: Float,
+    onSupportChatClick: () -> Unit,
+    onShowNotification: () -> Unit,
+    onShowAdminActionSelector: () -> Unit,
+    onShowAddDialog: () -> Unit,
+    onShowAddPolicyDialog: () -> Unit
+) {
+    if (showSupportChatIcon) {
+        Spacer(modifier = Modifier.width(4.dp))
+        Box(contentAlignment = Alignment.TopEnd) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(surfaceColor)
+                    .border(
+                        1.dp,
+                        tunaGreen.copy(alpha = 0.55f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .clickable(onClick = onSupportChatClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.logo),
+                    contentDescription = "Mở trò chuyện hỗ trợ",
+                    modifier = Modifier
+                        .size(21.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                )
+            }
+
+            if (supportChatBadgeCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .offset(x = 5.dp, y = (-5).dp)
+                        .sizeIn(minWidth = 14.dp, minHeight = 14.dp)
+                        .background(Color.Red, CircleShape)
+                        .border(1.dp, bgColor, CircleShape)
+                        .padding(horizontal = 3.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (supportChatBadgeCount > 9) {
+                            "9+"
+                        } else {
+                            supportChatBadgeCount.toString()
+                        },
+                        color = Color.White,
+                        fontSize = 7.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.width(6.dp))
+    Button(
+        onClick = {
+            if (hasUnreadNotification) {
+                onShowNotification()
+            } else {
+                val account = com.google.android.gms.auth.api.signin.GoogleSignIn
+                    .getLastSignedInAccount(context)
+                if (account != null) {
+                    val isSuperAdmin = userRole.equals(
+                        "super_admin",
+                        ignoreCase = true
+                    ) || userRole.equals(
+                        "supper_admin",
+                        ignoreCase = true
+                    )
+                    if (isSuperAdmin) {
+                        onShowAdminActionSelector()
+                    } else if (hasAcceptedPolicyThisSession) {
+                        onShowAddDialog()
+                    } else {
+                        onShowAddPolicyDialog()
+                    }
+                } else {
+                    Toast.makeText(
+                        context,
+                        CoreTranslator.getString("login_required_add", currentLang),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        },
+        colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            Color.Gray.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.size(40.dp),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        if (hasUnreadNotification) {
+            Icon(
+                Icons.Default.NotificationsActive,
+                contentDescription = "Thông báo",
+                tint = Color(0xFFFFC107),
+                modifier = Modifier
+                    .size(24.dp)
+                    .graphicsLayer {
+                        rotationZ = bellRotation
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                            0.5f,
+                            0.2f
+                        )
+                    }
+            )
+        } else {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = CoreTranslator.getString("add", currentLang),
+                tint = tunaGreen
+            )
         }
     }
 }
@@ -1484,6 +3130,7 @@ fun SongTabScreen(
     var searchResults by remember { mutableStateOf<List<SearchResultItem>?>(null) }
     var isSearchingList by remember { mutableStateOf(false) }
     var currentSongData by remember { mutableStateOf<SongDetails?>(null) }
+    val songAsyncCoordinator = remember { SongAsyncCoordinator() }
     var isFetchingDetail by remember { mutableStateOf(false) }
     var imageCacheBuster by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var showRomanNumerals by remember { mutableStateOf(false) }
@@ -1510,8 +3157,16 @@ fun SongTabScreen(
     var showSongToneDialog by remember { mutableStateOf(false) }
     var tutorialVideoUrl by remember { mutableStateOf("") }
     var showPlayModeDialog by remember { mutableStateOf(false) }
-    var showSongIntroSettings by remember { mutableStateOf(false) }
     var mediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) } // <-- BIẾN MỚI
+    val latestMediaPlayer = rememberUpdatedState(mediaPlayer)
+
+    DisposableEffect(songAsyncCoordinator) {
+        onDispose {
+            songAsyncCoordinator.invalidate()
+            stopAndReleaseSongPlayer(latestMediaPlayer.value)
+        }
+    }
+
     val cameraPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             val cameraGranted = permissions[Manifest.permission.CAMERA] == true
@@ -1609,24 +3264,6 @@ fun SongTabScreen(
     var aiProgress by remember { mutableFloatStateOf(0f) }
     var syncedKaraokeLines by remember { mutableStateOf<List<SyncedDbLine>?>(null) }
 
-    // Luu moi bai mot moc hat dau tien + 2 tuy chon. Khong dung chung moc giua cac bai.
-    val songIntroPrefs = remember(context) {
-        context.getSharedPreferences(SONG_INTRO_PREF_NAME, Context.MODE_PRIVATE)
-    }
-    val songIntroId = remember(currentSongData?.songId, currentSongData?.title, currentSongData?.singer) {
-        introSongPreferenceId(currentSongData)
-    }
-    var introSkipEnabled by remember(songIntroId) {
-        mutableStateOf(songIntroPrefs.getBoolean("skip_$songIntroId", false))
-    }
-    var introCountdownEnabled by remember(songIntroId) {
-        mutableStateOf(songIntroPrefs.getBoolean("count_$songIntroId", true))
-    }
-    var manualFirstVocalMs by remember(songIntroId) {
-        mutableLongStateOf(songIntroPrefs.getLong("vocal_$songIntroId", -1L))
-    }
-    val firstVocalTimeMs = configuredVocalStartMs(manualFirstVocalMs, syncedKaraokeLines)
-
     // Tự động in log ra khi bất kỳ nhánh nào (Zing/Youtube/Offline) xử lý xong dữ liệu
     LaunchedEffect(syncedKaraokeLines) {
         syncedKaraokeLines?.let { lines ->
@@ -1657,6 +3294,9 @@ fun SongTabScreen(
 // 👇 BỔ SUNG 2 BIẾN NÀY ĐỂ ĐIỀU KHIỂN AUDIO
     var isAudioPlaying by remember { mutableStateOf(false) }
     var totalAudioDurationMs by remember { mutableLongStateOf(0L) }
+    // Prevent the 60-fps timer from overwriting a countdown seek while it is in flight.
+    var isCountInSeeking by remember { mutableStateOf(false) }
+    LaunchedEffect(mediaPlayer, activeMediaType) { isCountInSeeking = false }
     LaunchedEffect(activeMediaType, webViewRef, mediaPlayer, isAudioPlaying) {
         var lastTickTime = System.currentTimeMillis()
         while (true) {
@@ -1672,8 +3312,10 @@ fun SongTabScreen(
             } else if ((activeMediaType.endsWith("_AUDIO") || activeMediaType == "ZING_KARAOKE") && mediaPlayer != null) {
                 try {
                     // Liên tục cập nhật thời gian từ MediaPlayer thật của hệ thống
-                    currentVideoTimeMs = mediaPlayer!!.currentPosition.toLong()
-                    isAudioPlaying = mediaPlayer!!.isPlaying
+                    if (!isCountInSeeking) {
+                        currentVideoTimeMs = mediaPlayer!!.currentPosition.toLong()
+                        isAudioPlaying = mediaPlayer!!.isPlaying
+                    }
                     if (totalAudioDurationMs == 0L) {
                         totalAudioDurationMs = mediaPlayer!!.duration.toLong()
                     }
@@ -1718,21 +3360,34 @@ fun SongTabScreen(
             searchResults = null
             isFullScreen = false
 
-            // Bắt đầu gọi API lấy chi tiết bài hát
-            isFetchingDetail = true
+            // Bắt đầu gọi API lấy chi tiết bài hát. Request cũ sẽ bị hủy và
+            // chỉ phiên mở bài mới nhất được phép cập nhật giao diện.
             transposeOffset = 0
-
-            coroutineScope.launch {
-                val detail = SongScraper.fetchSongDetails(previewId, currentUserEmail)
-                if (detail.error == null) {
-                    currentSongData = detail
-                    selectedDisplayMode = if (detail.imageCount > 0) "SHEET" else "CHORD"
-                } else {
-                    Toast.makeText(context, CoreTranslator.getString("preview_load_error", currentLang), Toast.LENGTH_SHORT)
-                        .show()
-                }
-                isFetchingDetail = false
-            }
+            launchLatestSongRequest(
+                scope = coroutineScope,
+                coordinator = songAsyncCoordinator,
+                loader = { SongScraper.fetchSongDetails(previewId, currentUserEmail) },
+                onResult = { detail ->
+                    if (detail.error == null) {
+                        currentSongData = detail
+                        selectedDisplayMode = if (detail.imageCount > 0) "SHEET" else "CHORD"
+                    } else {
+                        Toast.makeText(
+                            context,
+                            CoreTranslator.getString("preview_load_error", currentLang),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                },
+                onError = {
+                    Toast.makeText(
+                        context,
+                        CoreTranslator.getString("preview_load_error", currentLang),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
+                onLoadingChanged = { isFetchingDetail = it }
+            )
         }
     }
 
@@ -1776,35 +3431,16 @@ fun SongTabScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(currentSongData) {
+    LaunchedEffect(currentSongData?.songId) {
+        val songSnapshot = currentSongData
+
         showSongToneDialog = false
-        showSongIntroSettings = false
-        selectedLangCode = ""; translatedLyrics = ""; translatedTitle = ""
+        selectedLangCode = ""
+        translatedLyrics = ""
+        translatedTitle = ""
         imageCacheBuster = System.currentTimeMillis()
 
-        // Tự động tắt thông báo reload màu vàng khi có bài hát cụ thể được mở
-        if (currentSongData != null) {
-            hasNewUpdate = false
-            globalHasNewUpdate = false // Lưu vào biến toàn cục để không bị bật lại khi chuyển Tab
-
-            // --- BẮT ĐẦU THÊM MỚI: BÁO CÁO LƯỢT XEM KHI MỞ BÀI ---
-            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                val sId = currentSongData!!.songId
-                if (sId.isNotBlank()) {
-                    // 1. Tăng view nội bộ SQLite để icon mắt nhảy số ngay lập tức
-                    songRepository.incrementViewCountLocal(sId)
-
-                    // 2. Phóng request ngầm gọi API để Server PHP tăng view trên MySQL
-                    SongScraper.fetchSongDetails(sId, currentUserEmail)
-
-                    // 3. Giật cò súng ép giao diện (Trang chủ) Load lại để cập nhật số
-                    dbRefreshTrigger++
-                }
-            }
-            // --- KẾT THÚC THÊM MỚI ---
-        }
-
-        // --- [BẢN VÁ] RESET TOÀN BỘ DỮ LIỆU KARAOKE KHI ĐỔI BÀI HÁT ---
+        // Reset toàn bộ media ngay khi đổi bài hoặc đóng màn hình chi tiết.
         syncedKaraokeLines = null
         activeMediaType = ""
         currentVideoTimeMs = 0L
@@ -1812,25 +3448,35 @@ fun SongTabScreen(
         totalAudioDurationMs = 0L
         webViewRef = null
         isAiAnalyzing = false
-        aiAnalysisMode = "" // <-- BỔ SUNG RESET MODE
+        aiAnalysisMode = ""
         tutorialVideoUrl = ""
         isAudioPlaying = false
-
-        // Tắt nhạc cũ an toàn chống văng App
-        try {
-            if (mediaPlayer?.isPlaying == true) {
-                mediaPlayer?.stop()
-            }
-            mediaPlayer?.release()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        stopAndReleaseSongPlayer(mediaPlayer)
         mediaPlayer = null
-        // --------------------------------------------------------------
 
-        currentSongData?.let {
-            likeCount = it.likes; isLiked = it.isLikedByDevice
-            sharedPref.edit().putBoolean("liked_${it.songId}", it.isLikedByDevice).apply()
+        songSnapshot?.let { openedSong ->
+            likeCount = openedSong.likes
+            isLiked = openedSong.isLikedByDevice
+            sharedPref.edit()
+                .putBoolean("liked_${openedSong.songId}", openedSong.isLikedByDevice)
+                .apply()
+
+            hasNewUpdate = false
+            globalHasNewUpdate = false
+
+            val openedSongId = openedSong.songId
+            if (openedSongId.isNotBlank()) {
+                // Dùng snapshot bất biến; không đọc currentSongData!! trong luồng nền.
+                withContext(Dispatchers.IO) {
+                    songRepository.incrementViewCountLocal(openedSongId)
+                    SongScraper.fetchSongDetails(openedSongId, currentUserEmail)
+                }
+
+                // Effect của bài cũ có thể đã bị hủy khi người dùng đổi bài.
+                if (currentSongData?.songId == openedSongId) {
+                    dbRefreshTrigger++
+                }
+            }
         }
     }
 
@@ -1931,8 +3577,16 @@ fun SongTabScreen(
         } else {
             addToHistory(query)
 
+            // Thoát khỏi phiên bài cũ trước khi bắt đầu tìm kiếm mới.
+            songAsyncCoordinator.invalidate()
+            stopAndReleaseSongPlayer(mediaPlayer)
+            mediaPlayer = null
             currentSongData = null
+            isFetchingDetail = false
             isAutoScrolling = false
+            isAiAnalyzing = false
+            isAudioPlaying = false
+            syncedKaraokeLines = null
             activeMediaType = ""
             webViewRef = null
             isFullScreen = false
@@ -2069,8 +3723,19 @@ fun SongTabScreen(
                 ) {
                     if (currentSongData != null || isFetchingDetail) {
                         IconButton(onClick = {
-                            currentSongData = null; isFetchingDetail = false; transposeOffset =
-                            0; isAutoScrolling = false; activeMediaType = ""; webViewRef = null
+                            // Hủy cả request chi tiết, AI và media của bài vừa thoát.
+                            songAsyncCoordinator.invalidate()
+                            stopAndReleaseSongPlayer(mediaPlayer)
+                            mediaPlayer = null
+                            currentSongData = null
+                            isFetchingDetail = false
+                            transposeOffset = 0
+                            isAutoScrolling = false
+                            isAiAnalyzing = false
+                            isAudioPlaying = false
+                            syncedKaraokeLines = null
+                            activeMediaType = ""
+                            webViewRef = null
                         }, modifier = Modifier.size(36.dp)) {
                             Icon(
                                 Icons.Default.ArrowBack,
@@ -2122,8 +3787,15 @@ fun SongTabScreen(
                                 onResetScreen = {
                                     keyboardController?.hide()
                                     focusManager.clearFocus()
+                                    songAsyncCoordinator.invalidate()
+                                    stopAndReleaseSongPlayer(mediaPlayer)
+                                    mediaPlayer = null
                                     currentSongData = null
+                                    isFetchingDetail = false
                                     isAutoScrolling = false
+                                    isAiAnalyzing = false
+                                    isAudioPlaying = false
+                                    syncedKaraokeLines = null
                                     activeMediaType = ""
                                     webViewRef = null
                                     urlInput = TextFieldValue("")
@@ -2172,162 +3844,43 @@ fun SongTabScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
 
-                            // --- [BẮT ĐẦU] NÚT MỞ BẢNG NHẠC GUITAR PRO TAB ---
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            // Tạo hiệu ứng vòng lặp cho màu sắc RGB và độ chớp (alpha)
-                            val tabInfiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "tab_blink")
-                            val tabHue by tabInfiniteTransition.animateFloat(
-                                initialValue = 0f,
-                                targetValue = 360f,
-                                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                                    animation = androidx.compose.animation.core.tween(2000, easing = androidx.compose.animation.core.LinearEasing),
-                                    repeatMode = androidx.compose.animation.core.RepeatMode.Restart
-                                ),
-                                label = "tabHue"
-                            )
-                            val tabAlphaBlink by tabInfiniteTransition.animateFloat(
-                                initialValue = 1f,
-                                targetValue = 0.2f,
-                                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                                    animation = androidx.compose.animation.core.tween(500), // Tốc độ chớp nháy
-                                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-                                ),
-                                label = "tabAlphaBlink"
-                            )
-                            // Đổi dải màu Float sang Color của Jetpack Compose
-                            val tabBlinkColor = Color(android.graphics.Color.HSVToColor(floatArrayOf(tabHue, 1f, 1f)))
-
-                            Button(
-                                onClick = {
+                            SongHeaderMediaButtons(
+                                hasSong = currentSongData != null,
+                                isFullScreen = isFullScreen,
+                                surfaceColor = surfaceColor,
+                                tunaGreen = tunaGreen,
+                                showFloatingCamera = showFloatingCamera,
+                                onOpenAlphaTab = {
                                     showAlphaTabScreen = true
                                     keyboardController?.hide()
                                     focusManager.clearFocus()
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f)),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.size(40.dp),
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = CustomIcons.MusicScore,
-                                        contentDescription = "Guitar Pro Tab",
-                                        tint = tunaGreen,
-                                        modifier = Modifier.size(20.dp) // Thu nhỏ icon một chút để nhường chỗ cho chữ
-                                    )
-                                    Text(
-                                        text = "Tab",
-                                        color = tabBlinkColor,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(end = 2.dp, top = 2.dp)
-                                            .alpha(tabAlphaBlink)
-                                    )
-                                }
-                            }
-                            // --- [KẾT THÚC] NÚT TAB ---
-
-// 1. NÚT CHORD AI (Chỉ hiển thị khi đang xem 1 bài hát cụ thể)
-                            if (currentSongData != null) {
-                                Spacer(modifier = Modifier.width(6.dp))
-
-// Tạo hiệu ứng nhấp nháy (alpha từ 1f -> 0.2f)
-                                val infiniteTransition =
-                                    androidx.compose.animation.core.rememberInfiniteTransition(label = "blink")
-                                val alphaBlink by infiniteTransition.animateFloat(
-                                    initialValue = 1f,
-                                    targetValue = 0.2f,
-                                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                                        animation = androidx.compose.animation.core.tween(500), // Tốc độ nhấp nháy (500ms)
-                                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-                                    ),
-                                    label = "alphaBlink"
-                                )
-
-                                Button(
-                                    onClick = {
-                                        showPlayModeDialog = true
-                                        keyboardController?.hide()
-                                        focusManager.clearFocus()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        Color.Gray.copy(alpha = 0.5f)
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.size(40.dp),
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        ChordAIIcon(modifier = Modifier.size(20.dp))
-                                        Text(
-                                            text = "Ai",
-                                            color = Color.Red,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(end = 4.dp, top = 2.dp)
-                                                .alpha(alphaBlink)
+                                onOpenPlayMode = {
+                                    showPlayModeDialog = true
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                },
+                                onCameraClick = {
+                                    val hasCamera = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.CAMERA
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    val hasAudio = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.RECORD_AUDIO
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasCamera && hasAudio) {
+                                        showFloatingCamera = !showFloatingCamera
+                                    } else {
+                                        cameraPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.CAMERA,
+                                                Manifest.permission.RECORD_AUDIO
+                                            )
                                         )
                                     }
                                 }
-                            }
-
-// 2. NÚT CAMERA (Chỉ hiển thị khi đang xem 1 bài hát cụ thể)
-                            if (currentSongData != null && !isFullScreen) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Button(
-                                    onClick = {
-                                        val hasCamera = ContextCompat.checkSelfPermission(
-                                            context,
-                                            Manifest.permission.CAMERA
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                        val hasAudio = ContextCompat.checkSelfPermission(
-                                            context,
-                                            Manifest.permission.RECORD_AUDIO
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                        if (hasCamera && hasAudio) {
-                                            showFloatingCamera = !showFloatingCamera
-                                        } else {
-                                            cameraPermissionLauncher.launch(
-                                                arrayOf(
-                                                    Manifest.permission.CAMERA,
-                                                    Manifest.permission.RECORD_AUDIO
-                                                )
-                                            )
-                                        }
-                                    },
-                                    // ĐÃ SỬA: Màu nền xám đen giống hệt các nút khác
-                                    colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
-                                    // ĐÃ SỬA: Viền xám mờ (nếu đang tắt) hoặc Đỏ mờ (nếu đang bật)
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        if (showFloatingCamera) Color.Red.copy(alpha = 0.5f) else Color.Gray.copy(alpha = 0.5f)
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.size(40.dp),
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Videocam,
-                                        contentDescription = "Camera",
-                                        // ĐÃ SỬA: Icon xanh lá đồng bộ, chuyển Đỏ khi đang bật camera
-                                        tint = if (showFloatingCamera) Color.Red else tunaGreen
-                                    )
-                                }
-                            }
+                            )
                         }
                     }
 
@@ -2490,105 +4043,25 @@ fun SongTabScreen(
                             }
                         }
 
-// --- ICON TRÒ CHUYỆN HỖ TRỢ: CHỈ HIỆN KHI CÓ CUỘC TRÒ CHUYỆN ĐANG HOẠT ĐỘNG ---
-                        if (showSupportChatIcon) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Box(contentAlignment = Alignment.TopEnd) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(surfaceColor)
-                                        .border(
-                                            1.dp,
-                                            tunaGreen.copy(alpha = 0.55f),
-                                            RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable { onSupportChatClick() },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.logo),
-                                        contentDescription = "Mở trò chuyện hỗ trợ",
-                                        modifier = Modifier
-                                            .size(21.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                    )
-                                }
+                        SongHeaderSupportAndAddButtons(
+                            context = context,
+                            showSupportChatIcon = showSupportChatIcon,
+                            supportChatBadgeCount = supportChatBadgeCount,
+                            hasUnreadNotification = hasUnreadNotification,
+                            userRole = userRole,
+                            hasAcceptedPolicyThisSession = hasAcceptedPolicyThisSession,
+                            currentLang = currentLang,
+                            surfaceColor = surfaceColor,
+                            tunaGreen = tunaGreen,
+                            bgColor = bgColor,
+                            bellRotation = bellRotation,
+                            onSupportChatClick = onSupportChatClick,
+                            onShowNotification = { showNotificationDialog = true },
+                            onShowAdminActionSelector = { showAdminActionSelector = true },
+                            onShowAddDialog = { showAddDialog = true },
+                            onShowAddPolicyDialog = { showAddPolicyDialog = true }
+                        )
 
-                                if (supportChatBadgeCount > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .offset(x = 5.dp, y = (-5).dp)
-                                            .sizeIn(minWidth = 14.dp, minHeight = 14.dp)
-                                            .background(Color.Red, CircleShape)
-                                            .border(1.dp, bgColor, CircleShape)
-                                            .padding(horizontal = 3.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = if (supportChatBadgeCount > 9) "9+" else supportChatBadgeCount.toString(),
-                                            color = Color.White,
-                                            fontSize = 7.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-// --- NÚT THÊM BÀI HÁT / CHUÔNG THÔNG BÁO ---
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Button(
-                            onClick = {
-                                if (hasUnreadNotification) {
-                                    showNotificationDialog = true
-                                } else {
-                                    val acc = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
-                                    if (acc != null) {
-                                        // KIỂM TRA QUYỀN ADMIN TỐI CAO
-                                        if (userRole.equals("super_admin", ignoreCase = true) || userRole.equals("supper_admin", ignoreCase = true)) {
-                                            showAdminActionSelector = true
-                                        } else {
-                                            // NGƯỜI DÙNG BÌNH THƯỜNG -> CHẠY THẲNG VÀO FORM THÊM BÀI HÁT
-                                            if (hasAcceptedPolicyThisSession) showAddDialog = true else showAddPolicyDialog = true
-                                        }
-                                    } else {
-                                        Toast.makeText(
-                                            context,
-                                            CoreTranslator.getString("login_required_add", currentLang),
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = surfaceColor),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.size(40.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            if (hasUnreadNotification) {
-                                Icon(
-                                    Icons.Default.NotificationsActive,
-                                    contentDescription = "Thông báo",
-                                    tint = Color(0xFFFFC107),
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .graphicsLayer {
-                                            rotationZ = bellRotation
-                                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.2f)
-                                        }
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = CoreTranslator.getString("add", currentLang),
-                                    tint = tunaGreen
-                                )
-                            }
-                        }
                     }
 
                 }
@@ -2630,6 +4103,7 @@ fun SongTabScreen(
                         )
                     }
                 } else if (currentSongData != null) {
+                    val displayedSong = currentSongData!!
 
                     val scrollState = rememberScrollState()
                     LaunchedEffect(isAutoScrolling, scrollSpeed) {
@@ -2655,7 +4129,7 @@ fun SongTabScreen(
                             if (isMediaActive && !isDoNotDisturbMode) { // Ẩn Header Media khi bật "Không làm phiền"
                                 SongDetailHeader(
                                     context = context,
-                                    currentSongData = currentSongData!!,
+                                    currentSongData = displayedSong,
                                     currentLang = currentLang,
                                     isLiked = isLiked,
                                     likeCount = likeCount,
@@ -2671,14 +4145,14 @@ fun SongTabScreen(
                                     surfaceColor = surfaceColor,
                                     onCreateCustomChord = {
                                         customTemplateSongData = SongDetails(
-                                            title = currentSongData!!.title,
-                                            composer = currentSongData!!.composer,
-                                            singer = currentSongData!!.singer,
-                                            baseTone = currentSongData!!.baseTone,
-                                            rhythm = currentSongData!!.rhythm,
-                                            bpm = currentSongData!!.bpm,
-                                            videoUrl = currentSongData!!.videoUrl,
-                                            lyrics = currentSongData!!.lyrics
+                                            title = displayedSong.title,
+                                            composer = displayedSong.composer,
+                                            singer = displayedSong.singer,
+                                            baseTone = displayedSong.baseTone,
+                                            rhythm = displayedSong.rhythm,
+                                            bpm = displayedSong.bpm,
+                                            videoUrl = displayedSong.videoUrl,
+                                            lyrics = displayedSong.lyrics
                                         )
                                         showAddDialog = true
                                     },
@@ -2688,10 +4162,10 @@ fun SongTabScreen(
                                     },
                                     onDeleteCustomChord = {
                                         coroutineScope.launch {
-                                            songRepository.deleteCustomSongLocal(currentSongData!!.title, currentSongData!!.singer)
+                                            songRepository.deleteCustomSongLocal(displayedSong.title, displayedSong.singer)
                                             dbRefreshTrigger++
-                                            if (currentSongData!!.songId.startsWith("local_")) {
-                                                val origSong = songRepository.getSongByExactIdOrTitle("", currentSongData!!.title)
+                                            if (displayedSong.songId.startsWith("local_")) {
+                                                val origSong = songRepository.getSongByExactIdOrTitle("", displayedSong.title)
                                                 if (origSong != null) {
                                                     currentSongData = SongDetails(
                                                         title = origSong.title, singer = origSong.ca_si, composer = origSong.tac_gia,
@@ -2730,10 +4204,10 @@ fun SongTabScreen(
                                     },
                                     onReportClick = {
                                         reportInfo = ReportInfo(
-                                            currentSongData!!.songId,
-                                            currentSongData!!.title,
-                                            currentSongData!!.singer,
-                                            currentSongData!!.composer
+                                            displayedSong.songId,
+                                            displayedSong.title,
+                                            displayedSong.singer,
+                                            displayedSong.composer
                                         )
                                     },
                                     onLikeClick = {
@@ -2743,8 +4217,8 @@ fun SongTabScreen(
                                             val newLikedState = !isLiked
                                             isLiked = newLikedState
                                             likeCount = if (newLikedState) likeCount + 1 else maxOf(0, likeCount - 1)
-                                            sharedPref.edit().putBoolean("liked_${currentSongData!!.songId}", newLikedState).apply()
-                                            coroutineScope.launch { SongScraper.toggleLike(currentSongData!!.songId, currentUserEmail, newLikedState) }
+                                            sharedPref.edit().putBoolean("liked_${displayedSong.songId}", newLikedState).apply()
+                                            coroutineScope.launch { SongScraper.toggleLike(displayedSong.songId, currentUserEmail, newLikedState) }
                                         }
                                     },
                                     onPlayVideoClick = { /* Đang phát rồi không xử lý thêm */ },
@@ -2752,10 +4226,10 @@ fun SongTabScreen(
                                     onDeleteClick = {
                                         coroutineScope.launch {
                                             // 1. Phóng lệnh xóa lên Server MySQL
-                                            val successOnline = SongScraper.deleteSong(currentSongData!!.songId)
+                                            val successOnline = SongScraper.deleteSong(displayedSong.songId)
 
                                             // 2. Dọn dẹp bản sao trong SQLite cục bộ
-                                            val successOffline = songRepository.deleteSongOffline(currentSongData!!.songId)
+                                            val successOffline = songRepository.deleteSongOffline(displayedSong.songId)
 
                                             if (successOnline || successOffline) {
                                                 Toast.makeText(context, CoreTranslator.getString("song_deleted_system", currentLang), Toast.LENGTH_SHORT).show()
@@ -2791,7 +4265,7 @@ fun SongTabScreen(
                                 if (!isFullScreen && !isMediaActive && !isDoNotDisturbMode) { // Ẩn Header cuộn khi bật "Không làm phiền"
                                     SongDetailHeader(
                                         context = context,
-                                        currentSongData = currentSongData!!,
+                                        currentSongData = displayedSong,
                                         currentLang = currentLang,
                                         isLiked = isLiked,
                                         likeCount = likeCount,
@@ -2807,14 +4281,14 @@ fun SongTabScreen(
                                         surfaceColor = surfaceColor,
                                         onCreateCustomChord = {
                                             customTemplateSongData = SongDetails(
-                                                title = currentSongData!!.title,
-                                                composer = currentSongData!!.composer,
-                                                singer = currentSongData!!.singer,
-                                                baseTone = currentSongData!!.baseTone,
-                                                rhythm = currentSongData!!.rhythm,
-                                                bpm = currentSongData!!.bpm,
-                                                videoUrl = currentSongData!!.videoUrl,
-                                                lyrics = currentSongData!!.lyrics
+                                                title = displayedSong.title,
+                                                composer = displayedSong.composer,
+                                                singer = displayedSong.singer,
+                                                baseTone = displayedSong.baseTone,
+                                                rhythm = displayedSong.rhythm,
+                                                bpm = displayedSong.bpm,
+                                                videoUrl = displayedSong.videoUrl,
+                                                lyrics = displayedSong.lyrics
                                             )
                                             showAddDialog = true
                                         },
@@ -2824,10 +4298,10 @@ fun SongTabScreen(
                                         },
                                         onDeleteCustomChord = {
                                             coroutineScope.launch {
-                                                songRepository.deleteCustomSongLocal(currentSongData!!.title, currentSongData!!.singer)
+                                                songRepository.deleteCustomSongLocal(displayedSong.title, displayedSong.singer)
                                                 dbRefreshTrigger++
-                                                if (currentSongData!!.songId.startsWith("local_")) {
-                                                    val origSong = songRepository.getSongByExactIdOrTitle("", currentSongData!!.title)
+                                                if (displayedSong.songId.startsWith("local_")) {
+                                                    val origSong = songRepository.getSongByExactIdOrTitle("", displayedSong.title)
                                                     if (origSong != null) {
                                                         currentSongData = SongDetails(
                                                             title = origSong.title, singer = origSong.ca_si, composer = origSong.tac_gia,
@@ -2852,10 +4326,10 @@ fun SongTabScreen(
                                         },
                                         onReportClick = {
                                             reportInfo = ReportInfo(
-                                                currentSongData!!.songId,
-                                                currentSongData!!.title,
-                                                currentSongData!!.singer,
-                                                currentSongData!!.composer
+                                                displayedSong.songId,
+                                                displayedSong.title,
+                                                displayedSong.singer,
+                                                displayedSong.composer
                                             )
                                         },
                                         onLikeClick = {
@@ -2865,8 +4339,8 @@ fun SongTabScreen(
                                                 val newLikedState = !isLiked
                                                 isLiked = newLikedState
                                                 likeCount = if (newLikedState) likeCount + 1 else maxOf(0, likeCount - 1)
-                                                sharedPref.edit().putBoolean("liked_${currentSongData!!.songId}", newLikedState).apply()
-                                                coroutineScope.launch { SongScraper.toggleLike(currentSongData!!.songId, currentUserEmail, newLikedState) }
+                                                sharedPref.edit().putBoolean("liked_${displayedSong.songId}", newLikedState).apply()
+                                                coroutineScope.launch { SongScraper.toggleLike(displayedSong.songId, currentUserEmail, newLikedState) }
                                             }
                                         },
                                         onPlayVideoClick = {
@@ -2878,8 +4352,8 @@ fun SongTabScreen(
                                         onEditClick = { showEditDialog = true },
                                         onDeleteClick = {
                                             coroutineScope.launch {
-                                                val successOnline = SongScraper.deleteSong(currentSongData!!.songId)
-                                                val successOffline = songRepository.deleteSongOffline(currentSongData!!.songId)
+                                                val successOnline = SongScraper.deleteSong(displayedSong.songId)
+                                                val successOffline = songRepository.deleteSongOffline(displayedSong.songId)
 
                                                 if (successOnline || successOffline) {
                                                     Toast.makeText(context, CoreTranslator.getString("delete_success", currentLang), Toast.LENGTH_SHORT).show()
@@ -2906,7 +4380,7 @@ fun SongTabScreen(
                                         )
                                     }
                                     SheetMusicViewer(
-                                        currentSongData = currentSongData!!,
+                                        currentSongData = displayedSong,
                                         currentLang = currentLang,
                                         isFullScreen = isFullScreen,
                                         onFullScreenToggle = { isFullScreen = !isFullScreen },
@@ -2924,8 +4398,8 @@ fun SongTabScreen(
                                 // --- HIỂN THỊ HỢP ÂM CHỮ ---
                                 else {
 // --- TOOLBAR ĐIỀU KHIỂN HỢP ÂM CẢI TIẾN ---
-                                    var isPatternBarHidden by remember(currentSongData!!.songId) {
-                                        mutableStateOf(sharedPref.getBoolean("hide_pattern_${currentSongData!!.songId}", false))
+                                    var isPatternBarHidden by remember(displayedSong.songId) {
+                                        mutableStateOf(sharedPref.getBoolean("hide_pattern_${displayedSong.songId}", false))
                                     }
                                     var selectedPatternUpdateTrigger by remember { mutableIntStateOf(0) }
 
@@ -2948,7 +4422,7 @@ fun SongTabScreen(
                                                 // 1. THANH CÔNG CỤ (Đã bóc tách để tránh lỗi MethodTooLarge)
                                                 ChordControlToolbar(
                                                     currentLang = currentLang,
-                                                    currentSongData = currentSongData!!,
+                                                    currentSongData = displayedSong,
                                                     surfaceColor = surfaceColor,
                                                     bgColor = bgColor,
                                                     textColor = textColor,
@@ -2988,8 +4462,8 @@ fun SongTabScreen(
                                                         } else {
                                                             isTranslating = true; translatedLyrics = ""; translatedTitle = ""
                                                             coroutineScope.launch {
-                                                                val tDef = async { SongScraper.translateText(currentSongData!!.title, langCode) }
-                                                                val lDef = async { SongScraper.translateText(currentSongData!!.lyrics, langCode) }
+                                                                val tDef = async { SongScraper.translateText(displayedSong.title, langCode) }
+                                                                val lDef = async { SongScraper.translateText(displayedSong.lyrics, langCode) }
                                                                 translatedTitle = tDef.await()
                                                                 translatedLyrics = lDef.await()
                                                                 isTranslating = false
@@ -3002,22 +4476,22 @@ fun SongTabScreen(
                                                 )
 
                                                 // HIỂN THỊ ĐẦY ĐỦ THANH TIẾT TẤU KHI CHƯA ẨN
-                                                if (currentSongData!!.rhythm.isNotBlank() && !isPatternBarHidden) {
+                                                if (displayedSong.rhythm.isNotBlank() && !isPatternBarHidden) {
                                                     HorizontalDivider(color = Color.Gray.copy(alpha = 0.15f), thickness = 1.dp)
 
-                                                    key(selectedPatternUpdateTrigger, currentSongData!!.songId) {
-                                                        val extractedChordsForBar = remember(currentSongData!!.lyrics, transposeOffset) {
+                                                    key(selectedPatternUpdateTrigger, displayedSong.songId) {
+                                                        val extractedChordsForBar = remember(displayedSong.lyrics, transposeOffset) {
                                                             Regex("\\[(.*?)\\]")
-                                                                .findAll(currentSongData!!.lyrics)
+                                                                .findAll(displayedSong.lyrics)
                                                                 .map { transposeSingleChord(it.groupValues[1], transposeOffset) }
                                                                 .distinct()
                                                                 .toList()
                                                         }
 
                                                         SingleStrummingPatternBar(
-                                                            songId = currentSongData!!.songId,
-                                                            rhythmName = currentSongData!!.rhythm,
-                                                            bpm = currentSongData!!.bpm.replace("\n", "").replace("\r", "").trim().toFloatOrNull() ?: 74f,
+                                                            songId = displayedSong.songId,
+                                                            rhythmName = displayedSong.rhythm,
+                                                            bpm = displayedSong.bpm.replace("\n", "").replace("\r", "").trim().toFloatOrNull() ?: 74f,
                                                             songChords = extractedChordsForBar,
                                                             guitarChordsList = guitarChordsList,
                                                             surfaceColor = surfaceColor,
@@ -3025,7 +4499,7 @@ fun SongTabScreen(
                                                             textColor = textColor,
                                                             onHide = {
                                                                 isPatternBarHidden = true
-                                                                sharedPref.edit().putBoolean("hide_pattern_${currentSongData!!.songId}", true).apply()
+                                                                sharedPref.edit().putBoolean("hide_pattern_${displayedSong.songId}", true).apply()
                                                             },
                                                             onOpenFullDialog = { showStrummingDialog = true }
                                                         )
@@ -3035,39 +4509,31 @@ fun SongTabScreen(
                                                 // 2. THANH TUA NHẠC DÍNH LIỀN BÊN DƯỚI
                                                 if (activeMediaType.endsWith("_AUDIO") || activeMediaType == "ZING_KARAOKE") {
                                                     androidx.compose.material3.HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
-                                                    AudioPlayerBar(
+                                                    SongIntroAudioControls(
+                                                        songId = displayedSong.songId,
+                                                        mediaType = activeMediaType,
+                                                        preferences = sharedPref,
+                                                        detectedVocalMs = syncedKaraokeLines
+                                                            ?.firstOrNull { it.startTimeMs > 0L }?.startTimeMs,
+                                                        player = mediaPlayer,
+                                                        isCurrentPlayer = { mediaPlayer === it },
                                                         currentMs = currentVideoTimeMs,
-                                                        totalMs = totalAudioDurationMs,
-                                                        isPlaying = isAudioPlaying,
+                                                        durationMs = totalAudioDurationMs,
+                                                        playing = isAudioPlaying,
+                                                        seeking = isCountInSeeking,
                                                         tunaGreen = tunaGreen,
                                                         textColor = textColor,
-                                                        surfaceColor = Color.Transparent, // Để trong suốt nhằm mượn màu nền của thanh công cụ
-                                                        onPlayPause = {
-                                                            // Ra lệnh dừng/phát trực tiếp cho phần cứng âm thanh
-                                                            if (isAudioPlaying) {
-                                                                mediaPlayer?.pause()
-                                                            } else {
-                                                                mediaPlayer?.start()
-                                                            }
-                                                            isAudioPlaying = !isAudioPlaying
-                                                        },
-                                                        onSeek = { ms ->
-                                                            // Ra lệnh tua trực tiếp cho phần cứng âm thanh
-                                                            mediaPlayer?.seekTo(ms.toInt())
-                                                            currentVideoTimeMs = ms
-                                                        }
-                                                    )
-                                                    SongIntroSettingsQuickAccess(
-                                                        currentLang = currentLang,
-                                                        firstVocalMs = firstVocalTimeMs,
-                                                        tunaGreen = tunaGreen,
-                                                        onClick = { showSongIntroSettings = true }
+                                                        dialogSurfaceColor = surfaceColor,
+                                                        autoStartFromCachedList = isFastLoadingCache,
+                                                        onPositionChange = { currentVideoTimeMs = it },
+                                                        onPlayingChange = { isAudioPlaying = it },
+                                                        onSeekingChange = { isCountInSeeking = it }
                                                     )
                                                 }
                                             }
 
                                             // NÚT MŨI TÊN NHỎ GỌN NẰM ĐÈ TRỰC TIẾP TRÊN BORDER DƯỚI KHI ẨN
-                                            if (currentSongData!!.rhythm.isNotBlank() && isPatternBarHidden) {
+                                            if (displayedSong.rhythm.isNotBlank() && isPatternBarHidden) {
                                                 Box(
                                                     modifier = Modifier
                                                         .offset(y = 9.dp)
@@ -3077,7 +4543,7 @@ fun SongTabScreen(
                                                         .border(1.dp, tunaGreen.copy(alpha = 0.4f), CircleShape)
                                                         .clickable {
                                                             isPatternBarHidden = false
-                                                            sharedPref.edit().putBoolean("hide_pattern_${currentSongData!!.songId}", false).apply()
+                                                            sharedPref.edit().putBoolean("hide_pattern_${displayedSong.songId}", false).apply()
                                                         },
                                                     contentAlignment = Alignment.Center
                                                 ) {
@@ -3098,10 +4564,10 @@ fun SongTabScreen(
                                             modifier = Modifier.height(
                                                 when {
                                                     // Khoảng cách rộng hơn (24.dp) khi thanh tiết tấu đang hiển thị
-                                                    currentSongData!!.rhythm.isNotBlank() && !isPatternBarHidden -> 12.dp
+                                                    displayedSong.rhythm.isNotBlank() && !isPatternBarHidden -> 12.dp
 
                                                     // Khoảng cách vừa phải (14.dp) để tránh dính nút mũi tên khi thu gọn
-                                                    currentSongData!!.rhythm.isNotBlank() && isPatternBarHidden -> 12.dp
+                                                    displayedSong.rhythm.isNotBlank() && isPatternBarHidden -> 12.dp
 
                                                     // Mặc định
                                                     else -> 12.dp
@@ -3113,7 +4579,7 @@ fun SongTabScreen(
                                     if (translatedLyrics.isNotBlank() && selectedLangCode != "") {
                                         val displayLyrics = if (isPronounSwapped) swapPronounsSafe(translatedLyrics) else translatedLyrics
                                         val finalLyrics = if (isLyricsOnly) formatCleanLyricsOnly(displayLyrics) else formatRawLyrics(displayLyrics)
-                                        ChordTextRenderer(lyrics = finalLyrics, chordColor = customChordColor, textColor = textColor, offset = transposeOffset, fontSize = fontSizeBody, isChordOverText = if (isLyricsOnly) false else isChordOverText, showRomanNumerals = showRomanNumerals, isEasyChordMode = isEasyChordMode, baseTone = currentSongData!!.baseTone, onChordClick = { popupChord = it })
+                                        ChordTextRenderer(lyrics = finalLyrics, chordColor = customChordColor, textColor = textColor, offset = transposeOffset, fontSize = fontSizeBody, isChordOverText = if (isLyricsOnly) false else isChordOverText, showRomanNumerals = showRomanNumerals, isEasyChordMode = isEasyChordMode, baseTone = displayedSong.baseTone, onChordClick = { popupChord = it })
                                         Spacer(modifier = Modifier.height(20.dp))
                                     } else {
                                         // 1. Cố định State an toàn để tránh bị null khi Render
@@ -3186,26 +4652,13 @@ fun SongTabScreen(
                                 }
 
                                 if (guitarChordsList.isNotEmpty() && !isLyricsOnly) {
-                                    SongChordsSummary(lyrics = currentSongData!!.lyrics, transposeOffset = transposeOffset, isEasyChordMode = isEasyChordMode, guitarChordsList = guitarChordsList, tunaGreen = tunaGreen, surfaceColor = surfaceColor, textColor = textColor, currentLang = currentLang, onChordClick = { popupChord = it })
+                                    SongChordsSummary(lyrics = displayedSong.lyrics, transposeOffset = transposeOffset, isEasyChordMode = isEasyChordMode, guitarChordsList = guitarChordsList, tunaGreen = tunaGreen, surfaceColor = surfaceColor, textColor = textColor, currentLang = currentLang, onChordClick = { popupChord = it })
                                 }
 
                                 // Giữ khoảng trống cuối nội dung để nút cuộn lên không che phần hợp âm.
                                 Spacer(modifier = Modifier.height(92.dp))
                             }
                         } // Kết thúc Column tổng chứa (Header cố định + Nội dung cuộn)
-
-                        // Dem nguoc dua vao timeline that, pause/seek cung pause/seek so dem.
-                        // Chi hien khi co moc tu dau tien (AI hoac nguoi dung da luu).
-                        val activeAudioForIntro = activeMediaType.endsWith("_AUDIO") || activeMediaType == "ZING_KARAOKE"
-                        val countdownRemaining = (firstVocalTimeMs ?: 0L) - (currentVideoTimeMs + syncOffsetMs)
-                        if (activeAudioForIntro && !isDoNotDisturbMode && introCountdownEnabled && isAudioPlaying &&
-                            firstVocalTimeMs != null && countdownRemaining in 1L..3_000L
-                        ) {
-                            val countdownNumber = ((countdownRemaining + 999L) / 1_000L).toInt().coerceIn(1, 3)
-                            Box(modifier = Modifier.align(Alignment.Center).zIndex(3f)) {
-                                SongIntroCountdownOverlay(countdownNumber, currentLang, tunaGreen)
-                            }
-                        }
 
                         val fabAlpha by animateFloatAsState(
                             targetValue = if (scrollState.value > 800) 1f else 0f,
@@ -3241,56 +4694,10 @@ fun SongTabScreen(
                             }
                         }
 
-                        if (showSongIntroSettings && currentSongData != null) {
-                            SongIntroCountdownSettingsDialog(
-                                songId = songIntroId,
-                                currentLang = currentLang,
-                                currentTimeMs = currentVideoTimeMs,
-                                durationMs = totalAudioDurationMs,
-                                autoVocalMs = firstRealVocalStartMs(syncedKaraokeLines),
-                                initialManualStartMs = manualFirstVocalMs,
-                                initialSkipIntro = introSkipEnabled,
-                                initialCountdown = introCountdownEnabled,
-                                surfaceColor = surfaceColor,
-                                textColor = textColor,
-                                tunaGreen = tunaGreen,
-                                onDismiss = { showSongIntroSettings = false },
-                                onSave = { skip, count, manualTime ->
-                                    songIntroPrefs.edit()
-                                        .putBoolean("skip_$songIntroId", skip)
-                                        .putBoolean("count_$songIntroId", count)
-                                        .putLong("vocal_$songIntroId", manualTime)
-                                        .apply()
-                                    introSkipEnabled = skip
-                                    introCountdownEnabled = count
-                                    manualFirstVocalMs = manualTime
-                                    showSongIntroSettings = false
-                                },
-                                onPreview = { firstVocal ->
-                                    val previewMs = (firstVocal - 3_000L).coerceAtLeast(0L)
-                                    val previewPlayer = mediaPlayer
-                                    if (previewPlayer != null) {
-                                        runCatching { previewPlayer.pause() }
-                                        isAudioPlaying = false
-                                        startSongMediaPlayerAtIntro(previewPlayer, true, firstVocal) { startMs ->
-                                            if (mediaPlayer === previewPlayer) {
-                                                currentVideoTimeMs = startMs
-                                                isAudioPlaying = true
-                                            }
-                                        }
-                                    } else if (activeMediaType == "ZING_KARAOKE") {
-                                        currentVideoTimeMs = previewMs
-                                        isAudioPlaying = true
-                                    }
-                                    showSongIntroSettings = false
-                                }
-                            )
-                        }
-
                         if (showSongToneDialog && currentSongData != null) {
                             SongToneDialog(
                                 currentLang = currentLang,
-                                baseTone = currentSongData!!.baseTone,
+                                baseTone = displayedSong.baseTone,
                                 currentTransposeOffset = transposeOffset,
                                 tunaGreen = tunaGreen,
                                 surfaceColor = surfaceColor,
@@ -3307,8 +4714,8 @@ fun SongTabScreen(
 
                         if (showTutorialSheet && currentSongData != null) {
                             TutorialBottomSheet(
-                                songTitle = currentSongData!!.title,
-                                songSinger = currentSongData!!.singer,
+                                songTitle = displayedSong.title,
+                                songSinger = displayedSong.singer,
                                 tunaGreen = tunaGreen,
                                 bgColor = bgColor,
                                 surfaceColor = surfaceColor,
@@ -3324,10 +4731,10 @@ fun SongTabScreen(
                         }
 
                         if (showStrummingDialog && currentSongData != null) {
-                            val safeBpm = currentSongData!!.bpm.replace("\n", "").replace("\r", "").trim().toFloatOrNull() ?: 120f
+                            val safeBpm = displayedSong.bpm.replace("\n", "").replace("\r", "").trim().toFloatOrNull() ?: 120f
 
                             val extractedChords = Regex("\\[(.*?)\\]")
-                                .findAll(currentSongData!!.lyrics)
+                                .findAll(displayedSong.lyrics)
                                 .map { match ->
                                     transposeSingleChord(match.groupValues[1], transposeOffset)
                                 }
@@ -3335,8 +4742,8 @@ fun SongTabScreen(
                                 .toList()
 
                             StrummingPatternDialog(
-                                songId = currentSongData!!.songId,
-                                rhythmName = currentSongData!!.rhythm,
+                                songId = displayedSong.songId,
+                                rhythmName = displayedSong.rhythm,
                                 bpm = safeBpm,
                                 songChords = extractedChords,
                                 guitarChordsList = guitarChordsList,
@@ -3344,7 +4751,7 @@ fun SongTabScreen(
                                 tunaGreen = tunaGreen,
                                 textColor = textColor,
                                 onPatternSelected = { patternId, isArp ->
-                                    sharedPref.edit().putBoolean("hide_pattern_${currentSongData!!.songId}", false).apply()
+                                    sharedPref.edit().putBoolean("hide_pattern_${displayedSong.songId}", false).apply()
                                     dbRefreshTrigger++
                                 },
                                 onDismiss = { showStrummingDialog = false }
@@ -3381,20 +4788,37 @@ fun SongTabScreen(
                         userRole = userRole,
                         sharedPref = sharedPref,
                         onOpenDetail = { item, mode ->
-                            keyboardController?.hide(); focusManager.clearFocus()
-                            selectedDisplayMode = mode; isFetchingDetail = true; transposeOffset = 0; isFullScreen = false
+                            keyboardController?.hide()
+                            focusManager.clearFocus()
+                            selectedDisplayMode = mode
+                            transposeOffset = 0
+                            isFullScreen = false
                             addToHistory("${item.url}|${item.title}")
-                            coroutineScope.launch {
-                                val localDetail = songRepository.getSongDetailsLocal(
-                                    songId = item.url,
-                                    songTitle = item.title,
-                                    singer = item.singer,
-                                    isLikedByDevice = sharedPref.getBoolean("liked_${item.url}", false)
-                                )
-                                currentSongData = localDetail
-                                    ?: SongScraper.fetchSongDetails(item.url, currentUserEmail)
-                                isFetchingDetail = false
-                            }
+                            currentSongData = null
+
+                            launchLatestSongRequest(
+                                scope = coroutineScope,
+                                coordinator = songAsyncCoordinator,
+                                loader = {
+                                    songRepository.getSongDetailsLocal(
+                                        songId = item.url,
+                                        songTitle = item.title,
+                                        singer = item.singer,
+                                        isLikedByDevice = sharedPref.getBoolean("liked_${item.url}", false)
+                                    ) ?: SongScraper.fetchSongDetails(item.url, currentUserEmail)
+                                },
+                                onResult = { detail ->
+                                    if (detail.error == null) currentSongData = detail
+                                },
+                                onError = {
+                                    Toast.makeText(
+                                        context,
+                                        CoreTranslator.getString("preview_load_error", currentLang),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                                onLoadingChanged = { isFetchingDetail = it }
+                            )
                         },
                         onReport = { reportInfo = it },
                         onChordPopup = { popupChord = it },
@@ -3414,16 +4838,22 @@ fun SongTabScreen(
                         onSongClick = { song, mode ->
                             addToHistory("${song.id}|${song.title}")
                             selectedDisplayMode = mode
-                            isFetchingDetail = true
                             transposeOffset = 0
                             isFullScreen = false
-                            coroutineScope.launch {
-                                currentSongData = songRepository.getSongDetailsLocal(
-                                    song = song,
-                                    isLikedByDevice = sharedPref.getBoolean("liked_${song.id}", false)
-                                )
-                                isFetchingDetail = false
-                            }
+                            currentSongData = null
+
+                            launchLatestSongRequest(
+                                scope = coroutineScope,
+                                coordinator = songAsyncCoordinator,
+                                loader = {
+                                    songRepository.getSongDetailsLocal(
+                                        song = song,
+                                        isLikedByDevice = sharedPref.getBoolean("liked_${song.id}", false)
+                                    )
+                                },
+                                onResult = { detail -> currentSongData = detail },
+                                onLoadingChanged = { isFetchingDetail = it }
+                            )
                         },
                         onArtistClick = { artistName ->
                             val cleanName = artistName.removePrefix("ca sĩ:").removePrefix("ca si:").removePrefix("Ca sĩ:").removePrefix("Ca si:").trim()
@@ -3546,19 +4976,26 @@ fun SongTabScreen(
                                     items(offlineSongs.size) { index ->
                                         val song = offlineSongs[index]
                                         val openSongDetail: (String) -> Unit = { mode ->
-                                            keyboardController?.hide(); focusManager.clearFocus()
-                                            selectedDisplayMode = mode; isFetchingDetail = true; transposeOffset = 0; isFullScreen = false
-
-                                            // ĐÃ THÊM: Lưu ID và tên bài hát vào lịch sử khi click
+                                            keyboardController?.hide()
+                                            focusManager.clearFocus()
+                                            selectedDisplayMode = mode
+                                            transposeOffset = 0
+                                            isFullScreen = false
                                             addToHistory("${song.id}|${song.title}")
+                                            currentSongData = null
 
-                                            coroutineScope.launch {
-                                                currentSongData = songRepository.getSongDetailsLocal(
-                                                    song = song,
-                                                    isLikedByDevice = sharedPref.getBoolean("liked_${song.id}", false)
-                                                )
-                                                isFetchingDetail = false
-                                            }
+                                            launchLatestSongRequest(
+                                                scope = coroutineScope,
+                                                coordinator = songAsyncCoordinator,
+                                                loader = {
+                                                    songRepository.getSongDetailsLocal(
+                                                        song = song,
+                                                        isLikedByDevice = sharedPref.getBoolean("liked_${song.id}", false)
+                                                    )
+                                                },
+                                                onResult = { detail -> currentSongData = detail },
+                                                onLoadingChanged = { isFetchingDetail = it }
+                                            )
                                         }
 
                                         // GỌI COMPONENT THẺ BÀI HÁT TỪ BÊN NGOÀI VÀO
@@ -3580,6 +5017,7 @@ fun SongTabScreen(
                                             onOpenCustomDetail = { customDetail ->
                                                 keyboardController?.hide()
                                                 focusManager.clearFocus()
+                                                songAsyncCoordinator.beginNewSong()
                                                 selectedDisplayMode = "CHORD"
                                                 isFetchingDetail = false
                                                 transposeOffset = 0
@@ -3657,49 +5095,43 @@ fun SongTabScreen(
                         isBroadSearch = false
                         offlineSearchQuery = ""
                         searchResults = null
-                        isFetchingDetail = true
                         transposeOffset = 0
                         isFullScreen = false
+                        currentSongData = null
 
-                        coroutineScope.launch {
-                            val songId = topMatch?.id ?: ""
-                            // Luôn truy vấn bản ghi đầy đủ từ SQLite bằng getSongByExactIdOrTitle
-                            val targetSong = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                songRepository.getSongByExactIdOrTitle(songId, query)
-                            }
-
-                            if (targetSong != null) {
-                                currentSongData = SongDetails(
-                                    title = targetSong.title,
-                                    singer = targetSong.ca_si,
-                                    composer = targetSong.tac_gia,
-                                    baseTone = targetSong.tong,
-                                    rhythm = targetSong.dieu.ifBlank { targetSong.rhythm },
-                                    bpm = if (targetSong.bpm > 0) targetSong.bpm.toString() else "",
-                                    lyrics = targetSong.lyrics.joinToString("\n"),
-                                    videoUrl = targetSong.youtubeUrl,
-                                    songId = targetSong.id,
-                                    slug = targetSong.slug,
-                                    imageCount = targetSong.image_count,
-                                    likes = targetSong.favoriteCount,
-                                    isLikedByDevice = sharedPref.getBoolean("liked_${targetSong.id}", false),
-                                    zingMp3Id = targetSong.zingMp3Id
-                                )
-
-                                selectedDisplayMode =
-                                    if (targetSong.image_count > 0 && targetSong.chordList.isEmpty()) {
-                                        "SHEET"
-                                    } else {
-                                        "CHORD"
-                                    }
-                            } else {
-                                // Nếu không tìm thấy bài trong SQLite thì quay về tìm kiếm offline
-                                currentSongData = null
-                                isBroadSearch = true
-                                offlineSearchQuery = query.trim()
-                            }
-                            isFetchingDetail = false
-                        }
+                        val songId = topMatch?.id ?: ""
+                        launchLatestSongRequest(
+                            scope = coroutineScope,
+                            coordinator = songAsyncCoordinator,
+                            loader = { songRepository.getSongByExactIdOrTitle(songId, query) },
+                            onResult = { targetSong ->
+                                if (targetSong != null) {
+                                    currentSongData = SongDetails(
+                                        title = targetSong.title,
+                                        singer = targetSong.ca_si,
+                                        composer = targetSong.tac_gia,
+                                        baseTone = targetSong.tong,
+                                        rhythm = targetSong.dieu.ifBlank { targetSong.rhythm },
+                                        bpm = if (targetSong.bpm > 0) targetSong.bpm.toString() else "",
+                                        lyrics = targetSong.lyrics.joinToString("\n"),
+                                        videoUrl = targetSong.youtubeUrl,
+                                        songId = targetSong.id,
+                                        slug = targetSong.slug,
+                                        imageCount = targetSong.image_count,
+                                        likes = targetSong.favoriteCount,
+                                        isLikedByDevice = sharedPref.getBoolean("liked_${targetSong.id}", false),
+                                        zingMp3Id = targetSong.zingMp3Id
+                                    )
+                                    selectedDisplayMode =
+                                        if (targetSong.image_count > 0 && targetSong.chordList.isEmpty()) "SHEET"
+                                        else "CHORD"
+                                } else {
+                                    isBroadSearch = true
+                                    offlineSearchQuery = query.trim()
+                                }
+                            },
+                            onLoadingChanged = { isFetchingDetail = it }
+                        )
                     }
                 )
 
@@ -4044,6 +5476,7 @@ fun SongTabScreen(
                     coroutineScope.launch {
                         val updatedLocalSong = songRepository.getCustomSongLocalByTitle(newTitle)
                         if (updatedLocalSong != null) {
+                            songAsyncCoordinator.beginNewSong()
                             currentSongData = SongDetails(
                                 title = updatedLocalSong.title,
                                 singer = updatedLocalSong.ca_si,
@@ -4083,22 +5516,46 @@ fun SongTabScreen(
                     showEditDialog = false
                     val savedSongId = targetEditSong.songId
                     editingSongData = null
-                    isFetchingDetail = true
-
-                    coroutineScope.launch {
-                        // 1. Ép đồng bộ dữ liệu sửa về SQLite
-                        songRepository.syncNewSongsOnline()
-
-                        // 2. Làm mới giao diện
-                        dbRefreshTrigger++
-
-                        // 3. Tải lại chi tiết bài hát nếu đang ở màn hình chi tiết
-                        if (currentSongData != null && currentSongData!!.songId == savedSongId) {
-                            currentSongData = SongScraper.fetchSongDetails(savedSongId, currentUserEmail)
-                        }
-                        isFetchingDetail = false
-                        Toast.makeText(context, CoreTranslator.getString("save_sync_success", currentLang), Toast.LENGTH_SHORT).show()
+                    launchLatestSongRequest(
+                        scope = coroutineScope,
+                        coordinator = songAsyncCoordinator,
+                        loader = {
+                            songRepository.syncNewSongsOnline()
+                            SongScraper.fetchSongDetails(savedSongId, currentUserEmail)
+                        },
+                        onResult = { refreshedDetail ->
+                            dbRefreshTrigger++
+                            // Cùng songId nhưng slug/imageCount có thể đã đổi sau khi sửa sheet.
+                            imageCacheBuster = System.currentTimeMillis()
+                            if (
+                                currentSongData?.songId == savedSongId &&
+                                refreshedDetail.error == null
+                            ) {
+                                currentSongData = refreshedDetail
+                            }
+                            Toast.makeText(
+                                context,
+                                CoreTranslator.getString("save_sync_success", currentLang),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onError = {
+                            Toast.makeText(
+                                context,
+                                CoreTranslator.getString("network_server_error", currentLang),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onLoadingChanged = { isFetchingDetail = it }
+                    )
+                },
+                onUpdatedSong = { updatedSong ->
+                    // API update trả ngay slug và imageCount mới. Cập nhật màn hình trước,
+                    // sau đó onSuccess vẫn chạy Sync V2 để ghi bền vững vào SQLite.
+                    if (currentSongData?.songId == updatedSong.songId) {
+                        currentSongData = updatedSong
                     }
+                    imageCacheBuster = System.currentTimeMillis()
                 }
             )
         }
@@ -4114,637 +5571,65 @@ fun SongTabScreen(
                 onDismiss = { showPlayModeDialog = false },
                 songRepository = songRepository, // Truyền Repo để lấy danh sách offline
                 onSongSelected = { newSong ->
-                    // Đổi sang bài mới ngay lập tức khi khách chọn
+                    // Đổi sang bài mới và vô hiệu hóa mọi job/tài nguyên của bài trước.
+                    songAsyncCoordinator.beginNewSong()
+                    stopAndReleaseSongPlayer(mediaPlayer)
+                    mediaPlayer = null
+                    isAudioPlaying = false
+                    activeMediaType = ""
+                    syncedKaraokeLines = null
+                    currentVideoTimeMs = 0L
+                    totalAudioDurationMs = 0L
+                    isFastLoadingCache = false
+
                     currentSongData = newSong
                     selectedDisplayMode = "CHORD"
 
-                    // THÊM DÒNG NÀY: Tự động tắt cảnh báo màu vàng để không làm phiền người dùng
+                    // Tự động tắt cảnh báo màu vàng để không làm phiền người dùng.
                     hasNewUpdate = false
                 },
                 onSelectMode = { mode, isFromCache ->
-                    showPlayModeDialog = false
-                    // Ghim ID cua bai khi bat dau xu ly audio: async khong vo tinh lay moc cua bai khac.
-                    val playbackIntroId = introSongPreferenceId(currentSongData)
-                    fun playbackVocalMs(lines: List<SyncedDbLine>?): Long? = configuredVocalStartMs(
-                        songIntroPrefs.getLong("vocal_$playbackIntroId", -1L), lines
+                    handleSongPlayMode(
+                        mode = mode,
+                        isFromCache = isFromCache,
+                        context = context,
+                        currentLang = currentLang,
+                        scope = coroutineScope,
+                        coordinator = songAsyncCoordinator,
+                        songRepository = songRepository,
+                        ui = SongPlaybackUiBindings(
+                            currentSongDataGetter = { currentSongData },
+                            currentSongDataSetter = { currentSongData = it },
+                            showPlayModeDialogGetter = { showPlayModeDialog },
+                            showPlayModeDialogSetter = { showPlayModeDialog = it },
+                            isFastLoadingCacheGetter = { isFastLoadingCache },
+                            isFastLoadingCacheSetter = { isFastLoadingCache = it },
+                            aiAnalysisModeGetter = { aiAnalysisMode },
+                            aiAnalysisModeSetter = { aiAnalysisMode = it },
+                            mediaPlayerGetter = { mediaPlayer },
+                            mediaPlayerSetter = { mediaPlayer = it },
+                            isAudioPlayingGetter = { isAudioPlaying },
+                            isAudioPlayingSetter = { isAudioPlaying = it },
+                            syncedKaraokeLinesGetter = { syncedKaraokeLines },
+                            syncedKaraokeLinesSetter = { syncedKaraokeLines = it },
+                            activeMediaTypeGetter = { activeMediaType },
+                            activeMediaTypeSetter = { activeMediaType = it },
+                            isAiAnalyzingGetter = { isAiAnalyzing },
+                            isAiAnalyzingSetter = { isAiAnalyzing = it },
+                            aiProgressGetter = { aiProgress },
+                            aiProgressSetter = { aiProgress = it },
+                            aiAnalysisStatusGetter = { aiAnalysisStatus },
+                            aiAnalysisStatusSetter = { aiAnalysisStatus = it },
+                            totalAudioDurationMsGetter = { totalAudioDurationMs },
+                            totalAudioDurationMsSetter = { totalAudioDurationMs = it },
+                            currentVideoTimeMsGetter = { currentVideoTimeMs },
+                            currentVideoTimeMsSetter = { currentVideoTimeMs = it },
+                            syncOffsetMsGetter = { syncOffsetMs },
+                            syncOffsetMsSetter = { syncOffsetMs = it },
+                            showChordAIGetter = { showChordAI },
+                            showChordAISetter = { showChordAI = it }
+                        )
                     )
-                    fun shouldSkipPlaybackIntro(): Boolean =
-                        songIntroPrefs.getBoolean("skip_$playbackIntroId", false)
-                    isFastLoadingCache = isFromCache
-                    aiAnalysisMode = mode // <-- LƯU LẠI CHẾ ĐỘ ĐANG CHẠY
-
-                    // Tắt nhạc cũ an toàn trước khi chạy Mode mới
-                    try {
-                        if (mediaPlayer?.isPlaying == true) mediaPlayer?.stop()
-                        mediaPlayer?.release()
-                    } catch (e: Exception) {}
-                    mediaPlayer = null
-                    isAudioPlaying = false
-
-                    when (mode) {
-                        "ZING_ACAPELLA_SYNC", "ZING_ACAPELLA_NO_LYRICS" -> {
-                            syncedKaraokeLines = null
-                            activeMediaType = ""
-                            isAiAnalyzing = true
-                            aiProgress = 0.1f
-                            aiAnalysisStatus = "Đang tải dữ liệu..."
-
-                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                val responseObj = SongScraper.getZingAcapellaSync(
-                                    currentSongData!!.zingMp3Id,
-                                    currentSongData!!.title,
-                                    currentSongData!!.singer,
-                                    SongScraper.getLyricsSample(currentSongData!!.lyrics),
-                                    mode // Truyền chế độ xuống Python để map % chuẩn xác
-                                ) { progress, message ->
-                                    aiProgress = progress
-                                    aiAnalysisStatus = message
-                                }
-
-                                if (responseObj != null && responseObj.optBoolean("success", false)) {
-                                    val filename = responseObj.optString("acapella_filename", "")
-
-                                    // Tự động lưu Zing ID mới vào CSDL nếu trước đó chưa có
-                                    val returnedZingId = responseObj.optString("id", "")
-                                    if (returnedZingId.isNotBlank()) {
-                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                            // LUÔN LUÔN ép bắn lên Server để "chữa lành" những dòng NULL trên MySQL
-                                            SongScraper.updateZingIdOnline(currentSongData!!.songId, returnedZingId)
-
-                                            // Cập nhật lại SQLite cục bộ nếu phát hiện lệch dữ liệu
-                                            if (currentSongData!!.zingMp3Id != returnedZingId) {
-                                                songRepository?.updateZingIdOffline(currentSongData!!.songId, returnedZingId)
-                                            }
-                                        }
-                                        // Cập nhật lại giao diện UI
-                                        if (currentSongData!!.zingMp3Id != returnedZingId) {
-                                            currentSongData = currentSongData!!.copy(zingMp3Id = returnedZingId)
-                                        }
-                                    }
-
-                                    // ========================================================
-                                    // TAB 2: KARAOKE (CẦN TẢI AUDIO + XỬ LÝ GHÉP JSON)
-                                    // ========================================================
-                                    if (mode == "ZING_ACAPELLA_SYNC") {
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            aiProgress = 0.8f
-                                            aiAnalysisStatus = "Đang đồng bộ lời vào hợp âm..."
-                                        }
-
-                                        val zingCaptions = mutableListOf<YoutubeCaptionEvent>()
-                                        try {
-                                            val karaokeData = responseObj.optJSONObject("karaoke_data")
-                                            val dataObj = karaokeData?.optJSONObject("data")
-                                            val sentences = dataObj?.optJSONArray("sentences")
-
-                                            if (sentences != null) {
-                                                for (i in 0 until sentences.length()) {
-                                                    val sentenceObj = sentences.getJSONObject(i)
-                                                    val wordsArr = sentenceObj.optJSONArray("words")
-                                                    val aiWords = mutableListOf<AiWordTime>()
-                                                    var sentenceText = ""
-                                                    var sStart = 0L
-                                                    var sEnd = 0L
-
-                                                    if (wordsArr != null) {
-                                                        for (j in 0 until wordsArr.length()) {
-                                                            val wObj = wordsArr.getJSONObject(j)
-                                                            val wData = wObj.optString("data", "")
-                                                            val wStart = wObj.optLong("startTime", 0L)
-                                                            val wEnd = wObj.optLong("endTime", 0L)
-
-                                                            sentenceText += wData
-                                                            aiWords.add(AiWordTime(wData.trim(), wStart, wEnd))
-
-                                                            if (j == 0) sStart = wStart
-                                                            if (j == wordsArr.length() - 1) sEnd = wEnd
-                                                        }
-                                                    }
-                                                    if (aiWords.isNotEmpty()) {
-                                                        zingCaptions.add(YoutubeCaptionEvent(sStart, sEnd, sentenceText.trim(), aiWords))
-                                                    }
-                                                }
-                                            }
-                                        } catch (e: Exception) { e.printStackTrace() }
-
-                                        if (zingCaptions.isNotEmpty()) {
-                                            // ĐÃ SỬA: Ép gọn lời bài hát bằng formatRawLyrics trước khi đưa vào AI phân tích
-                                            val compactedLyrics = formatRawLyrics(currentSongData!!.lyrics)
-                                            val mappedLines = robustMapTimingLocal(compactedLyrics, zingCaptions)
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                aiProgress = 1.0f
-                                                syncedKaraokeLines = mappedLines
-                                                isAiAnalyzing = false
-
-                                                mediaPlayer?.release()
-                                                val readyPlayer = android.media.MediaPlayer().apply {
-                                                    setDataSource("https://api.tunertools.top/api/stream_cache/$filename")
-                                                    prepare()
-                                                }
-                                                mediaPlayer = readyPlayer
-                                                totalAudioDurationMs = readyPlayer.duration.toLong()
-                                                currentVideoTimeMs = 0L
-                                                syncOffsetMs = 0L
-                                                isAudioPlaying = false
-                                                activeMediaType = "ZING_KARAOKE"
-                                                startSongMediaPlayerAtIntro(
-                                                    readyPlayer, shouldSkipPlaybackIntro(), playbackVocalMs(mappedLines)
-                                                ) { startMs ->
-                                                    if (mediaPlayer === readyPlayer) {
-                                                        currentVideoTimeMs = startMs
-                                                        isAudioPlaying = true
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                isAiAnalyzing = false
-                                                Toast.makeText(context, "Không đọc được dữ liệu Karaoke từ Zing", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }
-
-                                    // ========================================================
-                                    // TAB 1: CA SĨ (CHỈ TẢI AUDIO, ÉP BỎ QUA JSON HOÀN TOÀN)
-                                    // ========================================================
-                                    else {
-                                        // KHẮC PHỤC LỖI: Tải audio trên IO Thread và ép phát ngay lập tức
-                                        try {
-                                            val targetPath = "https://api.tunertools.top/api/stream_cache/$filename"
-                                            val mp = android.media.MediaPlayer().apply {
-                                                setDataSource(targetPath)
-                                                prepare()
-                                            }
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                aiProgress = 1.0f
-                                                syncedKaraokeLines = null // Ép bằng null để giao diện không tải tính năng chữ chạy
-                                                isAiAnalyzing = false
-
-                                                mediaPlayer?.release()
-                                                mediaPlayer = mp
-
-                                                // Chi bat dau sau khi seek xong neu co cat doan dao.
-                                                totalAudioDurationMs = mp.duration.toLong()
-                                                currentVideoTimeMs = 0L
-                                                syncOffsetMs = 0L
-                                                isAudioPlaying = false
-                                                activeMediaType = "ACAPELLA_AUDIO"
-                                                startSongMediaPlayerAtIntro(
-                                                    mp, shouldSkipPlaybackIntro(), playbackVocalMs(null)
-                                                ) { startMs ->
-                                                    if (mediaPlayer === mp) {
-                                                        currentVideoTimeMs = startMs
-                                                        isAudioPlaying = true
-                                                    }
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                isAiAnalyzing = false
-                                                Toast.makeText(context, "Lỗi phát âm thanh: ${e.message}", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    val errorMsg = responseObj?.optString("error") ?: "Không thể kết nối"
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        isAiAnalyzing = false
-                                        Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        }
-                        "ZING_MP3" -> {
-                            syncedKaraokeLines = null
-                            activeMediaType = ""
-
-                            isAiAnalyzing = true
-                            aiProgress = 0.1f // Khởi tạo 10%
-                            aiAnalysisStatus = "Đang tìm kiếm dữ liệu lời bài hát (10%)..."
-
-                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                val responseObj = SongScraper.getZingMp3Karaoke(currentSongData!!.zingMp3Id, currentSongData!!.title, currentSongData!!.singer, SongScraper.getLyricsSample(currentSongData!!.lyrics))
-
-                                if (responseObj != null && responseObj.optBoolean("success", false)) {
-                                    // Tự động lưu Zing ID mới vào CSDL nếu trước đó chưa có
-                                    val returnedZingId = responseObj.optString("id", "")
-                                    if (returnedZingId.isNotBlank()) {
-                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                            // LUÔN LUÔN ép bắn lên Server để "chữa lành" những dòng NULL trên MySQL
-                                            SongScraper.updateZingIdOnline(currentSongData!!.songId, returnedZingId)
-
-                                            // Cập nhật lại SQLite cục bộ nếu phát hiện lệch dữ liệu
-                                            if (currentSongData!!.zingMp3Id != returnedZingId) {
-                                                songRepository?.updateZingIdOffline(currentSongData!!.songId, returnedZingId)
-                                            }
-                                        }
-                                        // Cập nhật lại giao diện UI
-                                        if (currentSongData!!.zingMp3Id != returnedZingId) {
-                                            currentSongData = currentSongData!!.copy(zingMp3Id = returnedZingId)
-                                        }
-                                    }
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        aiProgress = 0.5f // Chuyển sang bước Đồng bộ (50%)
-                                        aiAnalysisStatus = "Đang đồng bộ lời vào hợp âm (50%)..."
-                                    }
-
-                                    val zingCaptions = mutableListOf<YoutubeCaptionEvent>()
-                                    try {
-                                        val karaokeData = responseObj.optJSONObject("karaoke_data")
-                                        val dataObj = karaokeData?.optJSONObject("data")
-                                        val sentences = dataObj?.optJSONArray("sentences")
-
-                                        if (sentences != null) {
-                                            for (i in 0 until sentences.length()) {
-                                                val sentenceObj = sentences.getJSONObject(i)
-                                                val wordsArr = sentenceObj.optJSONArray("words")
-                                                val aiWords = mutableListOf<AiWordTime>()
-                                                var sentenceText = ""
-                                                var sStart = 0L
-                                                var sEnd = 0L
-
-                                                if (wordsArr != null) {
-                                                    for (j in 0 until wordsArr.length()) {
-                                                        val wObj = wordsArr.getJSONObject(j)
-                                                        val wData = wObj.optString("data", "")
-                                                        val wStart = wObj.optLong("startTime", 0L)
-                                                        val wEnd = wObj.optLong("endTime", 0L)
-
-                                                        sentenceText += wData
-                                                        aiWords.add(AiWordTime(wData.trim(), wStart, wEnd))
-
-                                                        if (j == 0) sStart = wStart
-                                                        if (j == wordsArr.length() - 1) sEnd = wEnd
-                                                    }
-                                                }
-                                                if (aiWords.isNotEmpty()) {
-                                                    zingCaptions.add(YoutubeCaptionEvent(sStart, sEnd, sentenceText.trim(), aiWords))
-                                                }
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-
-                                    if (zingCaptions.isNotEmpty()) {
-                                        // ĐÃ SỬA: Ép gọn lời bài hát bằng formatRawLyrics trước khi đưa vào AI phân tích
-                                        val compactedLyrics = formatRawLyrics(currentSongData!!.lyrics)
-                                        val mappedLines = robustMapTimingLocal(compactedLyrics, zingCaptions)
-
-                                        // --- BẮT ĐẦU: IN LOG TOÀN BỘ BÀI HÁT ---
-                                        android.util.Log.d("KaraokeLog_FullSong", "=== BẮT ĐẦU DỮ LIỆU TOÀN BÀI ===")
-                                        mappedLines.forEachIndexed { index, line ->
-                                            android.util.Log.d(
-                                                "KaraokeLog_FullSong",
-                                                "[Dòng ${index + 1}] ${line.originalTextWithChords} | ${line.startTimeMs}ms -> ${line.endTimeMs}ms"
-                                            )
-                                        }
-                                        android.util.Log.d("KaraokeLog_FullSong", "=== KẾT THÚC DỮ LIỆU TOÀN BÀI ===")
-                                        // --- KẾT THÚC: IN LOG ---
-
-                                        // --- BẮT ĐẦU: IN LOG TOÀN BỘ BÀI HÁT ---
-                                        android.util.Log.d("KaraokeLog_FullSong", "=== BẮT ĐẦU DỮ LIỆU TOÀN BÀI ===")
-                                        mappedLines.forEachIndexed { index, line ->
-                                            android.util.Log.d(
-                                                "KaraokeLog_FullSong",
-                                                "[Dòng ${index + 1}] ${line.originalTextWithChords} | ${line.startTimeMs}ms -> ${line.endTimeMs}ms"
-                                            )
-                                        }
-                                        android.util.Log.d("KaraokeLog_FullSong", "=== KẾT THÚC DỮ LIỆU TOÀN BÀI ===")
-                                        // --- KẾT THÚC: IN LOG ---
-                                        val lastTime = mappedLines.lastOrNull()?.endTimeMs ?: 0L
-
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            aiProgress = 1.0f
-                                            syncedKaraokeLines = mappedLines
-                                            isAiAnalyzing = false
-
-                                            // Bơm dữ liệu vào Máy đếm ảo để chạy Karaoke
-                                            totalAudioDurationMs = lastTime + 5000L // Thêm 5 giây Outro
-                                            currentVideoTimeMs = introPlaybackStartMs(
-                                                shouldSkipPlaybackIntro(), playbackVocalMs(mappedLines), totalAudioDurationMs
-                                            )
-                                            syncOffsetMs = 0L
-                                            isAudioPlaying = true
-                                            activeMediaType = "ZING_KARAOKE"
-                                        }
-                                    } else {
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            isAiAnalyzing = false
-                                            Toast.makeText(context, "Bài hát này chưa thể phân tích", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                } else {
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        isAiAnalyzing = false
-                                        Toast.makeText(context, "Không lấy được dữ liệu Karaoke bài hát này", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        }
-                        "CHORD_AI" -> {
-                            showChordAI = true
-                        }
-                        // CHỈ CÒN 3 MODE: Giọng Ca sĩ + Chữ, Chỉ Giọng ca sĩ, Chỉ chạy chữ
-                        "ACAPELLA", "ACAPELLA_NO_LYRICS", "LYRICS_ONLY" -> {
-                            val targetMedia = when (mode) {
-                                "ACAPELLA", "ACAPELLA_NO_LYRICS" -> "ACAPELLA_AUDIO"
-                                "LYRICS_ONLY" -> "LYRICS_ONLY_AUDIO"
-                                else -> "ACAPELLA_AUDIO"
-                            }
-
-                            if (activeMediaType != targetMedia) {
-                                isAiAnalyzing = true
-                                aiProgress = 0.1f // 👈 BẮT ĐẦU: 10%
-                                aiAnalysisStatus = CoreTranslator.getString("ai_checking_storage", currentLang)
-                                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                    val t0_StartTime = System.currentTimeMillis()
-                                    android.util.Log.d("KaraokeLog", "========================================")
-                                    android.util.Log.d("KaraokeLog", "🚀 BẮT ĐẦU XỬ LÝ CHẾ ĐỘ: $mode")
-
-                                    val client = okhttp3.OkHttpClient.Builder()
-                                        .connectTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
-                                        .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
-                                        .writeTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
-                                        .build()
-
-                                    val rawUrl = currentSongData!!.videoUrl
-                                    var videoId = rawUrl
-                                    if (rawUrl.contains("watch?v=")) videoId = rawUrl.substringAfter("watch?v=").substringBefore("&")
-                                    else if (rawUrl.contains("youtu.be/")) videoId = rawUrl.substringAfter("youtu.be/").substringBefore("?")
-                                    videoId = videoId.trim()
-
-                                    try {
-                                        // ========================================================
-                                        // BƯỚC 0: TẦNG CACHE ĐIỆN THOẠI (LOCAL CACHE)
-                                        // ========================================================
-                                        val targetFile = java.io.File(context.cacheDir, "track_${videoId}_${targetMedia}.wav")
-                                        val audioFile = java.io.File(context.cacheDir, "temp_audio_$videoId.m4a")
-
-                                        val hasLocalAudio = targetFile.exists() && targetFile.length() > 100 * 1024
-                                        if (hasLocalAudio) {
-                                            android.util.Log.d("KaraokeLog", "⚡ [0] Đã có sẵn nhạc trong ĐIỆN THOẠI! Tốc độ ánh sáng!")
-                                        }
-
-                                        // ========================================================
-                                        // BƯỚC 1: LẤY CHỮ (Bỏ qua nếu chọn ACAPELLA_NO_LYRICS)
-                                        // ========================================================
-                                        val cacheCheckBody = MultipartBody.Builder()
-                                            .setType(MultipartBody.FORM)
-                                            .addFormDataPart("video_id", videoId)
-                                            .addFormDataPart("title", currentSongData!!.title)
-                                            .addFormDataPart("singer", currentSongData!!.singer)
-                                            .build()
-                                        var hasLyricsCache = mode == "ACAPELLA_NO_LYRICS"
-                                        val subtitlesList = mutableListOf<YoutubeCaptionEvent>()
-
-                                        if (!hasLyricsCache) {
-                                            val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(cacheCheckBody).build()
-                                            val res = try { client.newCall(req).execute() } catch(e:Exception) { null }
-                                            if (res?.isSuccessful == true) {
-                                                hasLyricsCache = true
-                                                val bodyStr = res.body?.string() ?: ""
-                                                if (bodyStr.isNotEmpty()) {
-                                                    val jsonObject = org.json.JSONObject(bodyStr)
-                                                    val lyricsArray = jsonObject.optJSONArray("lyrics")
-                                                    if (lyricsArray != null) {
-                                                        for (i in 0 until lyricsArray.length()) {
-                                                            val lObj = lyricsArray.getJSONObject(i)
-                                                            val wordsArray = lObj.optJSONArray("words")
-                                                            val aiWords = mutableListOf<AiWordTime>()
-                                                            if (wordsArray != null) {
-                                                                for (j in 0 until wordsArray.length()) {
-                                                                    val wObj = wordsArray.getJSONObject(j)
-                                                                    aiWords.add(AiWordTime(wObj.optString("word", ""), wObj.optLong("start_time_ms", 0L), wObj.optLong("end_time_ms", 0L)))
-                                                                }
-                                                            }
-                                                            subtitlesList.add(YoutubeCaptionEvent(lObj.optLong("start_time_ms", 0L), lObj.optLong("end_time_ms", 2000L), lObj.optString("text", "").replace("\n", " ").trim(), aiWords))
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { aiProgress = 0.3f } // 👈 KIỂM TRA CHỮ XONG: 30%
-                                        val t1_CheckCache = System.currentTimeMillis()
-                                        android.util.Log.d("KaraokeLog", "⏱️ [1] Thời gian lấy Chữ: ${t1_CheckCache - t0_StartTime} ms.")
-
-                                        // ========================================================
-                                        // BƯỚC 2: TỔNG HỢP NHU CẦU & TẢI YOUTUBE (NẾU CẦN)
-                                        // ========================================================
-                                        var splitResponse: okhttp3.Response? = null
-                                        var hasAudioCache = false
-                                        val targetAudioUrl = "https://api.tunertools.top/api/get_vocals_only"
-
-                                        if (!hasLocalAudio && (mode == "ACAPELLA_NO_LYRICS" || mode == "ACAPELLA")) {
-                                            val req = okhttp3.Request.Builder().url(targetAudioUrl).post(cacheCheckBody).build()
-                                            splitResponse = try { client.newCall(req).execute() } catch(e:Exception) { null }
-                                            hasAudioCache = splitResponse?.isSuccessful == true
-                                            if (!hasAudioCache) {
-                                                splitResponse?.close()
-                                                splitResponse = null
-                                            }
-                                        }
-
-                                        val needAudioProcessing = !hasLocalAudio && !hasAudioCache && (mode == "ACAPELLA_NO_LYRICS" || mode == "ACAPELLA")
-                                        val needLyricsProcessing = !hasLyricsCache && mode != "ACAPELLA_NO_LYRICS"
-                                        val needOriginalAudio = !hasLocalAudio && mode == "LYRICS_ONLY"
-
-                                        val needYoutubeFile = needAudioProcessing || needLyricsProcessing || needOriginalAudio
-                                        var isDownloadSuccess = true
-
-                                        if (needYoutubeFile) {
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                aiAnalysisStatus = CoreTranslator.getString("ai_downloading_original", currentLang)
-                                                aiProgress = 0.5f // 👈 BẮT ĐẦU TẢI YOUTUBE: 50%
-                                            }
-                                            val json = org.json.JSONObject().apply { put("url", "https://www.youtube.com/watch?v=$videoId") }
-                                            val linkReqBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-                                            val linkReq = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_direct_link").post(linkReqBody).build()
-                                            val linkRes = client.newCall(linkReq).execute()
-                                            var directUrl = ""
-                                            if (linkRes.isSuccessful) {
-                                                val linkBody = linkRes.body?.string()?.trim() ?: ""
-                                                if (linkBody.startsWith("{")) {
-                                                    try { directUrl = org.json.JSONObject(linkBody).optString("url", "") } catch (e: Exception) { }
-                                                }
-                                            }
-
-                                            if (directUrl.isNotEmpty()) {
-                                                val downloadReq = okhttp3.Request.Builder().url(directUrl).build()
-                                                val downloadRes = client.newCall(downloadReq).execute()
-                                                if (downloadRes.isSuccessful) {
-                                                    downloadRes.body?.byteStream()?.use { input -> audioFile.outputStream().use { output -> input.copyTo(output) } }
-                                                    if (audioFile.length() < 100 * 1024) isDownloadSuccess = false
-                                                } else isDownloadSuccess = false
-                                            } else isDownloadSuccess = false
-                                        }
-
-                                        if (needYoutubeFile && !isDownloadSuccess) {
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                isAiAnalyzing = false
-                                                aiProgress = 0f
-                                                Toast.makeText(context, CoreTranslator.getString("youtube_blocked_download", currentLang), Toast.LENGTH_LONG).show()
-                                            }
-                                            if (audioFile.exists()) audioFile.delete()
-                                            return@launch
-                                        }
-
-// ========================================================
-// BƯỚC 3: UPLOAD FILE CHO PYTHON XỬ LÝ PHẦN CÒN THIẾU
-// ========================================================
-                                        if (needYoutubeFile && isDownloadSuccess) {
-                                            if (needAudioProcessing) {
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                    aiAnalysisStatus = CoreTranslator.getString("ai_extracting_vocals", currentLang)
-                                                    aiProgress = 0.75f
-                                                }
-                                                val splitReqBody = MultipartBody.Builder()
-                                                    .setType(MultipartBody.FORM)
-                                                    .addFormDataPart("video_id", videoId)
-                                                    .addFormDataPart("title", currentSongData!!.title)
-                                                    .addFormDataPart("singer", currentSongData!!.singer)
-                                                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody("audio/*".toMediaTypeOrNull()))
-                                                    .build()
-
-                                                val req = okhttp3.Request.Builder().url(targetAudioUrl).post(splitReqBody).build()
-
-                                                // 👉 SỬA Ở ĐÂY: Dùng block .use {} để ghi file và đóng kết nối NGAY LẬP TỨC
-                                                client.newCall(req).execute().use { response ->
-                                                    hasAudioCache = response.isSuccessful
-                                                    if (hasAudioCache) {
-                                                        response.body?.byteStream()?.use { input ->
-                                                            targetFile.outputStream().use { output ->
-                                                                input.copyTo(output)
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            } else if (mode == "LYRICS_ONLY") {
-                                                hasAudioCache = true
-                                            }
-
-                                            if (needLyricsProcessing) {
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                    aiAnalysisStatus = CoreTranslator.getString("ai_syncing_lyrics", currentLang)
-                                                    aiProgress = 0.85f
-                                                }
-                                                val lyricsReqBody = MultipartBody.Builder()
-                                                    .setType(MultipartBody.FORM)
-                                                    .addFormDataPart("video_id", videoId)
-                                                    .addFormDataPart("title", currentSongData!!.title)
-                                                    .addFormDataPart("singer", currentSongData!!.singer)
-                                                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody("audio/*".toMediaTypeOrNull()))
-                                                    .build()
-                                                val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(lyricsReqBody).build()
-                                                val res = client.newCall(req).execute()
-                                                if (res.isSuccessful) {
-                                                    hasLyricsCache = true
-                                                    val bodyStr = res.body?.string() ?: ""
-                                                    if (bodyStr.isNotEmpty()) {
-                                                        val jsonObject = org.json.JSONObject(bodyStr)
-                                                        val lyricsArray = jsonObject.optJSONArray("lyrics")
-                                                        if (lyricsArray != null) {
-                                                            for (i in 0 until lyricsArray.length()) {
-                                                                val lObj = lyricsArray.getJSONObject(i)
-                                                                val wordsArray = lObj.optJSONArray("words")
-                                                                val aiWords = mutableListOf<AiWordTime>()
-                                                                if (wordsArray != null) {
-                                                                    for (j in 0 until wordsArray.length()) {
-                                                                        val wObj = wordsArray.getJSONObject(j)
-                                                                        aiWords.add(AiWordTime(wObj.optString("word", ""), wObj.optLong("start_time_ms", 0L), wObj.optLong("end_time_ms", 0L)))
-                                                                    }
-                                                                }
-                                                                subtitlesList.add(YoutubeCaptionEvent(lObj.optLong("start_time_ms", 0L), lObj.optLong("end_time_ms", 2000L), lObj.optString("text", "").replace("\n", " ").trim(), aiWords))
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        val t3_AudioReady = System.currentTimeMillis()
-                                        android.util.Log.d("KaraokeLog", "⏱️ [2+3] Thời gian chuẩn bị Âm thanh: ${t3_AudioReady - t1_CheckCache} ms.")
-
-                                        // ========================================================
-                                        // BƯỚC 4: LƯU FILE VÀ PHÁT NHẠC
-                                        // ========================================================
-                                        if (hasLocalAudio || hasAudioCache) {
-                                            if (!hasLocalAudio && mode == "LYRICS_ONLY") {
-                                                // Nếu chỉ chạy chữ, copy trực tiếp file gốc sang file đích
-                                                audioFile.copyTo(targetFile, overwrite = true)
-                                            }
-
-                                            // Xóa file gốc thừa mứa
-                                            if (audioFile.exists()) audioFile.delete()
-
-                                            val mappedLines = if (subtitlesList.isNotEmpty()) robustMapTimingLocal(currentSongData!!.lyrics, subtitlesList) else null
-
-                                            // --- BẮT ĐẦU: IN LOG TOÀN BỘ BÀI HÁT TỪ CACHE OFFLINE ---
-                                            if (mappedLines != null) {
-                                                android.util.Log.d("KaraokeLog_FullSong", "=== BẮT ĐẦU DỮ LIỆU TOÀN BÀI (CACHE) ===")
-                                                mappedLines.forEachIndexed { index, line ->
-                                                    android.util.Log.d(
-                                                        "KaraokeLog_FullSong",
-                                                        "[Dòng ${index + 1}] ${line.originalTextWithChords} | ${line.startTimeMs}ms -> ${line.endTimeMs}ms"
-                                                    )
-                                                }
-                                                android.util.Log.d("KaraokeLog_FullSong", "=== KẾT THÚC DỮ LIỆU TOÀN BÀI ===")
-                                            }
-                                            // --- KẾT THÚC: IN LOG ---
-
-                                            val t4_FinalSetup = System.currentTimeMillis()
-                                            android.util.Log.d("KaraokeLog", "⏱️ [4] Thời gian Ghi File + Đồng bộ Lời: ${t4_FinalSetup - t3_AudioReady} ms.")
-                                            android.util.Log.d("KaraokeLog", "🎉 TỔNG THỜI GIAN ĐÁP ỨNG: ${t4_FinalSetup - t0_StartTime} ms.")
-                                            android.util.Log.d("KaraokeLog", "========================================")
-
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                aiProgress = 1.0f // 👈 HOÀN THÀNH: 100%
-                                                syncedKaraokeLines = mappedLines
-                                                isAiAnalyzing = false
-                                                mediaPlayer?.release()
-
-                                                val readyPlayer = android.media.MediaPlayer().apply {
-                                                    setDataSource(targetFile.absolutePath)
-                                                    prepare()
-                                                    if (mode == "LYRICS_ONLY") setVolume(0f, 0f)
-                                                }
-                                                mediaPlayer = readyPlayer
-                                                totalAudioDurationMs = readyPlayer.duration.toLong()
-                                                currentVideoTimeMs = 0L
-                                                isAudioPlaying = false
-                                                activeMediaType = targetMedia
-                                                startSongMediaPlayerAtIntro(
-                                                    readyPlayer, shouldSkipPlaybackIntro(), playbackVocalMs(mappedLines)
-                                                ) { startMs ->
-                                                    if (mediaPlayer === readyPlayer) {
-                                                        currentVideoTimeMs = startMs
-                                                        isAudioPlaying = true
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                isAiAnalyzing = false
-                                                aiProgress = 0f
-                                                Toast.makeText(context, CoreTranslator.getString("audio_processing_error", currentLang), Toast.LENGTH_SHORT).show()
-                                            }
-                                            if (audioFile.exists()) audioFile.delete()
-                                        }
-
-                                    } catch (e: Exception) {
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            isAiAnalyzing = false
-                                            aiProgress = 0f
-                                            Toast.makeText(context, CoreTranslator.getString("network_server_error", currentLang), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            } else {
-                                mediaPlayer?.start()
-                            }
-                        }
-                    }
                 }
             )
         }
@@ -5455,6 +6340,264 @@ fun BpmSettingsDialogView(
                 Spacer(modifier = Modifier.height(24.dp))
                 TextButton(onClick = onDismiss) { Text("Đóng", color = Color.Gray) }
             }
+        }
+    }
+}
+
+// Restore the original sheet tutorial implementation required by SongTabScreen.
+enum class TutorialStep { NONE, SEARCH, DISPLAY_TOOLS, ADD, EDIT }
+
+@Composable
+fun TutorialOverlay(
+    step: TutorialStep,
+    currentLang: String,
+    tunaGreen: Color,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .clickable(enabled = false) {},
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .fillMaxHeight(0.85f)
+                .background(Color.White, RoundedCornerShape(16.dp))
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+
+            // --- TIÊU ĐỀ CHÍNH ---
+            Text(
+                text = when (step) {
+                    TutorialStep.SEARCH -> CoreTranslator.getString("tut_search_tools", currentLang)
+                    TutorialStep.DISPLAY_TOOLS -> CoreTranslator.getString("tut_display_tools_short", currentLang)
+                    TutorialStep.ADD -> CoreTranslator.getString("tut_add_new_song", currentLang)
+                    TutorialStep.EDIT -> CoreTranslator.getString("tut_edit_song_short", currentLang)
+                    else -> ""
+                },
+                color = tunaGreen, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(scrollState)
+            ) {
+                when (step) {
+                    TutorialStep.SEARCH -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp)).padding(8.dp)) {
+                                    Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_search_box", currentLang),
+                            desc = CoreTranslator.getString("tut_search_box_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { Icon(Icons.Default.Mic, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(24.dp).padding(top = 4.dp)) },
+                            title = CoreTranslator.getString("tut_voice", currentLang),
+                            desc = CoreTranslator.getString("tut_voice_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.border(1.dp, tunaGreen, RoundedCornerShape(4.dp)).padding(6.dp)) {
+                                    Icon(CustomIcons.Chord, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_chords", currentLang),
+                            desc = CoreTranslator.getString("tut_chords_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.border(1.dp, Color(0xFFE6A23C), RoundedCornerShape(4.dp)).padding(6.dp)) {
+                                    SheetMusicIcon(tint = Color(0xFFE6A23C), modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_sheet", currentLang),
+                            desc = CoreTranslator.getString("tut_sheet_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { ZingMp3Icon(modifier = Modifier.size(28.dp)) },
+                            title = CoreTranslator.getString("tut_zing", currentLang),
+                            desc = CoreTranslator.getString("tut_zing_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(width = 28.dp, height = 20.dp).background(Color.Red, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_youtube", currentLang),
+                            desc = CoreTranslator.getString("tut_youtube_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.Red, modifier = Modifier.size(26.dp)) },
+                            title = CoreTranslator.getString("tut_favorite", currentLang),
+                            desc = CoreTranslator.getString("tut_favorite_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { Icon(Icons.Default.Flag, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(26.dp)) },
+                            title = CoreTranslator.getString("tut_report", currentLang),
+                            desc = CoreTranslator.getString("tut_report_desc", currentLang)
+                        )
+                    }
+
+                    TutorialStep.DISPLAY_TOOLS -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(22.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                        Text("♭", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Box(modifier = Modifier.size(22.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                        Text("♯", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                    }
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_transpose", currentLang),
+                            desc = CoreTranslator.getString("tut_transpose_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Remove, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Box(modifier = Modifier.size(22.dp).background(tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.KeyboardDoubleArrowDown, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_autoscroll", currentLang),
+                            desc = CoreTranslator.getString("tut_autoscroll_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(24.dp).background(tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.Palette, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_palette", currentLang),
+                            desc = CoreTranslator.getString("tut_palette_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(24.dp).background(tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_split", currentLang),
+                            desc = CoreTranslator.getString("tut_split_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(24.dp).border(1.dp, tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                    Text("IV", color = tunaGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_roman", currentLang),
+                            desc = CoreTranslator.getString("tut_roman_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("A", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("A", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_fontsize", currentLang),
+                            desc = CoreTranslator.getString("tut_fontsize_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Icon(Icons.Default.Translate, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(22.dp))
+                            },
+                            title = CoreTranslator.getString("tut_trans", currentLang),
+                            desc = CoreTranslator.getString("tut_trans_desc", currentLang)
+                        )
+                    }
+
+                    TutorialStep.ADD -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.background(Color(0xFF1976D2), RoundedCornerShape(6.dp)).padding(8.dp)) {
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_add_btn", currentLang),
+                            desc = CoreTranslator.getString("tut_add_btn_desc", currentLang)
+                        )
+                    }
+
+                    TutorialStep.EDIT -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.background(Color(0xFFE6A23C), RoundedCornerShape(6.dp)).padding(8.dp)) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_edit_btn", currentLang),
+                            desc = CoreTranslator.getString("tut_edit_btn_desc", currentLang)
+                        )
+                    }
+                    else -> {}
+                }
+            }
+
+            // --- NÚT ĐÓNG ---
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = tunaGreen),
+                modifier = Modifier.fillMaxWidth(0.7f).height(48.dp)
+            ) {
+                Text(CoreTranslator.getString("tut_got_it", currentLang), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun TutorialItemRow(iconView: @Composable () -> Unit, title: String, desc: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier.width(48.dp),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            iconView()
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(text = title, color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = desc, color = Color.DarkGray, fontSize = 14.sp, lineHeight = 20.sp)
         }
     }
 }
