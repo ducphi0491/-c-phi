@@ -1,1 +1,3 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1" -Apply
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\TEST_IIS_DRIVE_AUTH.ps1"
