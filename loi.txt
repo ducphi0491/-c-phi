@@ -1,7 +1,14 @@
-$p = Invoke-RestMethod `
-  -Uri "https://tunertools.top/api_songs.php?action=ai_cached_songs" `
-  -TimeoutSec 120
+PS C:\Users\Administrator> $p = Invoke-RestMethod `
+>>   -Uri "https://tunertools.top/api_songs.php?action=ai_cached_songs" `
+>>   -TimeoutSec 120
+>>
+>> $p | Select-Object success, count, served_by
+>>
+>> $p.counts | Format-List
 
-$p | Select-Object success, count, served_by
+success count served_by
+------- ----- ---------
 
-$p.counts | Format-List
+
+
+PS C:\Users\Administrator>
