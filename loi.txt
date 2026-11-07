@@ -1,7 +1,30 @@
-PS C:\Users\Administrator> Get-Content -LiteralPath "C:\inetpub\wwwroot\api_documents.php"
-<?php
-declare(strict_types=1);
 
-require 'C:/TunerTools/Web/API/api_documents.php';
-PS C:\Users\Administrator>
+$php = "C:\TunerTools\Web\API\api_documents.php"
 
+if (-not (Test-Path -LiteralPath $php)) {
+    throw "Khong tim thay PHP chinh"
+}
+
+Write-Host "=== PHP DOCUMENTS CHINH ===" -ForegroundColor Cyan
+
+Get-Item -LiteralPath $php |
+    Select-Object FullName, Length, LastWriteTime
+
+Write-Host "`n=== CAC CHUC NANG CAN KIEM TRA ===" -ForegroundColor Cyan
+
+$patterns = @(
+    "auth_login",
+    "permission_me",
+    "action=list",
+    "scandir",
+    "is_dir",
+    "DirectoryIterator",
+    "Documents",
+    "document_root",
+    "DOCUMENT_ROOT"
+)
+
+Select-String -LiteralPath $php -Pattern $patterns |
+    Select-Object LineNumber,
+        @{Name="Keyword";Expression={$_.Matches[0].Value}} |
+    Format-Table -AutoSize
