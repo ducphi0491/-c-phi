@@ -1,40 +1,50 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$filename = "zing_acapella_18JJ0AEDF3CO.ogg"
+$encoded = [uri]::EscapeDataString($filename)
+$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$encoded"
 
-PS C:\Users\Administrator> $filename = "zing_acapella_18JJ0AEDF3CO.ogg"
->> $encoded = [uri]::EscapeDataString($filename)
->> $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$encoded"
->>
->> $lookup = Invoke-RestMethod -Uri $url -TimeoutSec 30
->>
->> if ($lookup.found -eq $true -and $lookup.source -eq "google_drive") {
->>     $result = Invoke-WebRequest -Uri $lookup.stream_url `
->>         -UseBasicParsing `
->>         -Headers @{Range = "bytes=0-1023"} `
->>         -TimeoutSec 40
->>
->>     [PSCustomObject]@{
->>         HTTP = $result.StatusCode
->>         ContentType = $result.Headers["Content-Type"]
->>         ContentRange = $result.Headers["Content-Range"]
->>         BytesReceived = $result.RawContentLength
->>     } | Format-List
->> } else {
->>     Write-Host "Khong tim thay file tren Google Drive."
->> }
-Invoke-WebRequest : The 'Range' header must be modified using the appropriate property or method.
-Parameter name: name
-At line:8 char:15
-+     $result = Invoke-WebRequest -Uri $lookup.stream_url `
-+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (:) [Invoke-WebRequest], ArgumentException
-    + FullyQualifiedErrorId : System.ArgumentException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
+$lookup = Invoke-RestMethod -Uri $url -TimeoutSec 30
 
-Cannot index into a null array.
-At line:13 char:5
-+     [PSCustomObject]@{
-+     ~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
-    + FullyQualifiedErrorId : NullArray
+if ($lookup.found -eq $true -and $lookup.source -eq "google_drive") {
+    $response = $null
+    $stream = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($lookup.stream_url)
+        $request.Method = "GET"
+        $request.Timeout = 40000
+        $request.ReadWriteTimeout = 40000
+        $request.AddRange(0, 1023)
 
-PS C:\Users\Administrator>
+        $response = $request.GetResponse()
+        $stream = $response.GetResponseStream()
+        $buffer = New-Object byte[] 1024
+        $received = 0
+
+        while ($received -lt $buffer.Length) {
+            $n = $stream.Read($buffer, $received, $buffer.Length - $received)
+            if ($n -le 0) { break }
+            $received += $n
+        }
+
+        [PSCustomObject]@{
+            HTTP = [int]$response.StatusCode
+            ContentType = $response.ContentType
+            ContentRange = $response.Headers["Content-Range"]
+            BytesReceived = $received
+            FileSignature = if ($received -ge 4) {
+                [System.Text.Encoding]::ASCII.GetString($buffer, 0, 4)
+            } else { "" }
+            DriveFileBytes = $lookup.size_bytes
+        } | Format-List
+
+    } catch {
+        Write-Host "LOI STREAM: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.Response) {
+            Write-Host "HTTP: $([int]$_.Exception.Response.StatusCode)"
+        }
+    } finally {
+        if ($stream) { $stream.Close() }
+        if ($response) { $response.Close() }
+    }
+} else {
+    Write-Host "Khong tim thay file tren Google Drive."
+}
