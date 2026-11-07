@@ -1,50 +1,10 @@
-$filename = "zing_acapella_18JJ0AEDF3CO.ogg"
-$encoded = [uri]::EscapeDataString($filename)
-$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$encoded"
+HTTP           : 206
+ContentType    : audio/ogg
+ContentRange   : bytes 0-1023/5598867
+BytesReceived  : 1024
+FileSignature  : OggS
+DriveFileBytes : 5598867
 
-$lookup = Invoke-RestMethod -Uri $url -TimeoutSec 30
 
-if ($lookup.found -eq $true -and $lookup.source -eq "google_drive") {
-    $response = $null
-    $stream = $null
-    try {
-        $request = [System.Net.HttpWebRequest]::Create($lookup.stream_url)
-        $request.Method = "GET"
-        $request.Timeout = 40000
-        $request.ReadWriteTimeout = 40000
-        $request.AddRange(0, 1023)
 
-        $response = $request.GetResponse()
-        $stream = $response.GetResponseStream()
-        $buffer = New-Object byte[] 1024
-        $received = 0
-
-        while ($received -lt $buffer.Length) {
-            $n = $stream.Read($buffer, $received, $buffer.Length - $received)
-            if ($n -le 0) { break }
-            $received += $n
-        }
-
-        [PSCustomObject]@{
-            HTTP = [int]$response.StatusCode
-            ContentType = $response.ContentType
-            ContentRange = $response.Headers["Content-Range"]
-            BytesReceived = $received
-            FileSignature = if ($received -ge 4) {
-                [System.Text.Encoding]::ASCII.GetString($buffer, 0, 4)
-            } else { "" }
-            DriveFileBytes = $lookup.size_bytes
-        } | Format-List
-
-    } catch {
-        Write-Host "LOI STREAM: $($_.Exception.Message)" -ForegroundColor Red
-        if ($_.Exception.Response) {
-            Write-Host "HTTP: $([int]$_.Exception.Response.StatusCode)"
-        }
-    } finally {
-        if ($stream) { $stream.Close() }
-        if ($response) { $response.Close() }
-    }
-} else {
-    Write-Host "Khong tim thay file tren Google Drive."
-}
+PS C:\Users\Administrator>
