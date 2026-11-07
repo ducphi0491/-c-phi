@@ -1,8 +1,32 @@
-Test-Path "C:\TunerTools\Audio\AI_Music\stream_cache"
+PS C:\Users\Administrator> Test-Path "C:\TunerTools\Audio\AI_Music\stream_cache"
+>>
+False
+PS C:\Users\Administrator> Get-ChildItem "C:\TunerTools\Audio\AI_Music" -ErrorAction SilentlyContinue |
+>> Select-Object Name, FullName, Mode
 
-Get-ChildItem "C:\TunerTools\Audio\AI_Music" -ErrorAction SilentlyContinue |
-Select-Object Name, FullName, Mode
+Name                       FullName                                                Mode
+----                       --------                                                ----
+AI_MODELS                  C:\TunerTools\Audio\AI_Music\AI_MODELS                  d-----
+audio_cache                C:\TunerTools\Audio\AI_Music\audio_cache                d-----
+CHORD_AI                   C:\TunerTools\Audio\AI_Music\CHORD_AI                   d-----
+DRUM                       C:\TunerTools\Audio\AI_Music\DRUM                       d-----
+MDX_TEMP                   C:\TunerTools\Audio\AI_Music\MDX_TEMP                   d-----
+METRONOME                  C:\TunerTools\Audio\AI_Music\METRONOME                  d-----
+VR_TEMP                    C:\TunerTools\Audio\AI_Music\VR_TEMP                    d-----
+YOUTUBE_CACHE              C:\TunerTools\Audio\AI_Music\YOUTUBE_CACHE              d-----
+ZING_AUDIO                 C:\TunerTools\Audio\AI_Music\ZING_AUDIO                 d-----
+ZING_JSON                  C:\TunerTools\Audio\AI_Music\ZING_JSON                  d-----
+ai_cached_songs_index.json C:\TunerTools\Audio\AI_Music\ai_cached_songs_index.json -a----
+ai_cached_songs_index.lock C:\TunerTools\Audio\AI_Music\ai_cached_songs_index.lock -a----
+app.py                     C:\TunerTools\Audio\AI_Music\app.py                     -a----
+ca_si.db                   C:\TunerTools\Audio\AI_Music\ca_si.db                   -a----
+ChayNgam.vbs               C:\TunerTools\Audio\AI_Music\ChayNgam.vbs               -a----
+dow.py                     C:\TunerTools\Audio\AI_Music\dow.py                     -a----
+ffmpeg.exe                 C:\TunerTools\Audio\AI_Music\ffmpeg.exe                 -a----
+ffplay.exe                 C:\TunerTools\Audio\AI_Music\ffplay.exe                 -a----
+ffprobe.exe                C:\TunerTools\Audio\AI_Music\ffprobe.exe                -a----
+media_backend.py           C:\TunerTools\Audio\AI_Music\media_backend.py           -a----
+nhan_dien_dieu_nhac.pkl    C:\TunerTools\Audio\AI_Music\nhan_dien_dieu_nhac.pkl    -a----
 
-Get-ChildItem "C:\TunerTools\Audio" -Directory -Recurse -ErrorAction SilentlyContinue |
-Where-Object { $_.Name -eq "stream_cache" } |
-Select-Object -ExpandProperty FullName
+
+PS C:\Users\Administrator>
