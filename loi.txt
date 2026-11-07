@@ -1,41 +1,26 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$filename = "18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json"
+$encoded = [uri]::EscapeDataString($filename)
 
-PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_JSON_Drive_Sync\CHAY_UPLOAD_AI_JSON.ps1"
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File $script -OnlyId "18JJ0AEDF3CO" -Upload
->>
-MODE: UPLOAD
-LOCAL VALID JSON: 3
-TOKEN FILE: Found (private; contents not printed)
-GOOGLE DRIVE lyrics existing entries: 0
-ALREADY ON DRIVE: 0
-MISSING: 3
-  18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json
-  18JJ0AEDF3CO_Dòng Sông Mùa Thu_Quang Vinh.json
-  18JJ0AEDF3CO_Dòng Sông Mùa Thu_Ông Cao Thắng.json
-[1/3] uploaded=1 failed=0
-[3/3] uploaded=3 failed=0
-REPORT: C:\TunerTools\Audio\AI_Music\KET_QUA_UPLOAD_JSON_DRIVE.json
-DONE: 3 created; nothing deleted or overwritten
-NOTE: Alwaysdata cached_songs uses a 600-second cache; allow it to expire before rechecking.
-PS C:\Users\Administrator>
->> $filename = "18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json"
->>
->> $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&kind=lyrics&filename=$([uri]::EscapeDataString($filename))"
->>
->> Invoke-RestMethod -Uri $url -TimeoutSec 30 |
->>     Format-List
+$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lyrics&filename=$encoded"
+
+$json = Invoke-RestMethod -Uri $url -TimeoutSec 40
+
+[PSCustomObject]@{
+    ZingErrorCode = $json.err
+    SoCauKaraoke = @($json.data.sentences).Count
+    CoDuLieuLoi = (@($json.data.sentences).Count -gt 0)
+} | Format-List
 
 
-ok         : True
-found      : True
-source     : google_drive
-stream_url : https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lyrics&filename=18JJ0AEDF3CO_D%C3%B2ng%20S%C3%B
-             4ng%20M%C3%B9a%20Thu_Nguy%E1%BB%85n%20H%E1%BA%A3i%20Y%E1%BA%BFn.json
-size_bytes : 13848
+$r = Invoke-RestMethod `
+  "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
+  -TimeoutSec 120
 
+$r | Select-Object ok, source, count,
+    audio_entries_scanned, json_entries_scanned
 
-
-PS C:\Users\Administrator>
+$r.songs |
+    Where-Object { $_.id -eq "18JJ0AEDF3CO" } |
+    Select-Object id, title, singer,
+        has_audio_cache, has_lyrics_cache |
+    Format-Table -AutoSize
