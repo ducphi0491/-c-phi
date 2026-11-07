@@ -1,9 +1,21 @@
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_DriveFirst_Kotlin_PHP_20261107.zip"
-$folder = "C:\TunerTools\BackupScripts\Documents_DriveFirst"
+PS C:\Users\Administrator>
+>> $zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_DriveFirst_Kotlin_PHP_20261107.zip"
+>> $folder = "C:\TunerTools\BackupScripts\Documents_DriveFirst"
+>>
+>> Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File "$folder\PATCH_IIS_DOCUMENTS_AUTH.ps1" `
+>>     -IisPhp "C:\inetpub\wwwroot\api_documents.php"
+PHP IIS khong khop phien ban mau: function authorizeDocumentAction(. Khong sua de tranh mat chuc nang.
+At C:\TunerTools\BackupScripts\Documents_DriveFirst\PATCH_IIS_DOCUMENTS_AUTH.ps1:25 char:9
++         throw "PHP IIS khong khop phien ban mau: $needle. Khong sua d ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (PHP IIS khong k... mat chuc nang.:String) [], RuntimeException
+    + FullyQualifiedErrorId : PHP IIS khong khop phien ban mau: function authorizeDocumentAction(. Khong sua de tranh
+   mat chuc nang.
 
-Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$folder\PATCH_IIS_DOCUMENTS_AUTH.ps1" `
-    -IisPhp "C:\inetpub\wwwroot\api_documents.php"
+PS C:\Users\Administrator>
