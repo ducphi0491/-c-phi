@@ -1,38 +1,7 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$p = Invoke-RestMethod `
+  -Uri "https://tunertools.top/api_songs.php?action=ai_cached_songs" `
+  -TimeoutSec 120
 
-PS C:\Users\Administrator> $r = Invoke-RestMethod `
->>   "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" `
->>   -TimeoutSec 120
->>
->> [PSCustomObject]@{
->>     Nguon = $r.source
->>     TongBai = @($r.songs).Count
->>     CoAmThanh = @(
->>         $r.songs | Where-Object {
->>             $_.has_audio_cache -eq $true
->>         }
->>     ).Count
->>     CoLoi = @(
->>         $r.songs | Where-Object {
->>             $_.has_lyrics_cache -eq $true
->>         }
->>     ).Count
->>     CoCaAmThanhVaLoi = @(
->>         $r.songs | Where-Object {
->>             $_.has_audio_cache -eq $true -and
->>             $_.has_lyrics_cache -eq $true
->>         }
->>     ).Count
->> } | Format-List
+$p | Select-Object success, count, served_by
 
-
-Nguon            : google_drive
-TongBai          : 1339
-CoAmThanh        : 1339
-CoLoi            : 168
-CoCaAmThanhVaLoi : 168
-
-
-
-PS C:\Users\Administrator>
+$p.counts | Format-List
