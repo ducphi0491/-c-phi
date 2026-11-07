@@ -1,3 +1,33 @@
+PS C:\Users\Administrator>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File "$env:USERPROFILE\Downloads\KIEM_TRA_DOCUMENTS_IIS_READONLY_20261107.ps1"
+=== TUNERTOOLS DOCUMENTS IIS DIAGNOSTICS - READ ONLY ===
+No PHP edits; no credentials or session tokens printed.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$env:USERPROFILE\Downloads\KIEM_TRA_DOCUMENTS_IIS_READONLY_20261107.ps1"
+=== IIS WEBSITE PHYSICAL ROOTS ===
+SITE: Default Web Site | Started | C:\inetpub\wwwroot
+
+=== LOCAL PHP CANDIDATES ===
+
+FILE    : C:\inetpub\wwwroot\api_documents.php
+SIZE    : 82 bytes
+MODIFIED: 2026-11-05 14:30:14
+SHA256  : 49A818F3C244DA76...
+HEADER  : 3C 3F 70 68 70 0A 64 65 63 6C 61 72
+PHP tag : True
+auth_login text     : False
+permission_me text  : False
+document session    : False
+PHP action handling : False
+list/view/download  : False
+include/require     : True
+
+=== LIVE PUBLIC ROUTES (NO SESSION TOKEN) ===
+HTTP 200 (application/json; charset=utf-8) : https://tunertools.top/api_documents.php?action=health
+  service = tunertools_documents
+  version = 2026-10-09-video-switch-v11
+  success = True
+HTTP 401 : https://tunertools.top/api_documents.php?action=permission_me
+
+Done. Please share only this diagnostic output, not the PHP credentials.
+PS C:\Users\Administrator>
