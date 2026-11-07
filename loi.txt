@@ -1,51 +1,26 @@
+$zip = "$env:USERPROFILE\Downloads\AI_JSON_Drive_Sync_FIX_Download.zip"
+$dest = "C:\TunerTools\Tools\AI_JSON_Drive_Sync"
+
+if (!(Test-Path -LiteralPath $zip)) {
+    throw "Chua tim thay ZIP trong Downloads"
+}
+
+New-Item -ItemType Directory -Force -Path $dest |
+    Out-Null
+
+Expand-Archive -LiteralPath $zip `
+    -DestinationPath $dest -Force
+
+$script = Join-Path $dest "CHAY_UPLOAD_AI_JSON.ps1"
+
+if (!(Test-Path -LiteralPath $script)) {
+    throw "Khong tim thay file PS1 sau giai nen"
+}
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\CHAY_UPLOAD_AI_JSON.ps1 `
-  -OnlyId "18JJ0AEDF3CO"
+    -File $script -OnlyId "18JJ0AEDF3CO"
 
 
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\CHAY_UPLOAD_AI_JSON.ps1 `
-  -OnlyId "18JJ0AEDF3CO" -Upload
-
-
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\CHAY_UPLOAD_AI_JSON.ps1 -Upload
-
-
-
-
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>   -File .\CHAY_UPLOAD_AI_JSON.ps1 `
->>   -OnlyId "18JJ0AEDF3CO"
->>
->>
-The argument '.\CHAY_UPLOAD_AI_JSON.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>   -File .\CHAY_UPLOAD_AI_JSON.ps1 `
->>   -OnlyId "18JJ0AEDF3CO"
-The argument '.\CHAY_UPLOAD_AI_JSON.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>   -File .\CHAY_UPLOAD_AI_JSON.ps1 `
->>   -OnlyId "18JJ0AEDF3CO" -Upload
-The argument '.\CHAY_UPLOAD_AI_JSON.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>   -File .\CHAY_UPLOAD_AI_JSON.ps1 -Upload
-The argument '.\CHAY_UPLOAD_AI_JSON.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator>
+    -File $script -OnlyId "18JJ0AEDF3CO" -Upload
