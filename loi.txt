@@ -1,4 +1,23 @@
-$script = "C:\TunerTools\Tools\AI_JSON_Drive_Sync\CHAY_UPLOAD_AI_JSON.ps1"
+PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_JSON_Drive_Sync\CHAY_UPLOAD_AI_JSON.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File $script -Upload
+MODE: UPLOAD
+LOCAL VALID JSON: 1820
+TOKEN FILE: Found (private; contents not printed)
+GOOGLE DRIVE lyrics existing entries: 3
+ALREADY ON DRIVE: 3
+MISSING: 1817
+  18XALF7IWHW4_Sau Mỗi Giấc Mơ_Đông Nhi.json
+  196I7JMLX4WC_Hurt_NewJeans.json
+  1F4ZYBL5TO4H_Buông Tay_Khởi My.json
+  1NIAP1UBMWUP_Chờ Đông_Trung Quang.json
+  1ONR507UC5BC_Hối Hận Trong Anh_Tuấn Hưng.json
+  1OTZHJL6NWEI_Từng Ngày Qua_Wanbi Tuấn Anh.json
+  1QOA5DDUTXQE_MANIAC_Stray Kids.json
+  1QS6WJSS1YYB_Anh Phải Làm Sao_Triệu Lộc.json
+[1/1817] uploaded=1 failed=0
+[7/1817] ERROR 1QOA5DDUTXQE_MANIAC_Stray Kids.json: URLError: <urlopen error [WinError 10054] An existing connection was forcibly closed by the remote host>
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File $script -Upload
+
+
