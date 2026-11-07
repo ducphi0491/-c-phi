@@ -1,21 +1,40 @@
-$filename = "zing_acapella_18JJ0AEDF3CO.ogg"
-$encoded = [uri]::EscapeDataString($filename)
-$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$encoded"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$lookup = Invoke-RestMethod -Uri $url -TimeoutSec 30
+PS C:\Users\Administrator> $filename = "zing_acapella_18JJ0AEDF3CO.ogg"
+>> $encoded = [uri]::EscapeDataString($filename)
+>> $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$encoded"
+>>
+>> $lookup = Invoke-RestMethod -Uri $url -TimeoutSec 30
+>>
+>> if ($lookup.found -eq $true -and $lookup.source -eq "google_drive") {
+>>     $result = Invoke-WebRequest -Uri $lookup.stream_url `
+>>         -UseBasicParsing `
+>>         -Headers @{Range = "bytes=0-1023"} `
+>>         -TimeoutSec 40
+>>
+>>     [PSCustomObject]@{
+>>         HTTP = $result.StatusCode
+>>         ContentType = $result.Headers["Content-Type"]
+>>         ContentRange = $result.Headers["Content-Range"]
+>>         BytesReceived = $result.RawContentLength
+>>     } | Format-List
+>> } else {
+>>     Write-Host "Khong tim thay file tren Google Drive."
+>> }
+Invoke-WebRequest : The 'Range' header must be modified using the appropriate property or method.
+Parameter name: name
+At line:8 char:15
++     $result = Invoke-WebRequest -Uri $lookup.stream_url `
++               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Invoke-WebRequest], ArgumentException
+    + FullyQualifiedErrorId : System.ArgumentException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
 
-if ($lookup.found -eq $true -and $lookup.source -eq "google_drive") {
-    $result = Invoke-WebRequest -Uri $lookup.stream_url `
-        -UseBasicParsing `
-        -Headers @{Range = "bytes=0-1023"} `
-        -TimeoutSec 40
+Cannot index into a null array.
+At line:13 char:5
++     [PSCustomObject]@{
++     ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : NullArray
 
-    [PSCustomObject]@{
-        HTTP = $result.StatusCode
-        ContentType = $result.Headers["Content-Type"]
-        ContentRange = $result.Headers["Content-Range"]
-        BytesReceived = $result.RawContentLength
-    } | Format-List
-} else {
-    Write-Host "Khong tim thay file tren Google Drive."
-}
+PS C:\Users\Administrator>
