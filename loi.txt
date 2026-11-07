@@ -1,5 +1,21 @@
-try {
-    (Invoke-WebRequest -Uri 'https://tuner.alwaysdata.net/api_documents_drive.php?action=list&instrument=guitar&path=' -UseBasicParsing).StatusCode
-} catch {
-    [int]$_.Exception.Response.StatusCode
+$folder = "C:\TunerTools\Audio\AI_Music\stream_cache"
+
+Get-ChildItem $folder -File -ErrorAction Stop |
+Where-Object { $_.Extension -in @(".wav", ".mp3", ".m4a") } |
+Select-Object -First 5 Name, Length
+
+
+$filename = (Get-ChildItem "C:\TunerTools\Audio\AI_Music\stream_cache" -File |
+Where-Object { $_.Extension -in @(".wav", ".mp3", ".m4a") } |
+Select-Object -First 1).Name
+
+if ($filename) {
+    $encoded = [uri]::EscapeDataString($filename)
+    $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$encoded"
+
+    Invoke-RestMethod -Uri $url |
+    Select-Object ok, found, source, stream_url, size_bytes |
+    Format-List
+} else {
+    Write-Host "Khong tim thay file audio trong thu muc."
 }
