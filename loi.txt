@@ -1,10 +1,18 @@
-
-$folder = "$env:USERPROFILE\Downloads\Documents_DriveFirst_Fix"
-
-Expand-Archive `
-    -LiteralPath "$env:USERPROFILE\Downloads\TunerTools_Documents_DriveFirst_SuaLoi_KhongCanVaIIS_20261107.zip" `
-    -DestinationPath $folder -Force
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$folder\KIEM_TRA_IIS_HIEN_TAI.ps1" `
-    -IisPhp "C:\inetpub\wwwroot\api_documents.php"
+PS C:\Users\Administrator>
+>> $folder = "$env:USERPROFILE\Downloads\Documents_DriveFirst_Fix"
+>>
+>> Expand-Archive `
+>>     -LiteralPath "$env:USERPROFILE\Downloads\TunerTools_Documents_DriveFirst_SuaLoi_KhongCanVaIIS_20261107.zip" `
+>>     -DestinationPath $folder -Force
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File "$folder\KIEM_TRA_IIS_HIEN_TAI.ps1" `
+>>     -IisPhp "C:\inetpub\wwwroot\api_documents.php"
+=== DOCUMENTS IIS READ-ONLY COMPATIBILITY TEST ===
+api_documents.php : C:\inetpub\wwwroot\api_documents.php
+auth_login action : False
+permission_me action : False
+action dispatcher : False
+No file was modified. No credentials were displayed.
+IMPORTANT: Do not deploy the new Alwaysdata PHP yet. The IIS auth contract needs review.
+PS C:\Users\Administrator>
