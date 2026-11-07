@@ -1,79 +1,41 @@
 
-$ErrorActionPreference = "Stop"
+COPY OK: QUYỂN 1.pdf
+COPY OK: QUYỂN 2.pdf
+============================================================
+ TUNERTOOLS DOCUMENTS - GOOGLE DRIVE AUTO UPLOAD
+============================================================
+Source : C:\TunerTools\BackupPrep\Documents_Only2_20261107_130752
+Output : C:\TunerTools\BackupPrep\Drive_Documents_Only2
+Token  : existing private OAuth file (NOT copied or modified)
+Google : My Drive/TunerTools_AppBackup/document
+Upload is incremental: only new/changed files are transferred.
 
-# 1. Thu muc nguon
-$root = "C:\TunerTools\Data\Documents"
+Inventory metadata (quick scan; no MD5 of all files): C:\TunerTools\BackupPrep\Documents_Only2_20261107_130752
+Found 2 media files, total 40.76 MB
+Guitar 2
+Ukulele 0
+Piano 0
+Google OAuth: refreshing access token...
+Google OAuth: connected, locating destination folders...
+New/verified Drive documents root ID: 1mFkk0gyYCzkdILZFKRdQAuRjgxY7f53I
+Starting REAL upload now (new or changed files only)...
+[1/2] ERROR Guitar/Cộng đồng/QUYỂN 1.pdf: File changed during upload; retry backup after files stop changing
+[2/2] ERROR Guitar/Cộng đồng/QUYỂN 2.pdf: File changed during upload; retry backup after files stop changing
+Partial upload: Drive index was NOT regenerated. Re-run to finish failed files.
+Completed: partial_failure failed: 2
+Local manifest: C:\TunerTools\BackupPrep\Drive_Documents_Only2\documents_drive_manifest.json
+Documents backup stopped with error 1
+At C:\TunerTools\BackupScripts\Drive_Documents\03_drive_documents.ps1:30 char:28
++ ... DE -ne 0) { throw "Documents backup stopped with error $LASTEXITCODE" ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Documents backup stopped with error 1:String) [], RuntimeException
+    + FullyQualifiedErrorId : Documents backup stopped with error 1
 
-# 2. Tu dong tim thu muc chua 2 file QUY*.pdf
-$candidates = @(
-    Get-ChildItem -LiteralPath $root -Directory |
-    Where-Object {
-        $folderFiles = @(
-            Get-ChildItem -LiteralPath $_.FullName -File -Filter "QUY*.pdf" |
-            Where-Object { $_.BaseName -match "\s[12]$" }
-        )
-        $folderFiles.Count -eq 2
-    }
-)
+Upload chua hoan tat. Kiem tra thong bao phia tren.
+At line:74 char:5
++     throw "Upload chua hoan tat. Kiem tra thong bao phia tren."
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Upload chua hoa... bao phia tren.:String) [], RuntimeException
+    + FullyQualifiedErrorId : Upload chua hoan tat. Kiem tra thong bao phia tren.
 
-if ($candidates.Count -ne 1) {
-    Get-ChildItem -LiteralPath $root -Recurse -File -Filter "QUY*.pdf" |
-        Select-Object FullName, Length
-    throw "Khong xac dinh duoc duy nhat thu muc chua 2 PDF."
-}
-
-$sourceDir = $candidates[0]
-
-$pdfs = @(
-    Get-ChildItem -LiteralPath $sourceDir.FullName -File -Filter "QUY*.pdf" |
-    Where-Object { $_.BaseName -match "\s[12]$" }
-)
-
-if (
-    $pdfs.Count -ne 2 -or
-    @($pdfs | Where-Object { $_.BaseName -match "\s1$" }).Count -ne 1 -or
-    @($pdfs | Where-Object { $_.BaseName -match "\s2$" }).Count -ne 1
-) {
-    throw "Khong tim thay dung hai file can upload."
-}
-
-Write-Host "TIM THAY 2 FILE:" -ForegroundColor Green
-$pdfs | Select-Object FullName, Length | Format-Table -AutoSize
-
-# 3. Tao ban sao on dinh, chi gom hai file
-$stage = "C:\TunerTools\BackupPrep\Documents_Only2_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-$dest = Join-Path (Join-Path $stage "Guitar") $sourceDir.Name
-
-New-Item -ItemType Directory -Path $dest -Force | Out-Null
-
-foreach ($pdf in $pdfs) {
-    $target = Join-Path $dest $pdf.Name
-
-    Copy-Item -LiteralPath $pdf.FullName -Destination $target -Force
-
-    $originalHash = (Get-FileHash -LiteralPath $pdf.FullName -Algorithm SHA256).Hash
-    $copiedHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
-
-    if ($originalHash -ne $copiedHash) {
-        throw "File thay doi khi sao chep: $($pdf.FullName)"
-    }
-
-    Write-Host "COPY OK: $($pdf.Name)" -ForegroundColor Green
-}
-
-# 4. Upload CHI HAI FILE len Google Drive
-$tool = "C:\TunerTools\BackupScripts\Drive_Documents"
-$report = "C:\TunerTools\BackupPrep\Drive_Documents_Only2"
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$tool\CHAY_UPLOAD_DOCUMENTS.ps1" `
-    -SourceDir $stage `
-    -OutputDir $report
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Upload chua hoan tat. Kiem tra thong bao phia tren."
-}
-
-# 5. Xem bao cao
-Write-Host "UPLOAD HOAN TAT" -ForegroundColor Green
-Get-Content "$report\KET_QUA_UPLOAD_DOCUMENTS.txt"
+PS C:\Users\Administrator>
