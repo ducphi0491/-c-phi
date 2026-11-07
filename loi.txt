@@ -1,2 +1,7 @@
+PS C:\Users\Administrator> Get-Content -LiteralPath "C:\inetpub\wwwroot\api_documents.php"
+<?php
+declare(strict_types=1);
 
-Get-Content -LiteralPath "C:\inetpub\wwwroot\api_documents.php"
+require 'C:/TunerTools/Web/API/api_documents.php';
+PS C:\Users\Administrator>
+
