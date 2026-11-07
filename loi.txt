@@ -1,16 +1,73 @@
 
+$ErrorActionPreference = "Stop"
+
+# 1. Thu muc tai lieu goc
 $root = "C:\TunerTools\Data\Documents"
 
-Get-ChildItem -LiteralPath $root -Recurse -File |
-    Where-Object {
-        $_.Name -in @("QUYỂN 1.pdf", "QUYỂN 2.pdf")
-    } |
-    Select-Object FullName, Length, LastWriteTime |
-    Format-List
+# 2. Tim 2 file PDF
+$names = @("QUYỂN 1.pdf", "QUYỂN 2.pdf")
 
+$folders = @(
+    "$root\Cộng đồng",
+    "$root\Guitar\Cộng đồng"
+)
 
+$sourceFolder = $null
 
+foreach ($f in $folders) {
+    if (
+        (Test-Path -LiteralPath "$f\QUYỂN 1.pdf") -and
+        (Test-Path -LiteralPath "$f\QUYỂN 2.pdf")
+    ) {
+        $sourceFolder = $f
+        break
+    }
+}
+
+if (-not $sourceFolder) {
+    throw "Khong tim thay du 2 file PDF."
+}
+
+# 3. Tao thu muc tam CHI CHUA 2 FILE
+$stage = "C:\TunerTools\BackupPrep\Documents_Only2"
+$dest = "$stage\Guitar\Cộng đồng"
+
+New-Item -ItemType Directory -Path $dest -Force |
+    Out-Null
+
+foreach ($name in $names) {
+    $src = Join-Path $sourceFolder $name
+    $dst = Join-Path $dest $name
+
+    $before = Get-Item -LiteralPath $src
+
+    Copy-Item -LiteralPath $src `
+        -Destination $dst -Force
+
+    $after = Get-Item -LiteralPath $src
+    $copy = Get-Item -LiteralPath $dst
+
+    if (
+        $before.Length -ne $after.Length -or
+        $before.LastWriteTimeUtc -ne $after.LastWriteTimeUtc -or
+        $copy.Length -ne $after.Length
+    ) {
+        throw "File thay doi khi copy: $name"
+    }
+
+    Write-Host "READY: $name" -ForegroundColor Green
+}
+
+# 4. Upload CHI 2 FILE len Google Drive
+$tool = "C:\TunerTools\BackupScripts\Drive_Documents"
+$report = "C:\TunerTools\BackupPrep\Drive_Documents_Only2"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "C:\TunerTools\BackupScripts\Drive_Documents\CHAY_UPLOAD_DOCUMENTS.ps1" `
-    -SourceDir "C:\TunerTools\Data\Documents"
+    -File "$tool\CHAY_UPLOAD_DOCUMENTS.ps1" `
+    -SourceDir $stage `
+    -OutputDir $report
+
+# 5. Xem ket qua rieng 2 file
+if ($LASTEXITCODE -eq 0) {
+    Get-Content "$report\KET_QUA_UPLOAD_DOCUMENTS.txt"
+}
