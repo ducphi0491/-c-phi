@@ -1,15 +1,1 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> Test-Path "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1"
-True
-PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1"
-=== TUNERTOOLS DOCUMENTS IIS REAL-PHP PATCH V1 ===
-Source : C:\TunerTools\Web\API\api_documents.php
-Mode   : PREVIEW ONLY
-Prepared: C:\TunerTools\Backups\DocumentsIIS_DriveAuth\api_documents.PREVIEW_20261107_143432.php
-PHP CLI: C:\PHP\php.exe
-No syntax errors detected in C:\TunerTools\Backups\DocumentsIIS_DriveAuth\api_documents.PREVIEW_20261107_143432.php
-Preview OK. To install, run the same command with -Apply.
-PS C:\Users\Administrator> Get-ChildItem "C:\TunerTools" -Recurse -Filter "PATCH_IIS_PHP_THAT.ps1" -File | Select-Object -ExpandProperty FullName
-C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1" -Apply
