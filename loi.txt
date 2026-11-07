@@ -1,3 +1,4 @@
 Test-Path "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1"
 Get-ChildItem "C:\TunerTools" -Recurse -Filter "PATCH_IIS_PHP_THAT.ps1" -File | Select-Object -ExpandProperty FullName
+C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix
