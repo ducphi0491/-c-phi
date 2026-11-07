@@ -128,6 +128,129 @@ private enum class GpServerHealthState {
     BOTH_DOWN
 }
 
+
+// --- AI cached media: Google Drive via Alwaysdata first, Python server fallback. ---
+// This gateway stores only ALREADY GENERATED data. AI inference remains on Python.
+private const val AI_DRIVE_MEDIA_GATEWAY =
+    "https://tuner.alwaysdata.net/api_ai_media_drive.php"
+private const val AI_ORIGINAL_STREAM_BASE =
+    "https://api.tunertools.top/api/stream_cache/"
+private val aiDriveProbeClient by lazy {
+    okhttp3.OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+}
+
+private fun aiCachedMediaFilenameSafe(filename: String, lyrics: Boolean = false): Boolean {
+    if (filename.isEmpty() || filename.length > 185 || filename.startsWith('.') ||
+        filename.contains('/') || filename.contains('\\') || filename.any { it.isISOControl() }) return false
+    val ext = filename.substringAfterLast('.', "").lowercase()
+    return if (lyrics) ext == "json"
+    else ext in setOf("wav", "mp3", "m4a", "aac", "ogg", "flac", "opus", "webm")
+}
+
+/** Must be called from an IO coroutine; no credentials are sent to Alwaysdata. */
+private fun findAiDriveMediaUrl(filename: String, lyrics: Boolean = false): String? {
+    if (!aiCachedMediaFilenameSafe(filename, lyrics)) return null
+    val kindSuffix = if (lyrics) "&kind=lyrics" else ""
+    val url = "$AI_DRIVE_MEDIA_GATEWAY?action=lookup&filename=${Uri.encode(filename)}$kindSuffix"
+    return try {
+        val req = okhttp3.Request.Builder().url(url).get().build()
+        aiDriveProbeClient.newCall(req).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            val data = org.json.JSONObject(response.body?.string() ?: "{}")
+            if (!data.optBoolean("ok") || !data.optBoolean("found") ||
+                data.optString("source") != "google_drive") return@use null
+            data.optString("stream_url").takeIf { value ->
+                value.startsWith("$AI_DRIVE_MEDIA_GATEWAY?action=")
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.w("AiDriveSource", "Drive lookup unavailable; trying Python origin")
+        null
+    }
+}
+
+private data class AiReadyPlayer(val player: android.media.MediaPlayer, val source: String)
+
+/** Called only on Dispatchers.IO; fallback covers Drive lookup/HTTP/prepare failures. */
+private fun prepareZingAiPlayer(filename: String): AiReadyPlayer {
+    val driveUrl = findAiDriveMediaUrl(filename)
+    if (driveUrl != null) {
+        val player = android.media.MediaPlayer()
+        try {
+            player.setDataSource(driveUrl)
+            player.prepare()
+            android.util.Log.i("AiDriveSource", "Zing audio prepared: google_drive")
+            return AiReadyPlayer(player, "google_drive")
+        } catch (e: Exception) {
+            stopAndReleaseSongPlayer(player)
+            android.util.Log.w("AiDriveSource", "Drive stream unavailable; using Python fallback")
+        }
+    }
+    val player = android.media.MediaPlayer()
+    try {
+        player.setDataSource(AI_ORIGINAL_STREAM_BASE + Uri.encode(filename))
+        player.prepare()
+        android.util.Log.i("AiDriveSource", "Zing audio prepared: python_origin")
+        return AiReadyPlayer(player, "python_origin")
+    } catch (e: Exception) {
+        stopAndReleaseSongPlayer(player)
+        throw e
+    }
+}
+
+/** Downloads a previously processed WAV from Drive into the app's local cache. */
+private fun downloadAiAudioFromDriveIfAvailable(
+    filename: String,
+    targetFile: java.io.File,
+    client: okhttp3.OkHttpClient
+): Boolean {
+    val driveUrl = findAiDriveMediaUrl(filename) ?: return false
+    val temp = java.io.File(targetFile.parentFile, targetFile.name + ".drive_partial")
+    return try {
+        val req = okhttp3.Request.Builder().url(driveUrl).get().build()
+        client.newCall(req).execute().use { response ->
+            val type = response.header("Content-Type").orEmpty().lowercase()
+            if (!response.isSuccessful || (!type.startsWith("audio/") && type != "application/octet-stream")) {
+                return@use false
+            }
+            response.body?.byteStream()?.use { input ->
+                temp.outputStream().use { output -> input.copyTo(output) }
+            } ?: return@use false
+            if (temp.length() <= 100 * 1024) return@use false
+            if (!temp.renameTo(targetFile)) temp.copyTo(targetFile, overwrite = true)
+            android.util.Log.i("AiDriveSource", "Local audio cache restored: google_drive")
+            true
+        }
+    } catch (_: Exception) {
+        android.util.Log.w("AiDriveSource", "Drive audio download failed; trying Python origin")
+        false
+    } finally {
+        if (temp.exists()) temp.delete()
+    }
+}
+
+/** Optional JSON cache; requires Python backend to write <video_id>.json in Drive /lyrics. */
+private fun getAiLyricsJsonFromDrive(videoId: String): org.json.JSONObject? {
+    if (!Regex("^[A-Za-z0-9_-]{11}$").matches(videoId)) return null
+    val url = findAiDriveMediaUrl("$videoId.json", lyrics = true) ?: return null
+    return try {
+        val req = okhttp3.Request.Builder().url(url).get().build()
+        aiDriveProbeClient.newCall(req).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            val text = response.body?.string() ?: return@use null
+            if (text.length > 2_000_000) return@use null
+            val lyrics = org.json.JSONObject(text)
+            if (lyrics.optJSONArray("lyrics") == null) return@use null
+            android.util.Log.i("AiDriveSource", "Timed lyrics loaded: google_drive")
+            lyrics
+        }
+    } catch (_: Exception) { null }
+}
+// --- End AI Drive cached media helpers. ---
+
 private const val GP_PRIMARY_HEALTH_URL =
     "https://tunertools.top/api_gp_search.php?action=health"
 private const val GP_BACKUP_HEALTH_URL =
@@ -491,24 +614,37 @@ private fun handleSongPlayMode(
                             // ĐÃ SỬA: Ép gọn lời bài hát bằng formatRawLyrics trước khi đưa vào AI phân tích
                             val compactedLyrics = formatRawLyrics(songSnapshot.lyrics)
                             val mappedLines = robustMapTimingLocal(compactedLyrics, zingCaptions)
-                            withContext(Dispatchers.Main) {
-                                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
-                                    return@withContext
+                            val ready = try {
+                                prepareZingAiPlayer(filename)
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    ui.isAiAnalyzing = false
+                                    Toast.makeText(context, "Không phát được âm thanh AI", Toast.LENGTH_SHORT).show()
                                 }
-                                ui.aiProgress = 1.0f
-                                ui.syncedKaraokeLines = mappedLines
-                                ui.isAiAnalyzing = false
-                                stopAndReleaseSongPlayer(ui.mediaPlayer)
-                                ui.mediaPlayer = android.media.MediaPlayer().apply {
-                                    setDataSource("https://api.tunertools.top/api/stream_cache/$filename")
-                                    prepare()
-                                    start()
+                                return@launchLatestSongAiJob
+                            }
+                            var acceptedPlayer = false
+                            try {
+                                withContext(Dispatchers.Main) {
+                                    if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                                        return@withContext
+                                    }
+                                    ui.aiProgress = 1.0f
+                                    ui.syncedKaraokeLines = mappedLines
+                                    ui.isAiAnalyzing = false
+                                    stopAndReleaseSongPlayer(ui.mediaPlayer)
+                                    ui.mediaPlayer = null
+                                    ready.player.start()
+                                    ui.mediaPlayer = ready.player
+                                    acceptedPlayer = true
+                                    ui.totalAudioDurationMs = ready.player.duration.toLong()
+                                    ui.currentVideoTimeMs = 0L
+                                    ui.syncOffsetMs = 0L
+                                    ui.isAudioPlaying = ready.player.isPlaying
+                                    ui.activeMediaType = "ZING_KARAOKE"
                                 }
-                                ui.totalAudioDurationMs = ui.mediaPlayer?.duration?.toLong() ?: 0L
-                                ui.currentVideoTimeMs = 0L
-                                ui.syncOffsetMs = 0L
-                                ui.isAudioPlaying = true
-                                ui.activeMediaType = "ZING_KARAOKE"
+                            } finally {
+                                if (!acceptedPlayer) stopAndReleaseSongPlayer(ready.player)
                             }
                         } else {
                             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -524,27 +660,30 @@ private fun handleSongPlayMode(
                     else {
                         // KHẮC PHỤC LỖI: Tải audio trên IO Thread và ép phát ngay lập tức
                         try {
-                            val targetPath = "https://api.tunertools.top/api/stream_cache/$filename"
-                            val mp = android.media.MediaPlayer().apply {
-                                setDataSource(targetPath)
-                                prepare()
-                            }
-                            withContext(Dispatchers.Main) {
-                                if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
-                                    stopAndReleaseSongPlayer(mp)
-                                    return@withContext
+                            val ready = prepareZingAiPlayer(filename)
+                            val mp = ready.player
+                            var acceptedPlayer = false
+                            try {
+                                withContext(Dispatchers.Main) {
+                                    if (!coordinator.isCurrentSong(requestToken, songSnapshot.songId, ui.currentSongData?.songId)) {
+                                        return@withContext
+                                    }
+                                    ui.aiProgress = 1.0f
+                                    ui.syncedKaraokeLines = null
+                                    ui.isAiAnalyzing = false
+                                    stopAndReleaseSongPlayer(ui.mediaPlayer)
+                                    ui.mediaPlayer = null
+                                    mp.start()
+                                    ui.mediaPlayer = mp
+                                    acceptedPlayer = true
+                                    ui.totalAudioDurationMs = mp.duration.toLong()
+                                    ui.currentVideoTimeMs = mp.currentPosition.toLong()
+                                    ui.syncOffsetMs = 0L
+                                    ui.isAudioPlaying = mp.isPlaying
+                                    ui.activeMediaType = "ACAPELLA_AUDIO"
                                 }
-                                ui.aiProgress = 1.0f
-                                ui.syncedKaraokeLines = null
-                                ui.isAiAnalyzing = false
-                                stopAndReleaseSongPlayer(ui.mediaPlayer)
-                                ui.mediaPlayer = mp
-                                mp.start()
-                                ui.totalAudioDurationMs = mp.duration.toLong()
-                                ui.currentVideoTimeMs = mp.currentPosition.toLong()
-                                ui.syncOffsetMs = 0L
-                                ui.isAudioPlaying = mp.isPlaying
-                                ui.activeMediaType = "ACAPELLA_AUDIO"
+                            } finally {
+                                if (!acceptedPlayer) stopAndReleaseSongPlayer(mp)
                             }
                         } catch (cancelled: CancellationException) {
                             throw cancelled
@@ -753,8 +892,12 @@ private fun handleSongPlayMode(
                         val targetFile = java.io.File(context.cacheDir, "track_${videoId}_${targetMedia}.wav")
                         val audioFile = java.io.File(context.cacheDir, "temp_audio_$videoId.m4a")
 
-                        val hasLocalAudio = targetFile.exists() && targetFile.length() > 100 * 1024
+                        var hasLocalAudio = targetFile.exists() && targetFile.length() > 100 * 1024
+                        if (!hasLocalAudio && aiCachedMediaFilenameSafe(targetFile.name)) {
+                            hasLocalAudio = downloadAiAudioFromDriveIfAvailable(targetFile.name, targetFile, client)
+                        }
                         if (hasLocalAudio) {
+                            android.util.Log.i("AiDriveSource", "Audio available: android_cache_or_drive_download")
                             android.util.Log.d("KaraokeLog", "⚡ [0] Đã có sẵn nhạc trong ĐIỆN THOẠI! Tốc độ ánh sáng!")
                         }
 
@@ -771,13 +914,19 @@ private fun handleSongPlayMode(
                         val subtitlesList = mutableListOf<YoutubeCaptionEvent>()
 
                         if (!hasLyricsCache) {
-                            val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(cacheCheckBody).build()
-                            val res = try { client.newCall(req).execute() } catch(e:Exception) { null }
-                            if (res?.isSuccessful == true) {
+                            val driveLyrics = getAiLyricsJsonFromDrive(videoId)
+                            val originLyrics = if (driveLyrics == null) {
+                                try {
+                                    val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(cacheCheckBody).build()
+                                    client.newCall(req).execute().use { res ->
+                                        if (res.isSuccessful) res.body?.string()?.let { org.json.JSONObject(it) } else null
+                                    }
+                                } catch (_: Exception) { null }
+                            } else null
+                            val jsonObject = driveLyrics ?: originLyrics
+                            if (jsonObject != null) {
                                 hasLyricsCache = true
-                                val bodyStr = res.body?.string() ?: ""
-                                if (bodyStr.isNotEmpty()) {
-                                    val jsonObject = org.json.JSONObject(bodyStr)
+                                if (jsonObject.has("lyrics")) {
                                     val lyricsArray = jsonObject.optJSONArray("lyrics")
                                     if (lyricsArray != null) {
                                         for (i in 0 until lyricsArray.length()) {
@@ -804,18 +953,27 @@ private fun handleSongPlayMode(
                         // ========================================================
                         // BƯỚC 2: TỔNG HỢP NHU CẦU & TẢI YOUTUBE (NẾU CẦN)
                         // ========================================================
-                        var splitResponse: okhttp3.Response? = null
                         var hasAudioCache = false
                         val targetAudioUrl = "https://api.tunertools.top/api/get_vocals_only"
 
                         if (!hasLocalAudio && (mode == "ACAPELLA_NO_LYRICS" || mode == "ACAPELLA")) {
                             val req = okhttp3.Request.Builder().url(targetAudioUrl).post(cacheCheckBody).build()
-                            splitResponse = try { client.newCall(req).execute() } catch(e:Exception) { null }
-                            hasAudioCache = splitResponse?.isSuccessful == true
-                            if (!hasAudioCache) {
-                                splitResponse?.close()
-                                splitResponse = null
+                            try {
+                                client.newCall(req).execute().use { response ->
+                                    if (response.isSuccessful) {
+                                        val type = response.header("Content-Type").orEmpty().lowercase()
+                                        if (type.startsWith("audio/") || type == "application/octet-stream") {
+                                            response.body?.byteStream()?.use { input ->
+                                                targetFile.outputStream().use { output -> input.copyTo(output) }
+                                            }
+                                            hasAudioCache = targetFile.length() > 100 * 1024
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) {
+                                hasAudioCache = false
                             }
+                            if (!hasAudioCache && targetFile.exists()) targetFile.delete()
                         }
 
                         val needAudioProcessing = !hasLocalAudio && !hasAudioCache && (mode == "ACAPELLA_NO_LYRICS" || mode == "ACAPELLA")
@@ -908,13 +1066,15 @@ private fun handleSongPlayMode(
                                     .addFormDataPart("singer", songSnapshot.singer)
                                     .addFormDataPart("file", audioFile.name, audioFile.asRequestBody("audio/*".toMediaTypeOrNull()))
                                     .build()
-                                val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(lyricsReqBody).build()
-                                val res = client.newCall(req).execute()
-                                if (res.isSuccessful) {
+                                val jsonObject = getAiLyricsJsonFromDrive(videoId) ?: try {
+                                    val req = okhttp3.Request.Builder().url("https://api.tunertools.top/api/get_lyrics").post(lyricsReqBody).build()
+                                    client.newCall(req).execute().use { res ->
+                                        if (res.isSuccessful) res.body?.string()?.let { org.json.JSONObject(it) } else null
+                                    }
+                                } catch (_: Exception) { null }
+                                if (jsonObject != null) {
                                     hasLyricsCache = true
-                                    val bodyStr = res.body?.string() ?: ""
-                                    if (bodyStr.isNotEmpty()) {
-                                        val jsonObject = org.json.JSONObject(bodyStr)
+                                    if (jsonObject.has("lyrics")) {
                                         val lyricsArray = jsonObject.optJSONArray("lyrics")
                                         if (lyricsArray != null) {
                                             for (i in 0 until lyricsArray.length()) {
@@ -4984,6 +5144,8 @@ fun SongTabScreen(
                         },
                         onResult = { refreshedDetail ->
                             dbRefreshTrigger++
+                            // Cùng songId nhưng slug/imageCount có thể đã đổi sau khi sửa sheet.
+                            imageCacheBuster = System.currentTimeMillis()
                             if (
                                 currentSongData?.songId == savedSongId &&
                                 refreshedDetail.error == null
@@ -5005,6 +5167,14 @@ fun SongTabScreen(
                         },
                         onLoadingChanged = { isFetchingDetail = it }
                     )
+                },
+                onUpdatedSong = { updatedSong ->
+                    // API update trả ngay slug và imageCount mới. Cập nhật màn hình trước,
+                    // sau đó onSuccess vẫn chạy Sync V2 để ghi bền vững vào SQLite.
+                    if (currentSongData?.songId == updatedSong.songId) {
+                        currentSongData = updatedSong
+                    }
+                    imageCacheBuster = System.currentTimeMillis()
                 }
             )
         }
@@ -5789,6 +5959,264 @@ fun BpmSettingsDialogView(
                 Spacer(modifier = Modifier.height(24.dp))
                 TextButton(onClick = onDismiss) { Text("Đóng", color = Color.Gray) }
             }
+        }
+    }
+}
+
+// Restore the original sheet tutorial implementation required by SongTabScreen.
+enum class TutorialStep { NONE, SEARCH, DISPLAY_TOOLS, ADD, EDIT }
+
+@Composable
+fun TutorialOverlay(
+    step: TutorialStep,
+    currentLang: String,
+    tunaGreen: Color,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .clickable(enabled = false) {},
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .fillMaxHeight(0.85f)
+                .background(Color.White, RoundedCornerShape(16.dp))
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+
+            // --- TIÊU ĐỀ CHÍNH ---
+            Text(
+                text = when (step) {
+                    TutorialStep.SEARCH -> CoreTranslator.getString("tut_search_tools", currentLang)
+                    TutorialStep.DISPLAY_TOOLS -> CoreTranslator.getString("tut_display_tools_short", currentLang)
+                    TutorialStep.ADD -> CoreTranslator.getString("tut_add_new_song", currentLang)
+                    TutorialStep.EDIT -> CoreTranslator.getString("tut_edit_song_short", currentLang)
+                    else -> ""
+                },
+                color = tunaGreen, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(scrollState)
+            ) {
+                when (step) {
+                    TutorialStep.SEARCH -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp)).padding(8.dp)) {
+                                    Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_search_box", currentLang),
+                            desc = CoreTranslator.getString("tut_search_box_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { Icon(Icons.Default.Mic, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(24.dp).padding(top = 4.dp)) },
+                            title = CoreTranslator.getString("tut_voice", currentLang),
+                            desc = CoreTranslator.getString("tut_voice_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.border(1.dp, tunaGreen, RoundedCornerShape(4.dp)).padding(6.dp)) {
+                                    Icon(CustomIcons.Chord, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_chords", currentLang),
+                            desc = CoreTranslator.getString("tut_chords_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.border(1.dp, Color(0xFFE6A23C), RoundedCornerShape(4.dp)).padding(6.dp)) {
+                                    SheetMusicIcon(tint = Color(0xFFE6A23C), modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_sheet", currentLang),
+                            desc = CoreTranslator.getString("tut_sheet_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { ZingMp3Icon(modifier = Modifier.size(28.dp)) },
+                            title = CoreTranslator.getString("tut_zing", currentLang),
+                            desc = CoreTranslator.getString("tut_zing_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(width = 28.dp, height = 20.dp).background(Color.Red, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_youtube", currentLang),
+                            desc = CoreTranslator.getString("tut_youtube_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.Red, modifier = Modifier.size(26.dp)) },
+                            title = CoreTranslator.getString("tut_favorite", currentLang),
+                            desc = CoreTranslator.getString("tut_favorite_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = { Icon(Icons.Default.Flag, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(26.dp)) },
+                            title = CoreTranslator.getString("tut_report", currentLang),
+                            desc = CoreTranslator.getString("tut_report_desc", currentLang)
+                        )
+                    }
+
+                    TutorialStep.DISPLAY_TOOLS -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(22.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                        Text("♭", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Box(modifier = Modifier.size(22.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                        Text("♯", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                    }
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_transpose", currentLang),
+                            desc = CoreTranslator.getString("tut_transpose_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Remove, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Box(modifier = Modifier.size(22.dp).background(tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.KeyboardDoubleArrowDown, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_autoscroll", currentLang),
+                            desc = CoreTranslator.getString("tut_autoscroll_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(24.dp).background(tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.Palette, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_palette", currentLang),
+                            desc = CoreTranslator.getString("tut_palette_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(24.dp).background(tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_split", currentLang),
+                            desc = CoreTranslator.getString("tut_split_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.size(24.dp).border(1.dp, tunaGreen, CircleShape), contentAlignment = Alignment.Center) {
+                                    Text("IV", color = tunaGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_roman", currentLang),
+                            desc = CoreTranslator.getString("tut_roman_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("A", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("A", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_fontsize", currentLang),
+                            desc = CoreTranslator.getString("tut_fontsize_desc", currentLang)
+                        )
+
+                        TutorialItemRow(
+                            iconView = {
+                                Icon(Icons.Default.Translate, contentDescription = null, tint = tunaGreen, modifier = Modifier.size(22.dp))
+                            },
+                            title = CoreTranslator.getString("tut_trans", currentLang),
+                            desc = CoreTranslator.getString("tut_trans_desc", currentLang)
+                        )
+                    }
+
+                    TutorialStep.ADD -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.background(Color(0xFF1976D2), RoundedCornerShape(6.dp)).padding(8.dp)) {
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_add_btn", currentLang),
+                            desc = CoreTranslator.getString("tut_add_btn_desc", currentLang)
+                        )
+                    }
+
+                    TutorialStep.EDIT -> {
+                        TutorialItemRow(
+                            iconView = {
+                                Box(modifier = Modifier.background(Color(0xFFE6A23C), RoundedCornerShape(6.dp)).padding(8.dp)) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                            },
+                            title = CoreTranslator.getString("tut_edit_btn", currentLang),
+                            desc = CoreTranslator.getString("tut_edit_btn_desc", currentLang)
+                        )
+                    }
+                    else -> {}
+                }
+            }
+
+            // --- NÚT ĐÓNG ---
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = tunaGreen),
+                modifier = Modifier.fillMaxWidth(0.7f).height(48.dp)
+            ) {
+                Text(CoreTranslator.getString("tut_got_it", currentLang), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun TutorialItemRow(iconView: @Composable () -> Unit, title: String, desc: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier.width(48.dp),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            iconView()
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(text = title, color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = desc, color = Color.DarkGray, fontSize = 14.sp, lineHeight = 20.sp)
         }
     }
 }

@@ -87,6 +87,19 @@ data class DbBundleInstallResult(
     val songCount: Long = 0L
 )
 
+/**
+ * Kết quả cập nhật bài hát/sheet từ api_songs.php.
+ * Giữ hàm Boolean cũ để không ảnh hưởng các màn hình đang dùng, đồng thời
+ * trả luôn metadata mới (slug/imageCount) cho màn hình chi tiết cập nhật ngay.
+ */
+data class UpdateSongResult(
+    val success: Boolean,
+    val message: String = "",
+    val song: SongDetails? = null,
+    val currentCursor: Long = 0L,
+    val errorCode: String = ""
+)
+
 // ==========================================
 // 2. TWO-DATABASE INSTALLER
 // Kept in this file as requested. No extra .kt file is required.
@@ -104,11 +117,9 @@ private object TunerDbBundleInstaller {
 
     private const val PREF_NAME = "tuner_database_bundle"
     private const val KEY_INSTALLED_RELEASE = "installed_release"
-    // Tu 2.1.9 tro di: luu bang chung da chuyen doi/kiem tra, khong thay DB lan nua.
-    private const val KEY_COMPAT_VALIDATED_219 = "db_compat_validated_219"
-    private const val KEY_LAST_READY_APP_VERSION = "db_last_ready_app_version"
 
     private const val LEGACY_MAIN_DB_NAME = "tuner_songs.db"
+    private const val LEGACY_TEMP_DB_NAME = "tuner_songs_temp.db"
     private const val LEGACY_LYRICS_DB_NAME = "tuner_lyrics.db"
 
     suspend fun ensureInstalled(context: Context): DbBundleInstallResult = withContext(Dispatchers.IO) {
@@ -121,116 +132,118 @@ private object TunerDbBundleInstaller {
         val mainDb = context.getDatabasePath(MAIN_DB_NAME)
         val lyricsDb = context.getDatabasePath(LYRICS_DB_NAME)
         val installedRelease = prefs.getInt(KEY_INSTALLED_RELEASE, 0)
-        val validatedFor219 = prefs.getBoolean(KEY_COMPAT_VALIDATED_219, false)
+
+        // Fast path: không chạy quick_check/COUNT trên database lớn ở mỗi lần mở app.
+        // Dù DATA_RELEASE trong APK có tăng, cặp SQLite đã cài vẫn được giữ nguyên;
+        // nội dung mới sẽ đi qua Sync V2.
+        if (
+            installedRelease > 0 &&
+            mainDb.exists() && mainDb.length() > 1_000_000L &&
+            lyricsDb.exists() && lyricsDb.length() > 1_000_000L
+        ) {
+            deleteLegacyDatabases(context)
+            return DbBundleInstallResult(true, "Database ready")
+        }
+
+        // Database đã tồn tại và hợp lệ luôn được giữ nguyên.
+        // DATA_RELEASE chỉ còn là thông tin phiên bản seed, KHÔNG còn là lý do
+        // để xóa SQLite của người dùng rồi chép lại từ assets.
+        if (mainDb.exists() && lyricsDb.exists()) {
+            try {
+                val count = verifyMainDatabase(mainDb)
+                verifyLyricsDatabase(lyricsDb, count)
+                prefs.edit().putInt(KEY_INSTALLED_RELEASE, DATA_RELEASE).commit()
+                deleteLegacyDatabases(context)
+                return DbBundleInstallResult(true, "Database ready", count)
+            } catch (e: Exception) {
+                Log.e("TunerDbInstaller", "Existing database validation failed", e)
+
+                // Nếu đây là database đã từng cài thành công, không tự xóa dữ liệu.
+                // Trả lỗi rõ ràng để người dùng có thể sao lưu/khôi phục an toàn.
+                if (installedRelease > 0) {
+                    return DbBundleInstallResult(
+                        success = false,
+                        message = "Dữ liệu hiện tại bị lỗi. Ứng dụng đã giữ nguyên file .db để tránh mất bài/hợp âm cục bộ."
+                    )
+                }
+
+                // Chỉ dọn cặp file chưa hoàn tất ở lần cài đầu tiên.
+                deleteSqliteFile(mainDb)
+                deleteSqliteFile(lyricsDb)
+            }
+        } else if (mainDb.exists() || lyricsDb.exists()) {
+            if (installedRelease > 0) {
+                return DbBundleInstallResult(
+                    success = false,
+                    message = "Thiếu một phần database. Ứng dụng không tự xóa phần dữ liệu còn lại để tránh mất dữ liệu cục bộ."
+                )
+            }
+            // File rơi rớt của lần cài đầu chưa hoàn tất.
+            deleteSqliteFile(mainDb)
+            deleteSqliteFile(lyricsDb)
+        }
+
         val databaseDir = mainDb.parentFile
             ?: return DbBundleInstallResult(false, "Cannot locate database directory")
         databaseDir.mkdirs()
 
-        // From Tuner Tools 2.1.8 to 2.1.9: reuse the existing V2 pair.
-        // Installed app VERSION_NAME is not the prior installed version.
-        // Therefore we use database identity and SQLite schema, never an inferred
-        // old version, to decide whether a database is ready.
-        if (mainDb.exists() && lyricsDb.exists()) {
-            if (validatedFor219 &&
-                mainDb.length() > 1_000_000L && lyricsDb.length() > 1_000_000L
-            ) {
-                return DbBundleInstallResult(true, "Database ready (delta sync)")
-            }
-            return try {
-                // Verify the actual V2 schema once when upgrading from 2.1.8.
-                // Count mismatches or embedded lyrics should not force a reinstall;
-                // 2.1.8 could already have locally edited or partially synced data.
-                val count = verifyMainDatabase(mainDb, strictContents = false)
-                verifyLyricsDatabase(lyricsDb, count, strictCounts = false)
-                require(markDatabasesReady(prefs)) {
-                    "Cannot persist database compatibility state"
-                }
-                DbBundleInstallResult(true, "Database ready (delta sync)", count)
-            } catch (e: Exception) {
-                Log.e("TunerDbInstaller", "Existing V2 database is not compatible", e)
-                DbBundleInstallResult(
-                    false,
-                    "Database V2 chua tuong thich. Da giu nguyen tat ca file .db; khong tu dong thay the."
-                )
-            }
-        }
-
-        // Do not wipe a partially present pair, even if the legacy marker is missing.
-        // A real user's 2.1.8 database can exist without a reliable release marker.
-        if (mainDb.exists() || lyricsDb.exists()) {
-            return DbBundleInstallResult(
-                false,
-                "Thieu mot file database V2. Du lieu con lai duoc giu nguyen de phuc hoi an toan."
-            )
-        }
-
-        // 2.1.2 and older are not auto-migrated by this release. The user has
-        // confirmed that those versions require uninstall/reinstall. Never silently
-        // replace a legacy database just because a version marker is absent.
-        if (context.getDatabasePath(LEGACY_MAIN_DB_NAME).exists() ||
-            context.getDatabasePath(LEGACY_LYRICS_DB_NAME).exists()
-        ) {
-            return DbBundleInstallResult(
-                false,
-                "Phat hien database phien ban cu. Can cai moi ung dung; khong tu dong xoa du lieu cu."
-            )
-        }
-
-        // If the V2 installer previously completed but files disappeared, stop
-        // instead of automatically replacing a user's database.
-        if (installedRelease > 0 || validatedFor219) {
-            return DbBundleInstallResult(
-                false,
-                "Database da duoc cai truoc day nhung hien khong con. Khong tu dong thay the."
-            )
-        }
-
-        // Fresh installs only: inflate the complete seed database pair once.
-        // All subsequent application versions keep the pair and use Sync V2.
         val tempMain = File(databaseDir, "$MAIN_DB_NAME.installing")
         val tempLyrics = File(databaseDir, "$LYRICS_DB_NAME.installing")
         deleteSqliteFile(tempMain)
         deleteSqliteFile(tempLyrics)
-        try {
+
+        return try {
             checkAvailableStorage(databaseDir)
+
             extractZipAsset(context, MAIN_ASSET, tempMain)
             extractZipAsset(context, LYRICS_ASSET, tempLyrics)
-            val seedCount = verifyMainDatabase(tempMain)
-            verifyLyricsDatabase(tempLyrics, seedCount)
+
+            val sourceSongCount = verifyMainDatabase(tempMain)
+            verifyLyricsDatabase(tempLyrics, sourceSongCount)
+
             setDatabaseVersion(tempMain, MAIN_SCHEMA_VERSION)
             setDatabaseVersion(tempLyrics, LYRICS_SCHEMA_VERSION)
 
+            // Chỉ chạy khi cài lần đầu/khôi phục file chưa hoàn tất; không chạy khi cập nhật app.
             moveDatabaseFile(tempMain, mainDb)
             moveDatabaseFile(tempLyrics, lyricsDb)
-            val finalCount = verifyMainDatabase(mainDb)
-            verifyLyricsDatabase(lyricsDb, finalCount)
 
-            // A fresh seed starts a new delta synchronization history.
-            require(
-                context.getSharedPreferences("tuner_song_sync_v2", Context.MODE_PRIVATE)
-                    .edit().clear().commit()
-            ) { "Cannot reset fresh-install sync state" }
-            require(markDatabasesReady(prefs)) { "Cannot save seed state" }
+            val finalSongCount = verifyMainDatabase(mainDb)
+            verifyLyricsDatabase(lyricsDb, finalSongCount)
 
-            return DbBundleInstallResult(true, "Seed installed (delta sync ready)", finalCount)
+            require(prefs.edit().putInt(KEY_INSTALLED_RELEASE, DATA_RELEASE).commit()) {
+                "Cannot save database install state"
+            }
+
+            // Seed mới cần bootstrap lại cursor từ máy chủ đúng một lần.
+            context.getSharedPreferences("tuner_song_sync_v2", Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .commit()
+
+            deleteLegacyDatabases(context)
+
+            DbBundleInstallResult(
+                success = true,
+                message = "Database installed successfully",
+                songCount = finalSongCount
+            )
         } catch (e: Exception) {
-            Log.e("TunerDbInstaller", "Fresh seed installation failed", e)
+            Log.e("TunerDbInstaller", "Database installation failed", e)
             deleteSqliteFile(tempMain)
             deleteSqliteFile(tempLyrics)
-            // Both paths were absent before this first install; any files created
-            // in this try block are incomplete seed files, not existing user data.
-            deleteSqliteFile(mainDb)
-            deleteSqliteFile(lyricsDb)
-            return DbBundleInstallResult(false, e.message ?: "Cannot install initial database")
-        }
-    }
 
-    private fun markDatabasesReady(prefs: android.content.SharedPreferences): Boolean {
-        return prefs.edit()
-            .putInt(KEY_INSTALLED_RELEASE, DATA_RELEASE)
-            .putBoolean(KEY_COMPAT_VALIDATED_219, true)
-            .putString(KEY_LAST_READY_APP_VERSION, BuildConfig.VERSION_NAME)
-            .commit()
+            // Đây chỉ là dữ liệu mới tạo trong lần cài đầu, không phải DB người dùng cũ.
+            if (prefs.getInt(KEY_INSTALLED_RELEASE, 0) == 0) {
+                deleteSqliteFile(mainDb)
+                deleteSqliteFile(lyricsDb)
+            }
+
+            DbBundleInstallResult(
+                success = false,
+                message = e.message ?: "Cannot prepare song database"
+            )
+        }
     }
 
     private fun checkAvailableStorage(databaseDir: File) {
@@ -264,7 +277,7 @@ private object TunerDbBundleInstaller {
         }
     }
 
-    private fun verifyMainDatabase(file: File, strictContents: Boolean = true): Long {
+    private fun verifyMainDatabase(file: File): Long {
         require(file.exists()) { "Metadata database not found" }
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
@@ -282,12 +295,8 @@ private object TunerDbBundleInstaller {
                 db,
                 "SELECT COUNT(*) FROM songs WHERE TRIM(COALESCE(lyrics, '')) <> ''"
             )
-            if (strictContents) {
-                require(nonEmptyLyrics == 0L) {
-                    "Metadata database still contains $nonEmptyLyrics full lyrics rows"
-                }
-            } else if (nonEmptyLyrics > 0L) {
-                Log.w("TunerDbInstaller", "Existing V2 has $nonEmptyLyrics inline lyrics; preserving data")
+            require(nonEmptyLyrics == 0L) {
+                "Metadata database still contains $nonEmptyLyrics full lyrics rows"
             }
             return count
         } finally {
@@ -295,7 +304,7 @@ private object TunerDbBundleInstaller {
         }
     }
 
-    private fun verifyLyricsDatabase(file: File, expectedSongCount: Long, strictCounts: Boolean = true) {
+    private fun verifyLyricsDatabase(file: File, expectedSongCount: Long) {
         require(file.exists()) { "Lyrics database not found" }
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
@@ -306,12 +315,8 @@ private object TunerDbBundleInstaller {
             require("raw_bytes" in columns) { "Lyrics database is missing raw_bytes" }
 
             val count = queryLong(db, "SELECT COUNT(*) FROM lyrics")
-            if (strictCounts) {
-                require(count == expectedSongCount) {
-                    "Lyrics row count ($count) differs from song count ($expectedSongCount)"
-                }
-            } else if (count != expectedSongCount) {
-                Log.w("TunerDbInstaller", "V2 row count mismatch ($count vs $expectedSongCount); preserving existing databases")
+            require(count == expectedSongCount) {
+                "Lyrics row count ($count) differs from song count ($expectedSongCount)"
             }
 
             db.rawQuery(
@@ -384,6 +389,12 @@ private object TunerDbBundleInstaller {
         return InflaterInputStream(ByteArrayInputStream(data))
             .bufferedReader(Charsets.UTF_8)
             .use { it.readText() }
+    }
+
+    private fun deleteLegacyDatabases(context: Context) {
+        deleteSqliteFile(context.getDatabasePath(LEGACY_MAIN_DB_NAME))
+        deleteSqliteFile(context.getDatabasePath(LEGACY_TEMP_DB_NAME))
+        deleteSqliteFile(context.getDatabasePath(LEGACY_LYRICS_DB_NAME))
     }
 
     private fun deleteSqliteFile(file: File) {
@@ -1141,7 +1152,7 @@ class SongRepository(context: Context) {
     private suspend fun legacyCheckHasUpdate(): Boolean = withContext(Dispatchers.IO) {
         try {
             val lastUpdate = getLastUpdateTimestamp()
-            val apiUrl = "${getRealApiUrl()}?action=check_update&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}" 
+            val apiUrl = "${getRealApiUrl()}?action=check_update&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}"
             client.newCall(Request.Builder().url(apiUrl).build()).execute().use { response ->
                 if (!response.isSuccessful) return@withContext false
                 val body = response.body?.string() ?: "{}"
@@ -1439,7 +1450,7 @@ class SongRepository(context: Context) {
     private fun syncLegacySongsOnline(): String {
         try {
             val lastUpdate = getLastUpdateTimestamp()
-            val apiUrl = "${getRealApiUrl()}?action=sync&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}" 
+            val apiUrl = "${getRealApiUrl()}?action=sync&last_update=${URLEncoder.encode(lastUpdate, "UTF-8")}"
             val syncClient = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
 
             syncClient.newCall(Request.Builder().url(apiUrl).build()).execute().use { response ->
@@ -2072,14 +2083,68 @@ object SongScraper {
         return@withContext SongDetails(error = "Không thể kết nối máy chủ.")
     }
 
-    suspend fun updateSongWithImages(context: Context, song: SongDetails, keptOldIndices: List<Int>, newImageUris: List<android.net.Uri>): Boolean = withContext(Dispatchers.IO) {
+    private fun parseUpdatedSongResult(
+        root: JSONObject,
+        fallback: SongDetails
+    ): SongDetails {
+        val source = root.optJSONObject("song") ?: root
+
+        fun stringValue(primary: String, secondary: String? = null, default: String): String {
+            if (source.has(primary) && !source.isNull(primary)) {
+                return source.opt(primary)?.toString()?.takeUnless { it == "null" } ?: default
+            }
+            if (secondary != null && source.has(secondary) && !source.isNull(secondary)) {
+                return source.opt(secondary)?.toString()?.takeUnless { it == "null" } ?: default
+            }
+            return default
+        }
+
+        val imageCount = when {
+            source.has("imageCount") -> source.optInt("imageCount", fallback.imageCount)
+            source.has("image_count") -> source.optInt("image_count", fallback.imageCount)
+            root.has("imageCount") -> root.optInt("imageCount", fallback.imageCount)
+            else -> fallback.imageCount
+        }
+
+        return fallback.copy(
+            title = stringValue("title", default = fallback.title),
+            singer = stringValue("singer", "singerNames", fallback.singer),
+            composer = stringValue("composer", "authorName", fallback.composer),
+            baseTone = stringValue("baseTone", "originalKey", fallback.baseTone),
+            rhythm = stringValue("rhythm", default = fallback.rhythm),
+            bpm = stringValue("bpm", default = fallback.bpm),
+            videoUrl = stringValue("videoUrl", "youtubeUrl", fallback.videoUrl),
+            lyrics = stringValue("lyrics", default = fallback.lyrics),
+            songId = stringValue("songId", "id", fallback.songId),
+            likes = when {
+                source.has("likes") -> source.optInt("likes", fallback.likes)
+                source.has("favoriteCount") -> source.optInt("favoriteCount", fallback.likes)
+                else -> fallback.likes
+            },
+            slug = stringValue(
+                "slug",
+                default = root.optString("slug", fallback.slug).ifBlank { fallback.slug }
+            ),
+            imageCount = imageCount,
+            zingMp3Id = stringValue("zingMp3Id", "id_zing_mp3", fallback.zingMp3Id),
+            error = null
+        )
+    }
+
+    suspend fun updateSongWithImagesResult(
+        context: Context,
+        song: SongDetails,
+        keptOldIndices: List<Int>,
+        newImageUris: List<android.net.Uri>
+    ): UpdateSongResult = withContext(Dispatchers.IO) {
         try {
             val client = okhttp3.OkHttpClient.Builder()
                 .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
 
+            val expectedImageCount = keptOldIndices.size + newImageUris.size
             val multipartBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart("id", song.songId)
                 .addFormDataPart("title", song.title)
@@ -2091,17 +2156,45 @@ object SongScraper {
                 .addFormDataPart("videoUrl", song.videoUrl)
                 .addFormDataPart("lyrics", song.lyrics)
                 .addFormDataPart("kept_old_indices", keptOldIndices.joinToString(","))
+                .addFormDataPart("expected_image_count", expectedImageCount.toString())
 
-            // Đóng gói các file ảnh MỚI được chọn để gửi lên PHP
+            // Giữ đúng MIME/đuôi ảnh thay vì ép mọi file thành JPEG.
             for (i in newImageUris.indices) {
                 val uri = newImageUris[i]
-                val inputStream = context.contentResolver.openInputStream(uri)
-                val bytes = inputStream?.readBytes()
-                inputStream?.close()
-                if (bytes != null) {
-                    val requestBody = bytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
-                    multipartBuilder.addFormDataPart("sheet_images[]", "new_image_$i.jpg", requestBody)
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return@withContext UpdateSongResult(
+                        success = false,
+                        message = "Không đọc được ảnh sheet mới trang ${i + 1}.",
+                        errorCode = "IMAGE_READ_FAILED"
+                    )
+
+                if (bytes.isEmpty()) {
+                    return@withContext UpdateSongResult(
+                        success = false,
+                        message = "Ảnh sheet mới trang ${i + 1} không có dữ liệu.",
+                        errorCode = "EMPTY_IMAGE"
+                    )
                 }
+
+                val resolverMime = context.contentResolver.getType(uri)
+                    ?.substringBefore(';')
+                    ?.lowercase()
+                val mime = when (resolverMime) {
+                    "image/png", "image/webp", "image/gif", "image/jpeg" -> resolverMime
+                    else -> "image/jpeg"
+                }
+                val extension = when (mime) {
+                    "image/png" -> "png"
+                    "image/webp" -> "webp"
+                    "image/gif" -> "gif"
+                    else -> "jpg"
+                }
+
+                multipartBuilder.addFormDataPart(
+                    "sheet_images[]",
+                    "new_image_${i + 1}.$extension",
+                    bytes.toRequestBody(mime.toMediaTypeOrNull())
+                )
             }
 
             val requestBuilder = okhttp3.Request.Builder()
@@ -2109,13 +2202,93 @@ object SongScraper {
                 .post(multipartBuilder.build())
             applySecurityHeadersOkHttp(requestBuilder, "update")
 
-            val response = client.newCall(requestBuilder.build()).execute()
-            return@withContext response.isSuccessful
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
+                // IIS/FastCGI can return an HTML error page even if the PHP
+                // endpoint normally returns JSON. Report status and content type
+                // instead of hiding the real failure behind a generic toast.
+                val normalizedBody = rawBody.trim().removePrefix("\uFEFF").trim()
+                val contentType = response.header("Content-Type").orEmpty()
+                    .substringBefore(';').trim().ifBlank { "unknown" }
+                val serverMarker = response.header("X-TunerTools-Sheet-Update").orEmpty()
+                val looksHtml = normalizedBody.startsWith("<", ignoreCase = true) ||
+                        contentType.contains("html", ignoreCase = true)
+                val responseKind = when {
+                    normalizedBody.isBlank() -> "empty"
+                    looksHtml -> "HTML"
+                    else -> contentType
+                }
+                val htmlTitle = if (looksHtml) {
+                    Regex("(?is)<title[^>]*>(.*?)</title>").find(rawBody)
+                        ?.groupValues?.getOrNull(1)
+                        ?.replace(Regex("\\s+"), " ")
+                        ?.trim()?.take(72).orEmpty()
+                } else ""
+                val json = try {
+                    JSONObject(normalizedBody)
+                } catch (e: Exception) {
+                    Log.e(
+                        "SongScraper",
+                        "Song update is not JSON: HTTP=${response.code}, " +
+                                "type=$contentType, kind=$responseKind, size=${rawBody.length}, " +
+                                "php=${serverMarker.ifBlank { "unknown" }}, " +
+                                "title=${htmlTitle.take(72)}, error=${e.javaClass.simpleName}"
+                    )
+                    val extra = if (htmlTitle.isNotBlank()) ": $htmlTitle" else ""
+                    return@withContext UpdateSongResult(
+                        success = false,
+                        message = "Máy chủ trả về dữ liệu cập nhật không hợp lệ." +
+                                " HTTP ${response.code} ($responseKind)$extra. " +
+                                "API=${serverMarker.ifBlank { "unknown" }}",
+                        errorCode = "INVALID_UPDATE_RESPONSE_HTTP_${response.code}"
+                    )
+                }
+
+                val apiSuccess = json.optBoolean("success", false)
+                if (!response.isSuccessful || !apiSuccess) {
+                    val message = json.optString("error", "").ifBlank {
+                        json.optString("message", "").ifBlank {
+                            "Cập nhật thất bại (HTTP ${response.code})."
+                        }
+                    }
+                    return@withContext UpdateSongResult(
+                        success = false,
+                        message = message,
+                        currentCursor = json.optLong("current_cursor", 0L),
+                        errorCode = json.optString("code", "HTTP_${response.code}")
+                    )
+                }
+
+                val updatedSong = parseUpdatedSongResult(json, song)
+                return@withContext UpdateSongResult(
+                    success = true,
+                    message = json.optString("message", "Cập nhật thành công"),
+                    song = updatedSong,
+                    currentCursor = json.optLong("current_cursor", 0L)
+                )
+            }
         } catch (e: Exception) {
-            e.printStackTrace()
-            return@withContext false
+            Log.e("SongScraper", "Cannot update song with images", e)
+            return@withContext UpdateSongResult(
+                success = false,
+                message = "Không thể kết nối máy chủ cập nhật.",
+                errorCode = "NETWORK_UPDATE_FAILED"
+            )
         }
     }
+
+    // Giữ nguyên API Boolean để các vị trí cũ không phải thay đổi.
+    suspend fun updateSongWithImages(
+        context: Context,
+        song: SongDetails,
+        keptOldIndices: List<Int>,
+        newImageUris: List<android.net.Uri>
+    ): Boolean = updateSongWithImagesResult(
+        context = context,
+        song = song,
+        keptOldIndices = keptOldIndices,
+        newImageUris = newImageUris
+    ).success
 
     suspend fun addSongWithImages(context: Context, song: SongDetails, imageUris: List<android.net.Uri>, userRole: String): Boolean = withContext(Dispatchers.IO) {
         try {
