@@ -1,26 +1,62 @@
-$root = "C:\TunerTools\Audio\AI_Music"
+PS C:\Users\Administrator> $root = "C:\TunerTools\Audio\AI_Music"
+>>
+>> foreach ($name in @("ZING_AUDIO", "YOUTUBE_CACHE", "audio_cache", "ZING_JSON")) {
+>>     $path = Join-Path $root $name
+>>     Write-Host "`n===== $name =====" -ForegroundColor Cyan
+>>
+>>     if (Test-Path $path) {
+>>         Get-ChildItem $path -File -ErrorAction SilentlyContinue |
+>>         Where-Object {
+>>             $_.Extension -in @(".ogg", ".wav", ".mp3", ".m4a", ".json")
+>>         } |
+>>         Select-Object -First 5 Name, Length, LastWriteTime
+>>     }
+>> }
+>>
+>>
 
-foreach ($name in @("ZING_AUDIO", "YOUTUBE_CACHE", "audio_cache", "ZING_JSON")) {
-    $path = Join-Path $root $name
-    Write-Host "`n===== $name =====" -ForegroundColor Cyan
-
-    if (Test-Path $path) {
-        Get-ChildItem $path -File -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Extension -in @(".ogg", ".wav", ".mp3", ".m4a", ".json")
-        } |
-        Select-Object -First 5 Name, Length, LastWriteTime
-    }
-}
+===== ZING_AUDIO =====
 
 
-$file = Get-ChildItem "C:\TunerTools\Audio\AI_Music\ZING_AUDIO" `
-    -File -Filter "zing_acapella_*.ogg" |
-    Select-Object -First 1
+===== YOUTUBE_CACHE =====
 
-if ($file) {
-    $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$([uri]::EscapeDataString($file.Name))"
-    Invoke-RestMethod -Uri $url | Format-List
-} else {
-    Write-Host "Chua tim thay file Zing OGG."
-}
+===== audio_cache =====
+
+===== ZING_JSON =====
+Name                                                         Length LastWriteTime
+----                                                         ------ -------------
+temp_zing_IYVKA79BAIFQ_1a8a0b26576648268db920505b2d0e65.mp3 4277846 11-10-2026 12:18:25
+temp_zing_ZW78CZ0B.mp3                                      4610584 04-08-2026 22:54:01
+temp_zing_ZW78IO98.mp3                                      4056745 06-08-2026 9:34:07
+temp_zing_ZW7WU0EF_78a49a33e2a64d1492a627cb316ea095.mp3     5206606 10-08-2026 23:21:08
+temp_zing_ZWZ96WZ6.mp3                                      5900781 06-08-2026 23:15:08
+acapella_2vbXxiHmtH4.ogg                                    4457103 05-08-2026 18:08:19
+meta_xv6k139l14A.json                                            69 01-08-2026 22:14:26
+18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json            13848 07-09-2026 3:36:01
+18JJ0AEDF3CO_Dòng Sông Mùa Thu_Quang Vinh.json                13848 06-09-2026 17:56:12
+18JJ0AEDF3CO_Dòng Sông Mùa Thu_Ông Cao Thắng.json             13848 06-09-2026 21:09:02
+18XALF7IWHW4_Sau Mỗi Giấc Mơ_Đông Nhi.json                    18396 06-09-2026 18:15:17
+196I7JMLX4WC_Hurt_NewJeans.json                               14337 08-09-2026 0:28:26
+
+
+PS C:\Users\Administrator> $file = Get-ChildItem "C:\TunerTools\Audio\AI_Music\ZING_AUDIO" `
+>>     -File -Filter "zing_acapella_*.ogg" |
+>>     Select-Object -First 1
+>>
+>> if ($file) {
+>>     $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$([uri]::EscapeDataString($file.Name))"
+>>     Invoke-RestMethod -Uri $url | Format-List
+>> } else {
+>>     Write-Host "Chua tim thay file Zing OGG."
+>> }
+
+
+ok         : True
+found      : True
+source     : google_drive
+stream_url : https://tuner.alwaysdata.net/api_ai_media_drive.php?action=stream&filename=zing_acapella_.ogg
+size_bytes : 6641793
+
+
+
+PS C:\Users\Administrator>
