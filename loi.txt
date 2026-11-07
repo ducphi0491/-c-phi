@@ -1,8 +1,9 @@
 
-$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_FIX_Unicode_Only2_20261107.zip"
-$folder = "$env:USERPROFILE\Downloads\TunerTools_Documents_FIX_Unicode_Only2_20261107"
+$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_DriveFirst_Kotlin_PHP_20261107.zip"
+$folder = "C:\TunerTools\BackupScripts\Documents_DriveFirst"
 
 Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$folder\CHAY_LAI_2_PDF.ps1"
+    -File "$folder\PATCH_IIS_DOCUMENTS_AUTH.ps1" `
+    -IisPhp "C:\inetpub\wwwroot\api_documents.php"
