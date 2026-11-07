@@ -24,3 +24,44 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File $script -OnlyId "18JJ0AEDF3CO" -Upload
+
+
+
+
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\AI_JSON_Drive_Sync_FIX_Download.zip"
+>> $dest = "C:\TunerTools\Tools\AI_JSON_Drive_Sync"
+>>
+>> if (!(Test-Path -LiteralPath $zip)) {
+>>     throw "Chua tim thay ZIP trong Downloads"
+>> }
+>>
+>> New-Item -ItemType Directory -Force -Path $dest |
+>>     Out-Null
+>>
+>> Expand-Archive -LiteralPath $zip `
+>>     -DestinationPath $dest -Force
+>>
+>> $script = Join-Path $dest "CHAY_UPLOAD_AI_JSON.ps1"
+>>
+>> if (!(Test-Path -LiteralPath $script)) {
+>>     throw "Khong tim thay file PS1 sau giai nen"
+>> }
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File $script -OnlyId "18JJ0AEDF3CO"
+MODE: PREVIEW ONLY (read-only)
+LOCAL VALID JSON: 3
+TOKEN FILE: Found (private; contents not printed)
+GOOGLE DRIVE lyrics existing entries: 0
+ALREADY ON DRIVE: 0
+MISSING: 3
+  18JJ0AEDF3CO_Dòng Sông Mùa Thu_Nguyễn Hải Yến.json
+  18JJ0AEDF3CO_Dòng Sông Mùa Thu_Quang Vinh.json
+  18JJ0AEDF3CO_Dòng Sông Mùa Thu_Ông Cao Thắng.json
+REPORT: C:\TunerTools\Audio\AI_Music\KET_QUA_UPLOAD_JSON_DRIVE.json
+DONE: 0 created; nothing deleted or overwritten
+NOTE: Alwaysdata cached_songs uses a 600-second cache; allow it to expire before rechecking.
+PS C:\Users\Administrator>
+PS C:\Users\Administrator>
