@@ -1,17 +1,98 @@
-$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Drive_Audit_CONSOLE_20261108.zip"
-$dest = "C:\TunerTools\Tools\AI_Drive_Audit"
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Drive_Audit_CONSOLE_20261108.zip"
+>> $dest = "C:\TunerTools\Tools\AI_Drive_Audit"
+>>
+>> if (!(Test-Path $zip)) {
+>>     throw "Khong tim thay file ZIP trong Downloads"
+>> }
+>>
+>> New-Item -ItemType Directory -Force -Path $dest |
+>>     Out-Null
+>>
+>> Expand-Archive -LiteralPath $zip `
+>>     -DestinationPath $dest -Force
+>>
+>> $script = Join-Path $dest "CHAY_VA_HIEN_KET_QUA.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File $script
+==== WINDOWS SERVER <-> GOOGLE DRIVE AI AUDIT ====
+MODE: READ ONLY - NO DRIVE UPLOAD / DELETE / UPDATE
+LOCAL SOURCE: C:\TunerTools\Audio\AI_Music
+TOKEN FILE: Found (content never printed)
+Scanning Drive folders...
+Drive stream_cache entries: 1342
+Drive lyrics entries: 1780
 
-if (!(Test-Path $zip)) {
-    throw "Khong tim thay file ZIP trong Downloads"
-}
+===========================================================================
+AUDIO
+  LOCAL: 2 files / 2 unique names
+  DRIVE: 1342 files / 1342 unique names
+  SAME FILENAMES: 1
+  MISSING ON DRIVE: 1
+  ONLY ON DRIVE: 1341
+  SIZE DIFFERENT: 0
+  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
+  EXAMPLE MISSING: ['zing_acapella_BVARZBZJNS3E.ogg']
+LYRICS JSON
+  LOCAL: 1 files / 1 unique names
+  DRIVE: 1780 files / 1780 unique names
+  SAME FILENAMES: 1
+  MISSING ON DRIVE: 0
+  ONLY ON DRIVE: 1779
+  SIZE DIFFERENT: 0
+  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
+  EXAMPLE MISSING: []
+WARNING: MISSING LOCAL SOURCE FOLDERS: C:\TunerTools\Audio\AI_Music\ZING_JSON
+  Counts are incomplete until folders are restored / correct --source used.
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit
+DETAILS: audio_missing_on_drive.csv and lyrics_missing_on_drive.csv
+NOTICE: A matched filename + file size is not a content hash verification.
+NOTICE: This compares live Drive API files, not the 600-second Alwaysdata catalog cache.
+WARNING: Local source folders are missing; report created but counts are incomplete.
 
-New-Item -ItemType Directory -Force -Path $dest |
-    Out-Null
+========== SUMMARY FOR CHATGPT ==========
+AuditDateUTC : 2026-11-08T03:49:29+00:00
+LocalRoot    : C:\TunerTools\Audio\AI_Music
+DriveRoot    : My Drive/TunerTools_AppBackup/AI_Music
 
-Expand-Archive -LiteralPath $zip `
-    -DestinationPath $dest -Force
+==== AUDIO ====
 
-$script = Join-Path $dest "CHAY_VA_HIEN_KET_QUA.ps1"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File $script
+LocalFiles     : 2
+DriveFiles     : 1342
+SameNames      : 1
+MissingOnDrive : 1
+OnlyOnDrive    : 1341
+DifferentSize  : 0
+DuplicateLocal : 0
+DuplicateDrive : 0
+CaseDifference : 0
+
+
+
+First 20 missing files on Drive:
+- zing_acapella_BVARZBZJNS3E.ogg
+
+==== LYRICS ====
+
+
+LocalFiles     : 1
+DriveFiles     : 1780
+SameNames      : 1
+MissingOnDrive : 0
+OnlyOnDrive    : 1779
+DifferentSize  : 0
+DuplicateLocal : 0
+DuplicateDrive : 0
+CaseDifference : 0
+
+
+
+First 20 missing files on Drive:
+(none)
+
+LocalFoldersComplete : False
+WARNING: Missing local folders: C:\TunerTools\Audio\AI_Music\ZING_JSON
+Reports: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit
+Finished. Copy the SUMMARY FOR CHATGPT section to chat.
+PS C:\Users\Administrator>
