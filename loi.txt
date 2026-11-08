@@ -1,13 +1,32 @@
-$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Repair_41_Missing_20261108.zip"
-$dest = "C:\TunerTools\Tools\AI_Repair_Missing"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-if (!(Test-Path $zip)) {
-    throw "Chua tim thay ZIP trong Downloads"
-}
-
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
-
-$script = Join-Path $dest "CHAY_DONG_BO_FILE_THIEU.ps1"
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Repair_41_Missing_20261108.zip"
+>> $dest = "C:\TunerTools\Tools\AI_Repair_Missing"
+>>
+>> if (!(Test-Path $zip)) {
+>>     throw "Chua tim thay ZIP trong Downloads"
+>> }
+>>
+>> New-Item -ItemType Directory -Force -Path $dest | Out-Null
+>> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+>>
+>> $script = Join-Path $dest "CHAY_DONG_BO_FILE_THIEU.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+==== TUNERTOOLS AI MISSING-FILE SYNC ====
+MODE: PREVIEW ONLY, NO CHANGES
+LOCAL: C:\TunerTools\Audio\AI_Music
+TOKEN: present, contents not printed
+NOTICE: Audio files with unrecognized names (not auto-uploaded): 8
+AUDIO: LOCAL=1284 DRIVE=1342 MISSING=1
+  MISSING: zing_acapella_BVARZBZJNS3E.ogg
+LYRICS: LOCAL=1820 DRIVE=1780 MISSING=40
+  MISSING: 5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json
+  MISSING: 5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json
+  MISSING: 6PA5IIKLEFIF_Cảm Giác Yêu_AMEE.json
+  MISSING: 7SGYVIRAKQJT_Stop_Spice Girls.json
+  MISSING: AO4KYPEJDBR8_Chờ Em Trong Mơ_Ngô Kiến Huy.json
+TOTAL MISSING VALID FILES: 41
+PREVIEW FINISHED. Use -Upload to create only the missing files.
+PS C:\Users\Administrator>
