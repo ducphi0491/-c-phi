@@ -20,3 +20,24 @@ $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filena
 Invoke-RestMethod -Uri $url -TimeoutSec 30 |
     Select-Object ok, found, source, size_bytes |
     Format-List
+
+
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File $script
+>>
+STOP: Local source folders missing (rename them back first):
+ - C:\TunerTools\Audio\AI_Music\ZING_AUDIO
+AI reconcile finished with exit code 2
+At C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1:24 char:28
++ ... DE -ne 0) { throw "AI reconcile finished with exit code $LASTEXITCODE ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (AI reconcile finished with exit code 2:String) [], RuntimeException
+    + FullyQualifiedErrorId : AI reconcile finished with exit code 2
+
+PS C:\Users\Administrator>
