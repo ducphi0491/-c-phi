@@ -1,22 +1,33 @@
-$filename = "zing_acapella_BVARZBZJNS3E.ogg"
-
-$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$([uri]::EscapeDataString($filename))"
-
-Invoke-RestMethod -Uri $url -TimeoutSec 40 |
-    Format-List ok, found, source, size_bytes
+ZING_AUDIO C:\TunerTools\Audio\AI_Music\ZING_AUDIO
+ZING_JSON  C:\TunerTools\Audio\AI_Music\ZING_JSON
 
 
+PS C:\Users\Administrator> $root = "C:\TunerTools\Audio\AI_Music"
+>>
+>> Get-ChildItem -LiteralPath $root -Directory |
+>>     Where-Object { $_.Name -match "^ZING_(AUDIO|JSON)" } |
+>>     Select-Object Name, FullName
+>>
+>>
+>> $script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File $script
+>>
 
-$root = "C:\TunerTools\Audio\AI_Music"
+==== TUNERTOOLS AI MISSING-FILE SYNC ====
+MODE: PREVIEW ONLY, NO CHANGES
+LOCAL: C:\TunerTools\Audio\AI_Music
+TOKEN: present, contents not printed
+NOTICE: Audio files with unrecognized names (not auto-uploaded): 8
+AUDIO: LOCAL=1284 DRIVE=1343 MISSING=0
+LYRICS: LOCAL=1820 DRIVE=1820 MISSING=0
+TOTAL MISSING VALID FILES: 0
+PREVIEW FINISHED. Use -Upload to create only the missing files.
+Name       FullName
+----       --------
+ZING_AUDIO C:\TunerTools\Audio\AI_Music\ZING_AUDIO
+ZING_JSON  C:\TunerTools\Audio\AI_Music\ZING_JSON
 
-Get-ChildItem -LiteralPath $root -Directory |
-    Where-Object { $_.Name -match "^ZING_(AUDIO|JSON)" } |
-    Select-Object Name, FullName
 
-
-$script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File $script
-
-
+PS C:\Users\Administrator>
