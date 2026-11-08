@@ -302,7 +302,9 @@ private fun DocumentPermissions.canAccessFolder(instrument: String, path: String
     return allowedFolderPaths.any { rawAllowed ->
         val allowed = normalizeDocumentFolderPath(rawAllowed)
             .lowercase(java.util.Locale.ROOT)
-        allowed.isNotBlank() && (target == allowed || target.startsWith("$allowed/"))
+        val scopedAllowed = if (allowed.contains('/')) allowed
+        else "${instrument.trim().lowercase(java.util.Locale.ROOT)}/$allowed"
+        allowed.isNotBlank() && (target == scopedAllowed || target.startsWith("$scopedAllowed/"))
     }
 }
 
@@ -357,6 +359,7 @@ object DocumentAccessStore {
 
 object DocumentAccessApi {
     private const val ENDPOINT = "https://tunertools.top/api_documents.php"
+    private const val DRIVE_READ_ENDPOINT = "https://tuner.alwaysdata.net/api_documents_drive.php"
 
     suspend fun ensureSession(
         context: Context,
@@ -604,8 +607,9 @@ object DocumentAccessApi {
     ): List<DocumentFolderOption> = withContext(Dispatchers.IO) {
         val root = requestGet(
             context = context,
-            action = "permission_folder_options",
-            fields = mapOf("instrument" to instrument)
+            action = "folder_options",
+            fields = mapOf("instrument" to instrument),
+            endpoint = DRIVE_READ_ENDPOINT
         )
         buildList {
             val items = root.optJSONArray("items")
@@ -691,10 +695,11 @@ object DocumentAccessApi {
     private fun requestGet(
         context: Context,
         action: String,
-        fields: Map<String, String> = emptyMap()
+        fields: Map<String, String> = emptyMap(),
+        endpoint: String = ENDPOINT
     ): JSONObject {
         val url = buildString {
-            append(ENDPOINT)
+            append(endpoint)
             append("?action=")
             append(encode(action))
             fields.forEach { (key, value) ->
@@ -967,9 +972,11 @@ private fun buildLearningBreadcrumbs(
 }
 
 object LearningMaterialsApi {
-    // PHP file placed at C:\\inetpub\\wwwroot\\api_documents.php
+    // IIS retains login/permissions; Alwaysdata reads folders and media from Drive.
     private const val ENDPOINT = "https://tunertools.top/api_documents.php"
-    private const val STATIC_HEALTH_URL = "https://tunertools.top/documents-health.json"
+    private const val READ_ENDPOINT = "https://tuner.alwaysdata.net/api_documents_drive.php"
+    // Public edits must remain disabled until writes are synchronized to Drive.
+    private val drivePublicWritesEnabled = false
 
     suspend fun loadPage(
         context: Context,
@@ -977,7 +984,7 @@ object LearningMaterialsApi {
         path: String = ""
     ): LearningMaterialPage = withContext(Dispatchers.IO) {
         val requestUrl = buildString {
-            append(ENDPOINT)
+            append(READ_ENDPOINT)
             append("?action=list")
             append("&instrument=")
             append(encode(instrument))
@@ -999,6 +1006,7 @@ object LearningMaterialsApi {
 
         try {
             val root = readJsonResponse(connection)
+            android.util.Log.d("DocumentsDrive", "list source=${root.optString("source", "unknown")}, items=${root.optJSONArray("items")?.length() ?: 0}")
             val currentPath = root.optString("current_path", path)
             val parentPath = if (root.isNull("parent_path")) {
                 null
@@ -1122,41 +1130,25 @@ object LearningMaterialsApi {
 
     @Suppress("UNUSED_PARAMETER")
     suspend fun checkConnection(context: Context, instrument: String): Boolean = withContext(Dispatchers.IO) {
-        val stamp = System.currentTimeMillis()
-        val candidates = listOf(
-            "$STATIC_HEALTH_URL?_ts=$stamp",
-            "$ENDPOINT?action=health&_ts=$stamp"
-        )
-
-        for (requestUrl in candidates) {
-            val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5_000
-                readTimeout = 7_000
-                useCaches = false
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("Cache-Control", "no-cache")
-                setRequestProperty("User-Agent", "TunerTools-Android-Health")
-            }
-
-            try {
-                val statusCode = connection.responseCode
-                if (statusCode !in 200..299) continue
-                val responseText = connection.inputStream
-                    .bufferedReader(StandardCharsets.UTF_8)
-                    .use { it.readText() }
-                    .trimStart('\uFEFF', ' ', '\t', '\r', '\n')
-                val healthy = responseText.startsWith("{") &&
-                        runCatching { JSONObject(responseText).optBoolean("success", false) }
-                            .getOrDefault(false)
-                if (healthy) return@withContext true
-            } catch (_: Exception) {
-                // Try the next lightweight health endpoint.
-            } finally {
-                connection.disconnect()
-            }
+        val requestUrl = "$READ_ENDPOINT?action=health&_ts=${System.currentTimeMillis()}"
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5_000
+            readTimeout = 8_000
+            useCaches = false
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "TunerTools-Android-Drive-Health")
         }
-        false
+        try {
+            if (connection.responseCode !in 200..299) return@withContext false
+            val data = connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            val root = JSONObject(data.trimStart('\uFEFF', ' ', '\t', '\r', '\n'))
+            root.optBoolean("ok", false) && root.optBoolean("drive_root_ready", false)
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection.disconnect()
+        }
     }
 
     suspend fun createFolder(
@@ -1165,6 +1157,10 @@ object LearningMaterialsApi {
         path: String,
         folderName: String
     ): String = withContext(Dispatchers.IO) {
+        if (!drivePublicWritesEnabled) {
+            throw IOException("Google Drive đang là nguồn tài liệu chính. Tạm khóa thao tác ghi công khai cho đến khi có đồng bộ ghi lên Drive; không ghi riêng vào IIS.")
+        }
+
         val cleanParentPath = path.replace('\\', '/').trim('/')
         val cleanFolderName = folderName.trim()
         // Put the operation in both the query string and the POST body.
@@ -1232,6 +1228,10 @@ object LearningMaterialsApi {
         path: String,
         uri: Uri
     ): String = withContext(Dispatchers.IO) {
+        if (!drivePublicWritesEnabled) {
+            throw IOException("Google Drive đang là nguồn tài liệu chính. Tạm khóa thao tác ghi công khai cho đến khi có đồng bộ ghi lên Drive; không ghi riêng vào IIS.")
+        }
+
         val info = queryLearningPickedFileInfo(context, uri)
         val extension = info.displayName.substringAfterLast('.', "").lowercase()
         val uploadFileName = if (extension.isBlank()) "upload.bin" else "upload.$extension"
@@ -1319,6 +1319,10 @@ object LearningMaterialsApi {
         path: String,
         newName: String
     ): String = withContext(Dispatchers.IO) {
+        if (!drivePublicWritesEnabled) {
+            throw IOException("Google Drive đang là nguồn tài liệu chính. Tạm khóa thao tác ghi công khai cho đến khi có đồng bộ ghi lên Drive; không ghi riêng vào IIS.")
+        }
+
         val cleanPath = path.replace('\\', '/').trim('/')
         val body = formBody(
             "action" to "rename",
@@ -1363,6 +1367,10 @@ object LearningMaterialsApi {
         instrument: String,
         path: String
     ): String = withContext(Dispatchers.IO) {
+        if (!drivePublicWritesEnabled) {
+            throw IOException("Google Drive đang là nguồn tài liệu chính. Tạm khóa thao tác ghi công khai cho đến khi có đồng bộ ghi lên Drive; không ghi riêng vào IIS.")
+        }
+
         val cleanPath = path.replace('\\', '/').trim('/')
         val body = formBody(
             "action" to "delete_item",
@@ -1970,9 +1978,10 @@ private fun learningVideoRequestHeaders(context: Context): Map<String, String> =
  */
 private fun learningVideoStreamUrl(
     context: Context,
-    item: LearningMaterialUiItem
+    item: LearningMaterialUiItem,
+    explicitUrl: String? = null
 ): String {
-    val rawUrl = learningMaterialViewUrl(item).trim()
+    val rawUrl = (explicitUrl ?: learningMaterialViewUrl(item)).trim()
     if (rawUrl.isBlank() ||
         (!rawUrl.startsWith("http://", ignoreCase = true) &&
                 !rawUrl.startsWith("https://", ignoreCase = true))
@@ -1984,7 +1993,9 @@ private fun learningVideoStreamUrl(
 
     return runCatching {
         val uri = Uri.parse(rawUrl)
-        val isDocumentView = uri.host.orEmpty().endsWith("tunertools.top", ignoreCase = true) &&
+        val trustedHost = uri.host.equals("tunertools.top", ignoreCase = true) ||
+                uri.host.equals(TT_DOC_DRIVE_HOST, ignoreCase = true)
+        val isDocumentView = trustedHost &&
                 uri.getQueryParameter("action").equals("view", ignoreCase = true)
         if (!isDocumentView || "ticket" !in uri.queryParameterNames) {
             rawUrl
@@ -2129,8 +2140,8 @@ private class LearningVideoPlaybackController(context: Context) {
         }
     }
 
-    fun playbackUrl(item: LearningMaterialUiItem): String =
-        learningVideoStreamUrl(appContext, item)
+    fun playbackUrl(item: LearningMaterialUiItem, explicitUrl: String? = null): String =
+        learningVideoStreamUrl(appContext, item, explicitUrl)
 
     fun requestHeaders(): Map<String, String> =
         learningVideoRequestHeaders(appContext)
@@ -2139,12 +2150,13 @@ private class LearningVideoPlaybackController(context: Context) {
     fun play(
         selectedItem: LearningMaterialUiItem,
         folderVideos: List<LearningMaterialUiItem>,
-        playbackSpeed: Float
+        playbackSpeed: Float,
+        explicitUrl: String? = null
     ) {
         if (released) return
 
         val selectedId = learningVideoMediaId(selectedItem)
-        val sourceUrl = playbackUrl(selectedItem)
+        val sourceUrl = playbackUrl(selectedItem, explicitUrl)
         if (sourceUrl.isBlank()) return
 
         rememberCurrentPosition()
@@ -2223,10 +2235,11 @@ private class LearningVideoPlaybackController(context: Context) {
     fun retry(
         selectedItem: LearningMaterialUiItem,
         folderVideos: List<LearningMaterialUiItem>,
-        playbackSpeed: Float
+        playbackSpeed: Float,
+        explicitUrl: String? = null
     ) {
         if (released) return
-        play(selectedItem, folderVideos, playbackSpeed)
+        play(selectedItem, folderVideos, playbackSpeed, explicitUrl)
     }
 
     fun stopAndRemember() {
@@ -2326,7 +2339,16 @@ private object LearningVideoThumbnailLoader {
                 }
             }
 
-            val frame = extractFrame(context, source) ?: return@withContext null
+            val frame = runCatching { extractFrame(context, source) }.getOrNull()
+                ?: run {
+                    val origin = learningMaterialOriginViewUrl(item)
+                    if (origin.isNotBlank() && origin != source) {
+                        runCatching {
+                            extractFrame(context, learningVideoStreamUrl(context, item, origin))
+                        }.getOrNull()
+                    } else null
+                }
+                ?: return@withContext null
             val scaledFrame = scaleFrame(frame)
 
             // Memory only. The thumbnail disappears when Android clears the process;
@@ -2654,7 +2676,11 @@ private fun LearningMaterialRow(
                         "%1\$d items inside",
                         childrenCount
                     )
-                    "$countText • $storageLabel"
+                    if (childrenCount < 0 || (!item.containedCountsKnown && item.storage != LearningMaterialStorage.LOCAL)) {
+                        storageLabel
+                    } else {
+                        "$countText • $storageLabel"
+                    }
                 } else {
                     listOf(learningMaterialMeta(item, isVietnamese), storageLabel)
                         .filter { it.isNotBlank() }
@@ -2858,8 +2884,35 @@ private fun learningMaterialFileName(item: LearningMaterialUiItem): String {
         .ifBlank { "tai_lieu.$extension" }
 }
 
-private fun learningMaterialViewUrl(item: LearningMaterialUiItem): String =
+// Documents: only media bytes move to Alwaysdata/Drive. Do NOT change the
+// existing login, permissions, list, upload, rename and delete APIs on IIS.
+private const val TT_DOC_DRIVE_MEDIA_ENABLED = true
+private const val TT_DOC_DRIVE_HOST = "tuner.alwaysdata.net"
+
+private fun learningMaterialOriginViewUrl(item: LearningMaterialUiItem): String =
     item.previewUrl.ifBlank { item.downloadUrl }
+
+private fun learningDocumentDriveMediaUrl(raw: String): String {
+    if (!TT_DOC_DRIVE_MEDIA_ENABLED || raw.isBlank()) return raw
+    return runCatching {
+        val uri = Uri.parse(raw)
+        val valid = uri.scheme.equals("https", ignoreCase = true) &&
+                uri.host.equals("tunertools.top", ignoreCase = true) &&
+                uri.port in listOf(-1, 443) &&
+                uri.path == "/api_documents.php" &&
+                uri.getQueryParameter("action") in listOf("view", "download") &&
+                !uri.getQueryParameter("instrument").isNullOrBlank() &&
+                !uri.getQueryParameter("path").isNullOrBlank()
+        if (!valid) raw else uri.buildUpon()
+            .authority(TT_DOC_DRIVE_HOST)
+            .path("/api_documents_drive.php")
+            .fragment(null)
+            .build().toString()
+    }.getOrDefault(raw)
+}
+
+private fun learningMaterialViewUrl(item: LearningMaterialUiItem): String =
+    learningDocumentDriveMediaUrl(learningMaterialOriginViewUrl(item))
 
 private fun enqueueLearningMaterialDownload(
     context: Context,
@@ -2876,7 +2929,15 @@ private fun enqueueLearningMaterialDownload(
         return
     }
 
-    val url = item.downloadUrl.ifBlank { item.previewUrl }
+    if (item.downloadUrl.isBlank()) {
+        android.widget.Toast.makeText(
+            context,
+            "Tài khoản chưa được cấp quyền tải tệp này.",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+        return
+    }
+    val url = learningDocumentDriveMediaUrl(item.downloadUrl)
     if (url.isBlank()) {
         android.widget.Toast.makeText(
             context,
@@ -3203,9 +3264,21 @@ private fun LearningPdfViewer(
         loadError = null
 
         try {
-            val file = cacheLearningMaterial(context, url, item)
-            val count = withContext(Dispatchers.IO) { learningPdfPageCount(file) }
-            if (count <= 0) throw IOException("Tệp PDF không có trang nào.")
+            suspend fun preparePdf(candidate: String): Pair<File, Int> {
+                val file = cacheLearningMaterial(context, candidate, item)
+                val count = withContext(Dispatchers.IO) { learningPdfPageCount(file) }
+                if (count <= 0) throw IOException("Tệp PDF không có trang nào.")
+                return file to count
+            }
+            val (file, count) = try {
+                preparePdf(url)
+            } catch (primaryError: kotlinx.coroutines.CancellationException) {
+                throw primaryError
+            } catch (primaryError: Exception) {
+                val legacyUrl = learningMaterialOriginViewUrl(item)
+                if (legacyUrl.isBlank() || legacyUrl == url) throw primaryError
+                preparePdf(legacyUrl)
+            }
             pdfFile = file
             pageCount = count
         } catch (error: Exception) {
@@ -3291,9 +3364,11 @@ private fun LearningVideoViewer(
     val materialLang = LocalLearningMaterialsLanguage.current
     val context = LocalContext.current
     val player = videoController.player
-    val rawUrl = learningMaterialViewUrl(item)
-    val url = remember(item.id, item.path, rawUrl) {
-        videoController.playbackUrl(item)
+    val primaryRawUrl = learningMaterialViewUrl(item)
+    val originalRawUrl = learningMaterialOriginViewUrl(item)
+    var usingOriginalHost by remember(item.id, item.path) { mutableStateOf(false) }
+    val url = remember(item.id, item.path, primaryRawUrl, originalRawUrl, usingOriginalHost) {
+        videoController.playbackUrl(item, if (usingOriginalHost) originalRawUrl else primaryRawUrl)
     }
     val retryScope = rememberCoroutineScope()
     val selectedMediaId = remember(item.id, item.path, url) {
@@ -3414,7 +3489,8 @@ private fun LearningVideoViewer(
                 videoController.play(
                     selectedItem = item,
                     folderVideos = folderVideos,
-                    playbackSpeed = playbackSpeed
+                    playbackSpeed = playbackSpeed,
+                    explicitUrl = url
                 )
             }.onFailure { error ->
                 isPreparing = false
@@ -3424,6 +3500,20 @@ private fun LearningVideoViewer(
                     "Không thể phát video này.",
                     "Unable to play this video."
                 )
+            }
+        }
+    }
+
+    LaunchedEffect(item.id, url, usingOriginalHost, usePlatformFallback) {
+        if (!usingOriginalHost && primaryRawUrl != originalRawUrl &&
+            url.startsWith("https://$TT_DOC_DRIVE_HOST/", ignoreCase = true)) {
+            delay(25_000L)
+            if (isPreparing && !hasRenderedFirstFrame && videoError == null) {
+                android.util.Log.w("LearningVideo", "Drive initial buffering timeout; using original media host")
+                automaticRetryJob?.cancel()
+                videoController.stopAndRemember()
+                playerView?.player = null
+                usingOriginalHost = true
             }
         }
     }
@@ -3521,7 +3611,7 @@ private fun LearningVideoViewer(
                         )
                         if (state is DocumentAccessState.Granted) {
                             delay(200L)
-                            videoController.retry(item, folderVideos, playbackSpeed)
+                            videoController.retry(item, folderVideos, playbackSpeed, url)
                         } else {
                             isPreparing = false
                             videoError = if (isVietnamese) {
@@ -3548,8 +3638,24 @@ private fun LearningVideoViewer(
                     automaticRetryJob?.cancel()
                     automaticRetryJob = retryScope.launch {
                         delay(650L)
-                        videoController.retry(item, folderVideos, playbackSpeed)
+                        videoController.retry(item, folderVideos, playbackSpeed, url)
                     }
+                    return
+                }
+
+                // After the existing session/Range retries, switch the same item
+                // back to IIS if the Alwaysdata/Drive stream still fails.
+                if (!usingOriginalHost && primaryRawUrl != originalRawUrl &&
+                    url.startsWith("https://$TT_DOC_DRIVE_HOST/", ignoreCase = true)) {
+                    android.util.Log.w("LearningVideo", "Switching to original Documents media host for ${item.path}")
+                    automaticRetryJob?.cancel()
+                    videoController.stopAndRemember()
+                    playerView?.player = null
+                    playerErrorCodeName = null
+                    videoError = null
+                    isPreparing = true
+                    hasRenderedFirstFrame = false
+                    usingOriginalHost = true
                     return
                 }
 
@@ -3861,7 +3967,8 @@ private fun LearningVideoViewer(
                                     videoController.retry(
                                         selectedItem = item,
                                         folderVideos = folderVideos,
-                                        playbackSpeed = playbackSpeed
+                                        playbackSpeed = playbackSpeed,
+                                        explicitUrl = url
                                     )
                                 }.onFailure { retryError ->
                                     isPreparing = false
@@ -4142,6 +4249,8 @@ private fun LearningImageViewer(
 ) {
     val materialLang = LocalLearningMaterialsLanguage.current
     val url = learningMaterialViewUrl(item)
+    val originUrl = learningMaterialOriginViewUrl(item)
+    var displayedUrl by remember(item.id, url) { mutableStateOf(url) }
     if (url.isBlank()) {
         LearningMaterialViewerError(
             message = learningMaterialText(materialLang, "lm_no_image_url", "Không có đường dẫn hình ảnh.", "No image link is available."),
@@ -4159,10 +4268,11 @@ private fun LearningImageViewer(
         contentAlignment = Alignment.Center
     ) {
         coil.compose.AsyncImage(
-            model = url,
+            model = displayedUrl,
             contentDescription = learningMaterialTitle(item, isVietnamese),
             modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Fit
+            contentScale = ContentScale.Fit,
+            onError = { if (displayedUrl != originUrl && originUrl.isNotBlank()) displayedUrl = originUrl }
         )
     }
 }
@@ -4475,11 +4585,14 @@ private fun LearningMaterialPreviewDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     if (item.type == LearningMaterialType.IMAGE && item.previewUrl.isNotBlank()) {
+                        val primaryPreviewUrl = learningDocumentDriveMediaUrl(item.previewUrl)
+                        var previewSource by remember(item.id, primaryPreviewUrl) { mutableStateOf(primaryPreviewUrl) }
                         coil.compose.AsyncImage(
-                            model = item.previewUrl,
+                            model = previewSource,
                             contentDescription = learningMaterialTitle(item, isVietnamese),
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            onError = { if (previewSource != item.previewUrl) previewSource = item.previewUrl }
                         )
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
