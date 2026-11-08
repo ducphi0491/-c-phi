@@ -1,18 +1,62 @@
-$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Drive_AutoSync_TIMEOUT_FIX_V2_20261108.zip"
-$dest = "C:\TunerTools\Tools\AI_Drive_AutoSync"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
-
-
-
-
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1"
-
-
-
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1" `
-  -ChunkKiB 256 -PutTimeoutSeconds 600
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Drive_AutoSync_TIMEOUT_FIX_V2_20261108.zip"
+>> $dest = "C:\TunerTools\Tools\AI_Drive_AutoSync"
+>>
+>> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+>>
+PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>   -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1"
+====== TUNERTOOLS: QGQK47AO9MIR -> AI_Music/stream_cache ======
+MODE: UPLOAD EXACT ONE AUDIO FILE
+===== TUNERTOOLS AI DRIVE SYNC =====
+MODE: APPLY / CREATE ONLY
+SOURCE: C:\TunerTools\Audio\AI_Music
+DRIVE: TunerTools_AppBackup/AI_Music/{stream_cache,lyrics} ONLY
+TOKEN: found, never printed
+UTC: 2026-11-08T10:25:04+00:00
+UPLOAD: chunk=1024 KiB, timeout=300s, resumes interrupted sessions
+DRIVE AUDIO FILENAMES: 1343
+DRIVE JSON FILENAMES: 1820
+LOCAL AUDIO: 1 LOCAL JSON: 0
+PRESENT: 0 MISSING NEW: 1 CONFLICT: 0 NOT_READY: 0
+  TO UPLOAD: AUDIO zing_acapella_QGQK47AO9MIR.ogg
+[1/1] zing_acapella_QGQK47AO9MIR.ogg
+  PROGRESS: 1048576/4926018 bytes (21.3%)
+  NETWORK RETRY 1/8: querying received bytes; next chunk=512 KiB
+  PROGRESS: 1572864/4926018 bytes (31.9%)
+  PROGRESS: 2097152/4926018 bytes (42.6%)
+  PROGRESS: 2621440/4926018 bytes (53.2%)
+  PROGRESS: 3145728/4926018 bytes (63.9%)
+  PROGRESS: 3670016/4926018 bytes (74.5%)
+  PROGRESS: 4194304/4926018 bytes (85.1%)
+  PROGRESS: 4718592/4926018 bytes (95.8%)
+  OK: Drive size and MD5 verified
+===== COMPLETE =====
+UPLOADED: 1 FAILED: 0 QUEUED_FOR_NEXT_RUN: 0
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_AutoSync\AI_DRIVE_SYNC_LAST_RUN.json
+PHP cached_songs may be stale for up to 600 seconds.
+No files on Google Drive were overwritten, renamed or deleted.
+PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>   -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1" `
+>>   -ChunkKiB 256 -PutTimeoutSeconds 600
+====== TUNERTOOLS: QGQK47AO9MIR -> AI_Music/stream_cache ======
+MODE: UPLOAD EXACT ONE AUDIO FILE
+===== TUNERTOOLS AI DRIVE SYNC =====
+MODE: APPLY / CREATE ONLY
+SOURCE: C:\TunerTools\Audio\AI_Music
+DRIVE: TunerTools_AppBackup/AI_Music/{stream_cache,lyrics} ONLY
+TOKEN: found, never printed
+UTC: 2026-11-08T10:27:37+00:00
+UPLOAD: chunk=256 KiB, timeout=600s, resumes interrupted sessions
+DRIVE AUDIO FILENAMES: 1344
+DRIVE JSON FILENAMES: 1820
+LOCAL AUDIO: 1 LOCAL JSON: 0
+PRESENT: 1 MISSING NEW: 0 CONFLICT: 0 NOT_READY: 0
+===== COMPLETE =====
+UPLOADED: 0 FAILED: 0 QUEUED_FOR_NEXT_RUN: 0
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_AutoSync\AI_DRIVE_SYNC_LAST_RUN.json
+PHP cached_songs may be stale for up to 600 seconds.
+No files on Google Drive were overwritten, renamed or deleted.
+PS C:\Users\Administrator>
