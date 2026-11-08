@@ -100,7 +100,6 @@ import android.util.Log
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MultipartBody
@@ -122,26 +121,9 @@ fun CompactInputField(value: String, onValueChange: (String) -> Unit, placeholde
         cursorBrush = SolidColor(tunaGreen),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
         decorationBox = { innerTextField ->
-            Row(
-                modifier = Modifier.fillMaxSize().border(1.dp, Color.Gray.copy(alpha = 0.3f), RoundedCornerShape(8.dp)).padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (value.isEmpty()) Text(placeholder, color = Color.Gray.copy(alpha = 0.7f), fontSize = 14.sp)
-                    innerTextField()
-                }
-
-                // Icon xóa nhanh
-                if (value.isNotEmpty()) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Xóa",
-                        tint = Color.Gray.copy(alpha = 0.7f),
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clickable { onValueChange("") }
-                    )
-                }
+            Box(modifier = Modifier.fillMaxSize().border(1.dp, Color.Gray.copy(alpha = 0.3f), RoundedCornerShape(8.dp)).padding(horizontal = 14.dp), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) Text(placeholder, color = Color.Gray.copy(alpha = 0.7f), fontSize = 14.sp)
+                innerTextField()
             }
         }
     )
@@ -171,36 +153,16 @@ fun MultilineInputField(value: TextFieldValue, onValueChange: (TextFieldValue) -
             onValueChange(updatedValue)
         },
         modifier = modifier,
-        // ĐÃ SỬA: Chữ nhỏ lại một xíu (13.sp) để câu dài không bị rớt dòng tự do, thêm khoảng cách dòng (22.sp) cho bố cục thoáng đẹp
-        textStyle = TextStyle(color = textColor, fontSize = 13.sp, lineHeight = 22.sp),
+        textStyle = TextStyle(color = textColor, fontSize = 14.sp),
         cursorBrush = SolidColor(tunaGreen),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         visualTransformation = ChordVisualTransformation(tunaGreen),
         decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxSize().border(1.dp, Color.Gray.copy(alpha = 0.3f), RoundedCornerShape(8.dp)).padding(14.dp)) {
                 Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    if (value.text.isEmpty()) Text(placeholder, color = Color.Gray.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 22.sp)
-
-                    // ĐÃ SỬA: Thêm đệm lề phải để chữ không bị chui xuống dưới nút "X"
-                    Box(modifier = Modifier.padding(end = 24.dp)) {
-                        innerTextField()
-                    }
-
-                    // ĐÃ SỬA: Tăng khoảng trống dưới đáy để cuộn lên không bị nút "[" màu xanh đè mất chữ
-                    Spacer(modifier = Modifier.height(70.dp))
-                }
-
-                // Icon xóa nhanh đặt ở góc trên bên phải
-                if (value.text.isNotEmpty()) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Xóa",
-                        tint = Color.Gray.copy(alpha = 0.7f),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(18.dp)
-                            .clickable { onValueChange(TextFieldValue("")) }
-                    )
+                    if (value.text.isEmpty()) Text(placeholder, color = Color.Gray.copy(alpha = 0.7f), fontSize = 14.sp)
+                    innerTextField()
+                    Spacer(modifier = Modifier.height(40.dp))
                 }
 
                 Box(
@@ -280,15 +242,6 @@ fun transposeSingleChord(chord: String, offset: Int): String {
     val newRoot = if (root.contains("b")) flats[newIndex] else notes[newIndex]
     return "$newRoot$suffix"
 }
-
-// --- HÀM RÚT GỌN HỢP ÂM DỄ ---
-fun simplifyChord(chord: String): String {
-    if (chord.isBlank()) return chord
-    val noSlash = chord.substringBefore("/")
-    val match = Regex("^([A-G][#b]?)(m|dim|aug)?").find(noSlash)
-    return match?.value ?: noSlash
-}
-
 // --- HÀM TÍNH TOÁN BẬC LA MÃ (ROMAN NUMERALS) ---
 fun chordToRoman(chord: String, baseTone: String): String {
     if (chord.isBlank() || baseTone.isBlank()) return chord
@@ -356,24 +309,12 @@ fun ChordTextRenderer(
     fontSize: Int,
     isChordOverText: Boolean,
     showRomanNumerals: Boolean,
-    isEasyChordMode: Boolean = false,
     baseTone: String,
-    karaokeProgress: Float = 0f,
+    karaokeProgress: Float = 0f, // THÊM BIẾN NÀY
     onChordClick: (String) -> Unit
 ) {
     if (!isChordOverText) {
-        AnnotatedChordText(
-            lyrics = lyrics,
-            chordColor = chordColor,
-            textColor = textColor,
-            offset = offset,
-            fontSize = fontSize,
-            showRomanNumerals = showRomanNumerals,
-            isEasyChordMode = isEasyChordMode,
-            baseTone = baseTone,
-            karaokeProgress = karaokeProgress,
-            onChordClick = onChordClick
-        )
+        AnnotatedChordText(lyrics, chordColor, textColor, offset, fontSize, showRomanNumerals, baseTone, karaokeProgress, onChordClick)
     } else {
         val transposedBaseTone = transposeSingleChord(baseTone, offset)
         val chordFont = if (showRomanNumerals) androidx.compose.ui.text.font.FontFamily.Serif else androidx.compose.ui.text.font.FontFamily.Default
@@ -419,8 +360,7 @@ fun ChordTextRenderer(
                     for (i in matches.indices) {
                         val m = matches[i]
                         val raw = m.groupValues[1]
-                        var tChord = transposeSingleChord(raw, offset)
-                        if (isEasyChordMode) tChord = simplifyChord(tChord)
+                        val tChord = transposeSingleChord(raw, offset)
                         val displayStr = if (showRomanNumerals) chordToRoman(tChord, transposedBaseTone) else formatChordForDisplay(tChord)
 
                         val start = m.range.last + 1
@@ -458,7 +398,6 @@ fun AnnotatedChordText(
     offset: Int,
     fontSize: Int,
     showRomanNumerals: Boolean,
-    isEasyChordMode: Boolean = false,
     baseTone: String,
     karaokeProgress: Float = 0f, // THÊM BIẾN NÀY
     onChordClick: (String) -> Unit
@@ -506,8 +445,7 @@ fun AnnotatedChordText(
             appendKaraokeChunk(textBeforeChord)
 
             val raw = match.groupValues[1]
-            var tChord = transposeSingleChord(raw, offset)
-            if (isEasyChordMode) tChord = simplifyChord(tChord)
+            val tChord = transposeSingleChord(raw, offset)
             val displayStr = if (showRomanNumerals) chordToRoman(tChord, transposedBaseTone) else formatChordForDisplay(tChord)
 
             pushStringAnnotation("CHORD", tChord)
@@ -937,31 +875,15 @@ fun ReportSongDialogModal(reportInfo: ReportInfo, currentLang: String, tunaGreen
     }
 }
 @Composable
-fun AddSongDialogModal(
-    currentLang: String,
-    tunaGreen: Color,
-    textColor: Color,
-    surfaceColor: Color,
-    userRole: String,
-    isStaff: Boolean,
-    initialSongData: SongDetails? = null,
-    songRepository: SongRepository? = null,
-    onDismiss: () -> Unit,
-    onSuccess: (String) -> Unit
-) {
+fun AddSongDialogModal(currentLang: String, tunaGreen: Color, textColor: Color, surfaceColor: Color, userRole: String, isStaff: Boolean, onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var newTitle by remember(initialSongData) { mutableStateOf(initialSongData?.title ?: "") }
-    var newSinger by remember(initialSongData) { mutableStateOf(initialSongData?.singer ?: "") }
-    var newComposer by remember(initialSongData) { mutableStateOf(initialSongData?.composer ?: "") }
-    var newBaseTone by remember(initialSongData) { mutableStateOf(initialSongData?.baseTone ?: "") }
-    var newRhythm by remember(initialSongData) { mutableStateOf(initialSongData?.rhythm ?: "") }
-    var newBpm by remember(initialSongData) { mutableStateOf(initialSongData?.bpm ?: "") }
-    var newVideoUrl by remember(initialSongData) { mutableStateOf(initialSongData?.videoUrl ?: "") }
-    var newLyrics by remember(initialSongData) { mutableStateOf(TextFieldValue(initialSongData?.lyrics ?: "")) }
+    var newTitle by remember { mutableStateOf("") }; var newSinger by remember { mutableStateOf("") }; var newComposer by remember { mutableStateOf("") }; var newBaseTone by remember { mutableStateOf("") }; var newRhythm by remember { mutableStateOf("") }; var newBpm by remember { mutableStateOf("") }; var newVideoUrl by remember { mutableStateOf("") };
+    var newLyrics by remember { mutableStateOf(TextFieldValue("")) }
     var isAdding by remember { mutableStateOf(false) }
     var isCollapsed by remember { mutableStateOf(false) }
 
+    // ĐÃ SỬA LỖI TẠI ĐÂY: Khai báo rõ ràng <List<Uri>>
     var selectedImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> selectedImages = uris }
 
@@ -969,12 +891,7 @@ fun AddSongDialogModal(
         Surface(color = surfaceColor, modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (initialSongData != null) "Tạo phiên bản hợp âm" else CoreTranslator.getString("add_title", currentLang),
-                        color = Color(0xFF1976D2),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(CoreTranslator.getString("add_title", currentLang), color = Color(0xFF1976D2), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { isCollapsed = !isCollapsed }.padding(8.dp)) {
                         Text(CoreTranslator.getString(if (isCollapsed) "expand" else "collapse", currentLang), color = Color(0xFF1976D2), fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         Icon(if (isCollapsed) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp, null, tint = Color(0xFF1976D2))
@@ -1021,90 +938,30 @@ fun AddSongDialogModal(
                     MultilineInputField(value = newLyrics, onValueChange = { newLyrics = it }, placeholder = CoreTranslator.getString("lyrics_label", currentLang), textColor = textColor, tunaGreen = tunaGreen, modifier = Modifier.fillMaxWidth().weight(1f))
                 }
                 Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(CoreTranslator.getString("cancel", currentLang), color = Color.Gray) }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // NÚT LƯU VÀO MÁY (CỤC BỘ)
-                        OutlinedButton(
-                            onClick = {
-                                if (newTitle.isBlank()) return@OutlinedButton
-                                isAdding = true
-                                coroutineScope.launch {
-                                    val songDataToSave = SongDetails(
-                                        songId = initialSongData?.songId ?: "",
-                                        title = newTitle,
-                                        singer = newSinger.ifBlank { CoreTranslator.getString("updating", currentLang) },
-                                        composer = newComposer.ifBlank { CoreTranslator.getString("updating", currentLang) },
-                                        baseTone = newBaseTone.ifBlank { "C" },
-                                        rhythm = newRhythm,
-                                        bpm = newBpm,
-                                        videoUrl = newVideoUrl,
-                                        lyrics = newLyrics.text
-                                    )
-                                    val success = songRepository?.insertCustomSongLocal(songDataToSave) ?: false
-                                    if (success) {
-                                        Toast.makeText(context, "Đã lưu bản hợp âm vào máy thành công!", Toast.LENGTH_SHORT).show()
-                                        onSuccess(newTitle)
-                                    } else {
-                                        Toast.makeText(context, "Lỗi khi lưu vào thiết bị", Toast.LENGTH_SHORT).show()
-                                    }
-                                    isAdding = false
-                                }
-                            },
-                            enabled = !isAdding,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, tunaGreen),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = tunaGreen)
-                        ) {
-                            Text("Lưu vào máy", fontSize = 13.sp)
+                    Button(onClick = {
+                        if (newTitle.isBlank()) return@Button; isAdding = true;
+                        coroutineScope.launch {
+                            val newSong = SongDetails(
+                                title = newTitle,
+                                singer = newSinger.ifBlank { CoreTranslator.getString("updating", currentLang) },
+                                composer = newComposer.ifBlank { CoreTranslator.getString("updating", currentLang) },
+                                baseTone = newBaseTone.ifBlank { "C" },
+                                rhythm = newRhythm,
+                                bpm = newBpm,
+                                videoUrl = newVideoUrl,
+                                lyrics = newLyrics.text
+                            )
+                            val success = SongScraper.addSongWithImages(context, newSong, selectedImages, userRole)
+                            if (success) {
+                                if (isStaff) { Toast.makeText(context, CoreTranslator.getString("add_success", currentLang), Toast.LENGTH_SHORT).show(); onSuccess(newTitle) }
+                                else { Toast.makeText(context, CoreTranslator.getString("sent_wait_approval", currentLang), Toast.LENGTH_LONG).show(); onDismiss() }
+                            } else { Toast.makeText(context, CoreTranslator.getString("server_error", currentLang), Toast.LENGTH_SHORT).show() }
+                            isAdding = false
                         }
-
-                        // NÚT CHIA SẺ CHO CỘNG ĐỒNG (GỬI LÊN SERVER)
-                        Button(
-                            onClick = {
-                                if (newTitle.isBlank()) return@Button
-                                isAdding = true
-                                coroutineScope.launch {
-                                    val newSong = SongDetails(
-                                        title = newTitle,
-                                        singer = newSinger.ifBlank { CoreTranslator.getString("updating", currentLang) },
-                                        composer = newComposer.ifBlank { CoreTranslator.getString("updating", currentLang) },
-                                        baseTone = newBaseTone.ifBlank { "C" },
-                                        rhythm = newRhythm,
-                                        bpm = newBpm,
-                                        videoUrl = newVideoUrl,
-                                        lyrics = newLyrics.text
-                                    )
-                                    // Lưu cục bộ trước
-                                    songRepository?.insertCustomSongLocal(newSong)
-
-                                    // Đẩy lên online
-                                    val success = SongScraper.addSongWithImages(context, newSong, selectedImages, userRole)
-                                    if (success) {
-                                        if (isStaff) {
-                                            Toast.makeText(context, "Đã chia sẻ lên cộng đồng thành công!", Toast.LENGTH_SHORT).show()
-                                            onSuccess(newTitle)
-                                        } else {
-                                            Toast.makeText(context, "Đã lưu vào máy và gửi duyệt lên cộng đồng!", Toast.LENGTH_LONG).show()
-                                            onSuccess(newTitle)
-                                        }
-                                    } else {
-                                        Toast.makeText(context, "Đã lưu vào máy (Lỗi gửi lên server)", Toast.LENGTH_SHORT).show()
-                                        onSuccess(newTitle)
-                                    }
-                                    isAdding = false
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
-                            enabled = !isAdding
-                        ) {
-                            if (isAdding) CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
-                            else Text("Chia sẻ", color = Color.White, fontSize = 13.sp)
-                        }
+                    }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)), enabled = !isAdding) {
+                        if (isAdding) CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White) else Text(CoreTranslator.getString("create", currentLang), color = Color.White)
                     }
                 }
             }
@@ -1124,9 +981,7 @@ fun EditSongDialogModal(currentSongData: SongDetails, currentLang: String, tunaG
     var editRhythm by remember { mutableStateOf(currentSongData.rhythm) }
     var editBpm by remember { mutableStateOf(currentSongData.bpm) }
     var editVideoUrl by remember { mutableStateOf(currentSongData.videoUrl) }
-
-    // ĐÃ SỬA: Sử dụng formatRawLyrics để tự động sắp xếp lại bố cục giống y hệt trang chi tiết bài hát
-    var editLyrics by remember { mutableStateOf(TextFieldValue(formatRawLyrics(currentSongData.lyrics))) }
+    var editLyrics by remember { mutableStateOf(TextFieldValue(currentSongData.lyrics)) }
 
     var isUpdating by remember { mutableStateOf(false) }
     var isCollapsed by remember { mutableStateOf(false) }
@@ -1242,21 +1097,18 @@ fun SearchHistoryOverlay(
     isSearchFocused: Boolean,
     urlInputText: String,
     searchHistory: List<String>,
-    suggestSongs: List<Song>, // Vẫn giữ tham số để hàm cha khỏi báo lỗi
-    songRepository: SongRepository,
     currentLang: String,
     tunaGreen: Color,
     surfaceColor: Color,
     bgColor: Color,
     textColor: Color,
+    songRepository: SongRepository,
     onClose: () -> Unit,
     onClearAll: () -> Unit,
     onDeleteQuery: (String) -> Unit,
-    onQuerySelected: (String, Song?) -> Unit
+    onQuerySelected: (String, Song?) -> Unit // Cập nhật để truyền thêm bài hát gốc
 ) {
-    // ĐÃ SỬA: CHỈ HIỂN THỊ OVERLAY NÀY KHI ĐANG FOCUS VÀ Ô NHẬP LIỆU TRỐNG
     if (isSearchFocused && urlInputText.isEmpty()) {
-
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1284,13 +1136,14 @@ fun SearchHistoryOverlay(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .heightIn(max = 450.dp)
+                        // ĐÃ SỬA: Dùng viền xám mờ thay cho màu trắng cứng
                         .border(1.dp, Color.Gray.copy(alpha = 0.2f), RoundedCornerShape(12.dp)),
                     shape = RoundedCornerShape(12.dp),
+                    // ĐÃ SỬA: Dùng surfaceColor để tự động thích ứng chế độ Sáng/Tối
                     colors = CardDefaults.cardColors(containerColor = surfaceColor),
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
                     LazyColumn(modifier = Modifier.fillMaxWidth()) {
-
                         item {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1328,9 +1181,8 @@ fun SearchHistoryOverlay(
                                     }
                                 }
                             }
-                            HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
+                            HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f)) // Đã làm rõ viền ngăn cách
                         }
-
                         if (searchHistory.isEmpty()) {
                             item {
                                 Box(modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
@@ -1339,131 +1191,64 @@ fun SearchHistoryOverlay(
                             }
                         } else {
                             items(searchHistory.size) { index ->
-                                val rawQuery = searchHistory[index]
-                                val songId = if (rawQuery.contains("|")) rawQuery.substringBefore("|") else ""
-                                val query = if (rawQuery.contains("|")) rawQuery.substringAfter("|") else rawQuery
+                                val query = searchHistory[index]
+                                var topMatch by remember(query) { mutableStateOf<Song?>(null) }
 
-                                // --- BẮT ĐẦU: TRUY VẤN NGƯỢC ĐỂ LẤY ẢNH VÀ TÊN CA SĨ ---
-                                var thumbnailUrl by remember(rawQuery) { mutableStateOf("") }
-                                var artistName by remember(rawQuery) { mutableStateOf("") } // <-- Thêm biến chứa tên ca sĩ
-
-                                LaunchedEffect(rawQuery) {
-                                    // Repository da duoc chuan bi tai SongMainScreen, khong mo them DB o day.
-                                    val song = songRepository.getSongByExactIdOrTitle(
-                                        songId = songId,
-                                        songTitle = query,
-                                        includeLyrics = false
-                                    )
-                                    if (song != null) {
-                                        artistName = song.ca_si
-                                        if (song.youtubeUrl.isNotBlank()) {
-                                            var videoId = ""
-                                            val rawUrl = song.youtubeUrl
-                                            if (rawUrl.contains("watch?v=")) {
-                                                videoId = rawUrl.substringAfter("watch?v=").substringBefore("&")
-                                            } else if (rawUrl.contains("youtu.be/")) {
-                                                videoId = rawUrl.substringAfter("youtu.be/").substringBefore("?")
-                                            }
-                                            if (videoId.isNotBlank()) {
-                                                thumbnailUrl = "https://img.youtube.com/vi/${videoId.trim()}/mqdefault.jpg"
-                                            }
-                                        }
-                                    }
-                                }
-                                // --- KẾT THÚC TRUY VẤN NGƯỢC ---
-
-                                val dummySongForHistory = remember(rawQuery, artistName) {
-                                    if (artistName.isNotBlank()) {
-                                        Song(id = songId, title = query, originalKey = "", rhythm = "", chordList = emptyList(), lyrics = emptyList(), favoriteCount = 0, viewCount = 0, commentCount = 0, ratingStars = 0f, ratingCount = 0, genre = emptyList(), authorId = "", authorName = "", singerNames = emptyList(), youtubeUrl = "", createdAt = "", updatedAt = "", tac_gia = "", ca_si = artistName, tong = "", dieu = "", bpm = 0, the_loai = "", slug = "", image_count = 0, zingMp3Id = "")
-                                    } else {
-                                        null
+                                LaunchedEffect(query) {
+                                    songRepository.searchOfflineSongs(query).collect { songs ->
+                                        if (songs.isNotEmpty()) topMatch = songs[0]
                                     }
                                 }
 
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { onQuerySelected(query, dummySongForHistory) }
+                                        // Truyền thêm topMatch để mở thẳng bài hát
+                                        .clickable { onQuerySelected(query, topMatch) }
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "${index + 1}",
-                                        color = Color.Gray,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.width(28.dp)
-                                    )
+                                    Text(text = "${index + 1}", color = Color.Gray, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
+
+                                    var thumbnailUrl = ""
+                                    if (topMatch != null && topMatch!!.youtubeUrl.isNotBlank()) {
+                                        var videoId = ""
+                                        val rawUrl = topMatch!!.youtubeUrl
+                                        if (rawUrl.contains("watch?v=")) videoId = rawUrl.substringAfter("watch?v=").substringBefore("&")
+                                        else if (rawUrl.contains("youtu.be/")) videoId = rawUrl.substringAfter("youtu.be/").substringBefore("?")
+                                        if (videoId.isNotBlank()) thumbnailUrl = "https://img.youtube.com/vi/${videoId.trim()}/mqdefault.jpg"
+                                    }
 
                                     Box(
-                                        modifier = Modifier
-                                            .size(60.dp, 42.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(bgColor),
+                                        modifier = Modifier.size(60.dp, 42.dp).clip(RoundedCornerShape(6.dp)).background(bgColor),
                                         contentAlignment = Alignment.Center
                                     ) {
+                                        Icon(Icons.Default.History, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
                                         if (thumbnailUrl.isNotBlank()) {
-                                            coil.compose.AsyncImage(
-                                                model = thumbnailUrl,
-                                                contentDescription = "Thumbnail",
-                                                modifier = Modifier.fillMaxSize(),
-                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                            )
-                                        } else {
-                                            Icon(
-                                                Icons.Default.History,
-                                                contentDescription = null,
-                                                tint = Color.Gray,
-                                                modifier = Modifier.size(20.dp)
-                                            )
+                                            AsyncImage(model = thumbnailUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                         }
                                     }
 
                                     Spacer(Modifier.width(12.dp))
 
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = query,
-                                            color = textColor,
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = if (artistName.isNotBlank()) {
-                                                artistName
-                                            } else if (currentLang == "vi") {
-                                                "Chạm để tìm lại"
-                                            } else {
-                                                "Tap to search again"
-                                            },
-                                            color = Color.Gray,
-                                            fontSize = 11.sp,
-                                            maxLines = 1,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                        )
+                                        // ĐÃ SỬA: Dùng textColor để tương thích chữ Đen (ở Light Mode) và chữ Trắng (ở Dark Mode)
+                                        Text(text = query, color = textColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                        if (topMatch != null) {
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(text = "${topMatch!!.ca_si} • ${topMatch!!.tac_gia}", color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                        }
                                     }
 
                                     IconButton(
-                                        onClick = { onDeleteQuery(rawQuery) },
+                                        onClick = { onDeleteQuery(query) },
                                         modifier = Modifier.size(24.dp)
                                     ) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = "Xóa",
-                                            tint = Color.Gray.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
+                                        Icon(Icons.Default.Close, contentDescription = "Xóa", tint = Color.Gray.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
                                     }
                                 }
-
                                 if (index < searchHistory.size - 1) {
-                                    HorizontalDivider(
-                                        color = Color.Gray.copy(alpha = 0.1f),
-                                        modifier = Modifier.padding(start = 88.dp, end = 16.dp)
-                                    )
+                                    HorizontalDivider(color = Color.Gray.copy(alpha = 0.1f), modifier = Modifier.padding(start = 88.dp, end = 16.dp))
                                 }
                             }
                         }
@@ -1480,7 +1265,6 @@ fun SearchHistoryOverlay(
 fun SongChordsSummary(
     lyrics: String,
     transposeOffset: Int,
-    isEasyChordMode: Boolean = false,
     guitarChordsList: List<ChordModel>,
     tunaGreen: Color,
     surfaceColor: Color,
@@ -1488,12 +1272,9 @@ fun SongChordsSummary(
     textColor: Color,
     onChordClick: (String) -> Unit
 ) {
-    val validChordsToDraw = remember(lyrics, transposeOffset, isEasyChordMode, guitarChordsList) {
+    val validChordsToDraw = remember(lyrics, transposeOffset, guitarChordsList) {
         val regex = Regex("\\[(.*?)\\]")
-        val uniqueRawChords = regex.findAll(lyrics).map { it.groupValues[1] }
-            .map { transposeSingleChord(it, transposeOffset) }
-            .map { if (isEasyChordMode) simplifyChord(it) else it }
-            .distinct().toList()
+        val uniqueRawChords = regex.findAll(lyrics).map { it.groupValues[1] }.map { transposeSingleChord(it, transposeOffset) }.distinct().toList()
         uniqueRawChords.mapNotNull { chordQuery ->
             val exactMatch = guitarChordsList.find { chord ->
                 val displaySuffix = when (chord.suffix) { "major" -> ""; "minor" -> "m"; else -> chord.suffix }
@@ -1678,21 +1459,13 @@ fun SongListItemCard(
     deviceId: String,
     sharedPref: android.content.SharedPreferences,
     userRole: String,
-    songRepository: SongRepository? = null,
-    refreshTrigger: Int = 0,
     onOpenDetail: (String) -> Unit,
-    onOpenCustomDetail: ((SongDetails) -> Unit)? = null,
     onReport: () -> Unit,
     onChordPopup: (String) -> Unit,
-    onDeleteClick: () -> Unit,
-    onEditClick: (SongDetails) -> Unit = {},
-    onCreateCustomChord: () -> Unit = {}
+    onDeleteClick: () -> Unit
 ) {
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var isLikedItem by remember { mutableStateOf(sharedPref.getBoolean("liked_${song.id}", false)) }
-    var showMoreMenu by remember { mutableStateOf(false) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     var videoId = ""
     if (song.youtubeUrl.isNotBlank()) {
@@ -1708,102 +1481,46 @@ fun SongListItemCard(
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-                var customLocalSong by remember(song.id, song.title, song.ca_si, refreshTrigger) { mutableStateOf<Song?>(null) }
-                LaunchedEffect(song.id, song.title, song.ca_si, refreshTrigger) {
-                    if (song.id.startsWith("local_")) {
-                        customLocalSong = song
-                    } else if (songRepository != null) {
-                        customLocalSong = songRepository.getCustomSongLocalByTitle(song.title, song.ca_si)
-                    }
-                }
-
-                Row(modifier = Modifier.weight(1f).padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(modifier = Modifier.weight(1f).padding(end = 8.dp), verticalAlignment = Alignment.Top) {
                     if (indexText != null) {
                         Text(text = indexText, color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, lineHeight = 22.sp, modifier = Modifier.padding(end = 6.dp))
                     }
                     Text(text = song.title, color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium, lineHeight = 22.sp)
-
-                    // HIỂN THỊ NGÔI SAO MÀU VÀNG NẾU CÓ BẢN TÙY CHỈNH CỦA BẠN
-                    if (customLocalSong != null) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        IconButton(
-                            onClick = {
-                                val cSong = customLocalSong!!
-                                val customDetail = SongDetails(
-                                    title = cSong.title,
-                                    singer = cSong.ca_si,
-                                    composer = cSong.tac_gia,
-                                    baseTone = cSong.tong,
-                                    rhythm = cSong.dieu.ifBlank { cSong.rhythm },
-                                    bpm = if (cSong.bpm > 0) cSong.bpm.toString() else "",
-                                    lyrics = cSong.lyrics.joinToString("\n"),
-                                    videoUrl = cSong.youtubeUrl,
-                                    songId = cSong.id,
-                                    slug = cSong.slug,
-                                    imageCount = cSong.image_count,
-                                    likes = cSong.favoriteCount,
-                                    isLikedByDevice = sharedPref.getBoolean("liked_${cSong.id}", false),
-                                    zingMp3Id = cSong.zingMp3Id
-                                )
-                                onOpenCustomDetail?.invoke(customDetail)
-                            },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Star,
-                                contentDescription = "Bản hợp âm của bạn",
-                                tint = Color(0xFFFFC107),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onReport, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Flag, contentDescription = "Report", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                     IconButton(
                         onClick = {
-                            if (deviceId.isBlank()) {
-                                Toast.makeText(context, "Vui lòng đăng nhập Gmail để thêm vào Yêu thích", Toast.LENGTH_SHORT).show()
-                            } else {
-                                isLikedItem = !isLikedItem
-                                sharedPref.edit().putBoolean("liked_${song.id}", isLikedItem).apply()
-                                coroutineScope.launch { SongScraper.toggleLike(song.id, deviceId, isLikedItem) }
-                            }
+                            isLikedItem = !isLikedItem
+                            sharedPref.edit().putBoolean("liked_${song.id}", isLikedItem).apply()
+                            coroutineScope.launch { SongScraper.toggleLike(song.id, deviceId, isLikedItem) }
                         },
                         modifier = Modifier.size(24.dp)
                     ) {
                         Icon(imageVector = if (isLikedItem) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Like", tint = if (isLikedItem) Color.Red else Color.Gray, modifier = Modifier.size(16.dp))
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = song.viewCount.toString(),
-                            color = Color.Gray,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.width(3.dp))
-                        Icon(
-                            imageVector = Icons.Default.Visibility,
-                            contentDescription = "Lượt xem",
-                            tint = Color.Gray,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    if (userRole in listOf("super_admin", "admin")) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        var showDeleteConfirm by remember { mutableStateOf(false) }
+                        IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(24.dp)) {
+                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Xóa bài hát trên Server", tint = Color.Red, modifier = Modifier.size(16.dp))
+                        }
+                        if (showDeleteConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { showDeleteConfirm = false },
+                                title = { Text(CoreTranslator.getString("delete_song", currentLang), color = tunaGreen, fontWeight = FontWeight.Bold) },
+                                text = { Text("${CoreTranslator.getString("delete_confirm", currentLang)}\n'${song.title}'", color = textColor) },
+                                containerColor = surfaceColor,
+                                confirmButton = { TextButton(onClick = { showDeleteConfirm = false; onDeleteClick() }) { Text(CoreTranslator.getString("delete", currentLang), color = Color.Red, fontWeight = FontWeight.Bold) } },
+                                dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text(CoreTranslator.getString("cancel", currentLang), color = Color.Gray) } }
+                            )
+                        }
                     }
-
-                    // Đã xóa menu 3 chấm trên danh sách tìm kiếm ngoài
                 }
-            }
-
-            if (showDeleteConfirm) {
-                AlertDialog(
-                    onDismissRequest = { showDeleteConfirm = false },
-                    title = { Text(CoreTranslator.getString("delete_song", currentLang), color = tunaGreen, fontWeight = FontWeight.Bold) },
-                    text = { Text("${CoreTranslator.getString("delete_confirm", currentLang)}\n'${song.title}'", color = textColor) },
-                    containerColor = surfaceColor,
-                    confirmButton = { TextButton(onClick = { showDeleteConfirm = false; onDeleteClick() }) { Text(CoreTranslator.getString("delete", currentLang), color = Color.Red, fontWeight = FontWeight.Bold) } },
-                    dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text(CoreTranslator.getString("cancel", currentLang), color = Color.Gray) } }
-                )
             }
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -1828,7 +1545,7 @@ fun SongListItemCard(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) {
-                if (song.chordList.isNotEmpty() || song.hasLyrics) {
+                if (song.chordList.isNotEmpty() || song.lyrics.isNotEmpty()) {
                     Row(modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(bgColor).border(1.dp, tunaGreen, RoundedCornerShape(4.dp)).clickable { onOpenDetail("CHORD") }.padding(horizontal = 8.dp, vertical = 6.dp)) {
                         Icon(imageVector = CustomIcons.Chord, contentDescription = "Chord", tint = tunaGreen, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1870,10 +1587,6 @@ fun SongDetailHeader(
     activeMediaType: String = "",
     overrideVideoUrl: String = "",
     isStaff: Boolean = false,
-    userRole: String = "user",
-    sharedPref: android.content.SharedPreferences,
-    songRepository: SongRepository? = null,
-    refreshTrigger: Int = 0,
     surfaceColor: Color = Color(0xFF1E1E1E),
     onEnterVideoFullScreen: (android.view.View, android.webkit.WebChromeClient.CustomViewCallback) -> Unit = { _, _ -> },
     onExitVideoFullScreen: () -> Unit = {},
@@ -1884,22 +1597,8 @@ fun SongDetailHeader(
     onPlayVideoClick: () -> Unit,
     onEditClick: () -> Unit = {},
     onDeleteClick: () -> Unit = {},
-    onCreateCustomChord: () -> Unit = {},
-    onEditCustomChord: (SongDetails) -> Unit = {},
-    onDeleteCustomChord: () -> Unit = {},
-    onToneDetectClick: () -> Unit = {},
-    onTutorialClick: () -> Unit = {},
-    onStrummingClick: () -> Unit = {}
+    onTutorialClick: () -> Unit = {}
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    var customLocalSong by remember(currentSongData.title, currentSongData.singer, refreshTrigger) { mutableStateOf<Song?>(null) }
-    LaunchedEffect(currentSongData.title, currentSongData.singer, refreshTrigger) {
-        if (currentSongData.songId.startsWith("local_")) {
-            customLocalSong = null
-        } else if (songRepository != null) {
-            customLocalSong = songRepository.getCustomSongLocalByTitle(currentSongData.title, currentSongData.singer)
-        }
-    }
     var videoId = ""
     val rawUrl = if (overrideVideoUrl.isNotBlank()) overrideVideoUrl else currentSongData.videoUrl
     if (rawUrl.isNotBlank()) {
@@ -1913,12 +1612,11 @@ fun SongDetailHeader(
     val isPlaying = activeMediaType == "YOUTUBE"
     val headerHeight = if (isPlaying) 230.dp else 220.dp
 
-    // Trạng thái cho DropdownMenu và hộp thoại xác nhận
-    var showMoreMenu by remember { mutableStateOf(false) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+    // --- BIẾN TRẠNG THÁI HIỂN THỊ HỘP THOẠI XÁC NHẬN ---
     var showInterruptDialog by remember { mutableStateOf(false) }
     var pendingInterruptAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
+    // --- HÀM XỬ LÝ CLICK ICON: KIỂM TRA ĐANG CHẠY MEDIA HAY KHÔNG ---
     val handleMediaIconClick = { action: () -> Unit ->
         if (activeMediaType.isNotBlank()) {
             pendingInterruptAction = action
@@ -1929,7 +1627,7 @@ fun SongDetailHeader(
     }
 
     Box(
-        modifier = Modifier.fillMaxWidth().height(headerHeight).clip(RoundedCornerShape(12.dp)).background(surfaceColor)
+        modifier = Modifier.fillMaxWidth().height(headerHeight).clip(RoundedCornerShape(12.dp)).background(Color.Black)
     ) {
         if (isPlaying && videoId.isNotBlank()) {
             val embedUrl = "https://www.youtube.com/embed/${videoId.trim()}?autoplay=1&playsinline=1&fs=1"
@@ -1974,7 +1672,7 @@ fun SongDetailHeader(
                 0.0f to Color.Black.copy(alpha = 0.35f), 0.2f to Color.Transparent, 0.6f to Color.Black.copy(alpha = 0.5f), 1.0f to Color.Black.copy(alpha = 0.95f)
             )))
 
-            Column(modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, bottom = 0.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.Start) {
+            Column(modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, bottom = 6.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.Start) {
                 Text(text = currentSongData.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.fillMaxWidth(), lineHeight = 28.sp, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 val rowHeight = 22.dp
                 Row(modifier = Modifier.height(rowHeight), verticalAlignment = Alignment.CenterVertically) {
@@ -1988,141 +1686,50 @@ fun SongDetailHeader(
                     Text("${CoreTranslator.getString("singer_prefix", currentLang)} ${currentSongData.singer}", color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp)
                 }
 
-                val safeRhythm = currentSongData.rhythm.replace("\n", "").replace("\r", "").trim()
-                if (safeRhythm.isNotBlank() && safeRhythm != "null") {
-                    Row(modifier = Modifier.height(rowHeight).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.MusicNote, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(2.dp))
-                        Text(
-                            text = "${CoreTranslator.getString("rhythm", currentLang)}: $safeRhythm",
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(modifier = Modifier.height(rowHeight).weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        if (currentSongData.rhythm.isNotBlank()) {
+                            Icon(Icons.Default.MusicNote, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(2.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    // Ba nút chức năng dùng chung một kích thước để hàng nút luôn thẳng và cân đối.
-                    val headerActionWidth = 64.dp
-                    val headerActionHeight = 20.dp
-                    val headerActionShape = RoundedCornerShape(4.dp)
-                    val headerActionBg = Color.White.copy(alpha = 0.25f)
+                            // Kiểm tra xem bài hát có BPM hay không (khác rỗng và khác "0")
+                            val bpmDisplay = if (currentSongData.bpm.isNotBlank() && currentSongData.bpm != "0") {
+                                "(${currentSongData.bpm})"
+                            } else {
+                                ""
+                            }
 
-                    // Tắt font padding mặc định của Android. Nếu để font padding,
-                    // Row sẽ căn giữa "khung chữ" nhưng phần glyph nhìn thấy vẫn bị tụt xuống.
-                    val headerActionTextStyle = TextStyle(
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(
-                            includeFontPadding = false
-                        )
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .width(headerActionWidth)
-                            .height(headerActionHeight)
-                            .clip(headerActionShape)
-                            .background(headerActionBg)
-                            .clickable { handleMediaIconClick { onToneDetectClick() } },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = songToneText("button", currentLang),
-                            tint = Color.White,
-                            modifier = Modifier.size(11.dp)
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = songToneText("button", currentLang),
-                            style = headerActionTextStyle,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .height(headerActionHeight)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                        )
+                            Text(
+                                text = "${CoreTranslator.getString("rhythm", currentLang)}: ${currentSongData.rhythm}$bpmDisplay",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Normal // Đổi từ SemiBold thành Normal để chữ không in đậm
+                            )
+                        }
                     }
 
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Row(
-                        modifier = Modifier
-                            .width(headerActionWidth)
-                            .height(headerActionHeight)
-                            .clip(headerActionShape)
-                            .background(headerActionBg)
-                            .clickable { handleMediaIconClick { onTutorialClick() } },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.OndemandVideo, contentDescription = "Tutorial", tint = Color.White, modifier = Modifier.size(11.dp))
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = CoreTranslator.getString("tutorial_btn", currentLang),
-                            style = headerActionTextStyle,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .height(headerActionHeight)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                        )
-                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.25f)).clickable { handleMediaIconClick { onTutorialClick() } }.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.OndemandVideo, contentDescription = "Tutorial", tint = Color.White, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(CoreTranslator.getString("tutorial_btn", currentLang), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
 
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Row(
-                        modifier = Modifier
-                            .width(headerActionWidth)
-                            .height(headerActionHeight)
-                            .clip(headerActionShape)
-                            .background(headerActionBg)
-                            .clickable { handleMediaIconClick { onStrummingClick() } },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.GraphicEq, contentDescription = "Tiết tấu", tint = Color.White, modifier = Modifier.size(11.dp))
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = "Tiết tấu",
-                            style = headerActionTextStyle,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .height(headerActionHeight)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                        )
-                    }
+                        ZingMp3Icon(modifier = Modifier.padding(start = 6.dp).size(16.dp).clickable { handleMediaIconClick { searchMusicOnApp(context, "ZING", currentSongData.title, currentSongData.singer, currentLang) } })
+                        AppleMusicIcon(modifier = Modifier.padding(start = 6.dp).size(16.dp).clickable { handleMediaIconClick { searchMusicOnApp(context, "APPLE", currentSongData.title, currentSongData.singer, currentLang) } })
+                        SpotifyIcon(modifier = Modifier.padding(start = 6.dp).size(16.dp).clickable { handleMediaIconClick { searchMusicOnApp(context, "SPOTIFY", currentSongData.title, currentSongData.singer, currentLang) } })
 
-                    // Giữ cụm dịch vụ âm nhạc ở phía phải, còn ba nút chức năng bám mép trái
-                    // cùng trục với dòng thông tin điệu nhạc phía trên.
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    ZingMp3Icon(modifier = Modifier.padding(start = 6.dp).size(16.dp).clickable { handleMediaIconClick { searchMusicOnApp(context, "ZING", currentSongData.title, currentSongData.singer, currentLang) } })
-                    AppleMusicIcon(modifier = Modifier.padding(start = 6.dp).size(16.dp).clickable { handleMediaIconClick { searchMusicOnApp(context, "APPLE", currentSongData.title, currentSongData.singer, currentLang) } })
-                    SpotifyIcon(modifier = Modifier.padding(start = 6.dp).size(16.dp).clickable { handleMediaIconClick { searchMusicOnApp(context, "SPOTIFY", currentSongData.title, currentSongData.singer, currentLang) } })
-
-                    if (currentSongData.videoUrl.isNotBlank()) {
-                        Box(modifier = Modifier.padding(start = 6.dp).size(width = 24.dp, height = 16.dp).background(Color.Red, RoundedCornerShape(4.dp)).clickable { handleMediaIconClick { onPlayVideoClick() } }, contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(10.dp))
+                        if (currentSongData.videoUrl.isNotBlank()) {
+                            Box(modifier = Modifier.padding(start = 6.dp).size(width = 24.dp, height = 16.dp).background(Color.Red, RoundedCornerShape(4.dp)).clickable { handleMediaIconClick { onPlayVideoClick() } }, contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(10.dp))
+                            }
                         }
                     }
                 }
             }
         }
 
-        // CỤM NÚT ĐIỀU KHIỂN GÓC TRÊN BÊN PHẢI (Trái tim + Icon 3 chấm)
-        Row(modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (isPlaying) {
                 IconButton(onClick = onCloseVideoClick, modifier = Modifier.size(36.dp)) {
                     Box(modifier = Modifier.size(28.dp).background(Color.Black.copy(alpha = 0.6f), CircleShape), contentAlignment = Alignment.Center) {
@@ -2130,184 +1737,33 @@ fun SongDetailHeader(
                     }
                 }
             } else {
-                // 1. Nút Yêu thích (Trái tim)
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onLikeClick() }.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                if (isStaff) {
+                    IconButton(onClick = onEditClick, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Edit, contentDescription = "Edit", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(20.dp)) }
+                    var showDeleteConfirm by remember { mutableStateOf(false) }
+                    IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(20.dp)) }
+                    if (showDeleteConfirm) {
+                        AlertDialog(
+                            onDismissRequest = { showDeleteConfirm = false },
+                            title = { Text(CoreTranslator.getString("delete_song", currentLang), color = tunaGreen, fontWeight = FontWeight.Bold) },
+                            text = { Text("${CoreTranslator.getString("delete_confirm", currentLang)}\n'${currentSongData.title}'", color = textColor) },
+                            containerColor = surfaceColor,
+                            confirmButton = { TextButton(onClick = { showDeleteConfirm = false; onDeleteClick() }) { Text(CoreTranslator.getString("delete", currentLang), color = Color.Red, fontWeight = FontWeight.Bold) } },
+                            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text(CoreTranslator.getString("cancel", currentLang), color = Color.Gray) } }
+                        )
+                    }
+                }
+                IconButton(onClick = onReportClick, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Flag, contentDescription = "Report", tint = Color.Red, modifier = Modifier.size(22.dp)) }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onLikeClick() }.padding(horizontal = 8.dp, vertical = 6.dp)) {
                     Icon(imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Like", tint = Color.Red, modifier = Modifier.size(22.dp))
                     if (likeCount > 0) {
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(text = likeCount.toString(), color = Color.Red, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-
-                // 2. Nút 3 chấm (Menu More)
-                Box {
-                    IconButton(onClick = { showMoreMenu = true }, modifier = Modifier.size(36.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Thao tác khác",
-                            tint = Color.White.copy(alpha = 0.9f),
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = showMoreMenu,
-                        onDismissRequest = { showMoreMenu = false },
-                        modifier = Modifier.background(surfaceColor)
-                    ) {
-                        // 1. Cập nhật bài hát (Chỉ dành cho Admin / Staff)
-                        if (isStaff) {
-                            DropdownMenuItem(
-                                text = { Text(CoreTranslator.getString("edit_title", currentLang), color = textColor) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edit", tint = tunaGreen, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    onEditClick()
-                                }
-                            )
-                        }
-
-                        // 2. Báo cáo bài hát
-                        DropdownMenuItem(
-                            text = { Text(CoreTranslator.getString("report_song", currentLang), color = textColor) },
-                            leadingIcon = {
-                                Icon(Icons.Default.Flag, contentDescription = "Report", tint = Color.Red, modifier = Modifier.size(18.dp))
-                            },
-                            onClick = {
-                                showMoreMenu = false
-                                onReportClick()
-                            }
-                        )
-
-                        // 3. Xóa bài hát (Chỉ dành cho Admin / Staff)
-                        if (isStaff) {
-                            DropdownMenuItem(
-                                text = { Text(CoreTranslator.getString("delete", currentLang), color = Color.Red) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    showDeleteConfirm = true
-                                }
-                            )
-                        }
-
-                        // 4. Các chức năng bản hợp âm tự tạo
-                        if (currentSongData.songId.startsWith("local_")) {
-                            // Đang xem trực tiếp bản tự tạo: Sửa và Hủy
-                            DropdownMenuItem(
-                                text = { Text("Sửa bản hợp âm của bạn", color = tunaGreen) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.EditNote, contentDescription = "Sửa", tint = tunaGreen, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    onEditCustomChord(currentSongData)
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text("Hủy bản hợp âm của bạn", color = Color.Red) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.StarBorder, contentDescription = "Hủy", tint = Color.Red, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    onDeleteCustomChord()
-                                }
-                            )
-                        } else if (customLocalSong != null) {
-                            // Đang xem bản gốc nhưng máy đã có bản tự tạo
-                            DropdownMenuItem(
-                                text = { Text("Sửa bản hợp âm của bạn", color = tunaGreen) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.EditNote, contentDescription = "Sửa", tint = tunaGreen, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    val cSong = customLocalSong!!
-                                    val customDetail = SongDetails(
-                                        title = cSong.title,
-                                        singer = cSong.ca_si,
-                                        composer = cSong.tac_gia,
-                                        baseTone = cSong.tong,
-                                        rhythm = cSong.dieu.ifBlank { cSong.rhythm },
-                                        bpm = if (cSong.bpm > 0) cSong.bpm.toString() else "",
-                                        lyrics = cSong.lyrics.joinToString("\n"),
-                                        videoUrl = cSong.youtubeUrl,
-                                        songId = cSong.id,
-                                        slug = cSong.slug,
-                                        imageCount = cSong.image_count,
-                                        likes = cSong.favoriteCount,
-                                        isLikedByDevice = sharedPref.getBoolean("liked_${cSong.id}", false),
-                                        zingMp3Id = cSong.zingMp3Id
-                                    )
-                                    onEditCustomChord(customDetail)
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text("Hủy bản hợp âm của bạn", color = Color.Red) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.StarBorder, contentDescription = "Hủy", tint = Color.Red, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    coroutineScope.launch {
-                                        val success = songRepository?.deleteCustomSongLocal(currentSongData.title, currentSongData.singer) ?: false
-                                        if (success) {
-                                            customLocalSong = null
-                                            onDeleteCustomChord()
-                                            Toast.makeText(context, "Đã hủy bản hợp âm tự lưu", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            )
-                        } else {
-                            // Chưa có bản tự tạo: Thêm bản hợp âm
-                            DropdownMenuItem(
-                                text = { Text("Thêm hợp âm phiên bản của bạn", color = Color(0xFF00B0FF)) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.QueueMusic, contentDescription = "Thêm", tint = Color(0xFF00B0FF), modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showMoreMenu = false
-                                    onCreateCustomChord()
-                                }
-                            )
-                        }
-                    }
-                }
             }
         }
 
-        // Hộp thoại xác nhận xóa bài hát
-        if (showDeleteConfirm) {
-            AlertDialog(
-                onDismissRequest = { showDeleteConfirm = false },
-                title = { Text(CoreTranslator.getString("delete_song", currentLang), color = tunaGreen, fontWeight = FontWeight.Bold) },
-                text = { Text("${CoreTranslator.getString("delete_confirm", currentLang)}\n'${currentSongData.title}'", color = textColor) },
-                containerColor = surfaceColor,
-                confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDeleteClick()
-                    }) {
-                        Text(CoreTranslator.getString("delete", currentLang), color = Color.Red, fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text(CoreTranslator.getString("cancel", currentLang), color = Color.Gray)
-                    }
-                }
-            )
-        }
-
-        // Hộp thoại cảnh báo ngắt phát nhạc
+        // --- HIỂN THỊ DIALOG XÁC NHẬN ---
         if (showInterruptDialog) {
             AlertDialog(
                 onDismissRequest = {
@@ -2334,7 +1790,7 @@ fun SongDetailHeader(
                 confirmButton = {
                     TextButton(onClick = {
                         showInterruptDialog = false
-                        onCloseVideoClick()
+                        onCloseVideoClick() // <--- ĐÃ THÊM LỆNH DỪNG NHẠC/VIDEO TẠI ĐÂY
                         pendingInterruptAction?.invoke()
                         pendingInterruptAction = null
                     }) {
@@ -2581,124 +2037,60 @@ suspend fun fetchYoutubeSubtitlesLocal(audioFile: File, videoId: String, client:
     return@withContext result.distinctBy { it.text }
 }
 fun robustMapTimingLocal(dbLyrics: String, ytCaptions: List<YoutubeCaptionEvent>): List<SyncedDbLine> {
+    val dbLines = dbLyrics.split("\n").filter { it.trim().isNotEmpty() }
     val result = mutableListOf<SyncedDbLine>()
 
-    // --- BƯỚC 1: GỘP CÂU AI (Lấp khoảng trống ngang làm đẹp UI) ---
-    val mergedCaptions = mutableListOf<YoutubeCaptionEvent>()
-    var currentCaption: YoutubeCaptionEvent? = null
+    // 1. Dàn phẳng toàn bộ chữ từ JSON (Zing/AI) thành một mảng 1 chiều liên tục
+    val allSyncWords = ytCaptions.flatMap { it.words }
+    var currentWordPointer = 0
 
-    for (caption in ytCaptions) {
-        if (currentCaption == null) {
-            currentCaption = caption
-        } else {
-            // ĐIỀU KIỆN GỘP: Nếu câu hiện tại ít hơn 9 chữ VÀ khoảng nghỉ với câu tiếp theo dưới 1.5 giây
-            if (currentCaption.words.size < 9 && (caption.startTimeMs - currentCaption.endTimeMs) < 1500L) {
-                val combinedWords = currentCaption.words + caption.words
-                currentCaption = YoutubeCaptionEvent(
-                    startTimeMs = currentCaption.startTimeMs,
-                    endTimeMs = caption.endTimeMs,
-                    text = currentCaption.text + " " + caption.text,
-                    words = combinedWords
-                )
-            } else {
-                mergedCaptions.add(currentCaption)
-                currentCaption = caption
-            }
-        }
-    }
-    if (currentCaption != null) mergedCaptions.add(currentCaption)
+    for (dbLine in dbLines) {
+        // Lọc bỏ hợp âm để lấy lời tinh khiết từ Database
+        val cleanDb = dbLine.replace(Regex("\\[.*?\\]"), "").replace(Regex("[.,?!]"), "").trim().lowercase()
+        if (cleanDb.isBlank()) continue
 
-    // --- BƯỚC 2: SO KHỚP THỜI GIAN VỚI CSDL ---
-    val rawDbTokens = dbLyrics.split(Regex("\\s+")).filter { it.isNotBlank() }
-    var dbPointer = 0
-
-    for (caption in mergedCaptions) {
-        val aiWords = caption.words
-        if (aiWords.isEmpty()) continue
-
-        val lineDbTokens = mutableListOf<String>()
+        val dbWords = cleanDb.split(Regex("\\s+")).filter { it.isNotBlank() }
         val matchedWords = mutableListOf<AiWordTime>()
 
-        var lineStartTime = aiWords.first().startTimeMs
-        var lineEndTime = aiWords.last().endTimeMs
+        var lineStartTime = -1L
+        var lineEndTime = -1L
 
-        for ((aiIndex, aiWord) in aiWords.withIndex()) {
-            val cleanAi = aiWord.word.replace(Regex("[.,?!]"), "").trim().lowercase()
-            if (cleanAi.isBlank()) continue
+        // 2. Dò từng chữ trong câu của Database với mảng thời gian
+        for (dbWord in dbWords) {
+            // Quét tới trước tối đa 20 chữ để tìm chữ khớp (Cho phép Zing/AI có đoạn hát bè, chữ rác xen ngang)
+            val searchLimit = minOf(currentWordPointer + 20, allSyncWords.size)
 
-            // Tầm nhìn quét xa 35 chữ để vượt qua nhạc dạo hoặc sai lời
-            val searchLimit = minOf(dbPointer + 35, rawDbTokens.size)
+            for (i in currentWordPointer until searchLimit) {
+                val syncWord = allSyncWords[i].word.replace(Regex("[.,?!]"), "").trim().lowercase()
 
-            for (i in dbPointer until searchLimit) {
-                val dbToken = rawDbTokens[i]
-                val cleanDb = dbToken.replace(Regex("\\[.*?\\]"), "").replace(Regex("[.,?!]"), "").trim().lowercase()
+                // Nếu chữ khớp nhau (Cho phép khớp một phần để chống sai chính tả nhẹ)
+                if (dbWord == syncWord || dbWord.contains(syncWord) || syncWord.contains(dbWord)) {
+                    matchedWords.add(allSyncWords[i])
 
-                val isMatch = cleanDb.isNotBlank() && (
-                        cleanDb == cleanAi ||
-                                (cleanAi.length >= 3 && cleanDb.contains(cleanAi)) ||
-                                (cleanDb.length >= 3 && cleanAi.contains(cleanDb))
-                        )
+                    if (lineStartTime == -1L) lineStartTime = allSyncWords[i].startTimeMs
+                    lineEndTime = allSyncWords[i].endTimeMs
 
-                // --- BỘ LỌC NGỮ CẢNH: CHỐNG NHẢY CÓC SAI CHO 90,000 BÀI HÁT ---
-                var isSafeMatch = isMatch
-                val jumpDistance = i - dbPointer
-
-                if (isMatch && jumpDistance > 2) {
-                    var verified = false
-                    val wordsToCheck = minOf(3, aiWords.size - aiIndex - 1)
-
-                    if (wordsToCheck == 0) {
-                        // Nếu là từ cuối cùng mà bắt nhảy xa thì từ chối, trừ khi từ đó rất dài và đặc trưng
-                        if (cleanAi.length < 4) isSafeMatch = false
-                        else verified = true
-                    } else {
-                        // Tìm kiếm "điểm tựa" chéo trong 3 từ tiếp theo (Fuzzy Look-ahead)
-                        for (k in 1..wordsToCheck) {
-                            val nextAi = aiWords[aiIndex + k].word.replace(Regex("[.,?!]"), "").trim().lowercase()
-                            if (nextAi.isBlank()) continue
-
-                            val dbSearchEnd = minOf(i + 4, rawDbTokens.size)
-                            for (j in (i + 1) until dbSearchEnd) {
-                                val nextDb = rawDbTokens[j].replace(Regex("\\[.*?\\]"), "").replace(Regex("[.,?!]"), "").trim().lowercase()
-                                if (nextDb.isNotBlank() && (nextDb == nextAi || (nextAi.length >= 3 && nextDb.contains(nextAi)) || (nextDb.length >= 3 && nextAi.contains(nextDb)))) {
-                                    verified = true
-                                    break
-                                }
-                            }
-                            if (verified) break
-                        }
-                        isSafeMatch = verified
-                    }
-                }
-
-                if (isSafeMatch) {
-                    // Cập nhật mảng DB và Con trỏ
-                    for (j in dbPointer..i) {
-                        lineDbTokens.add(rawDbTokens[j])
-                    }
-                    matchedWords.add(aiWord)
-                    dbPointer = i + 1
+                    // Nhích con trỏ tới chữ tiếp theo để không bị quét lặp lại
+                    currentWordPointer = i + 1
                     break
                 }
             }
         }
 
-        if (lineDbTokens.isNotEmpty()) {
-            val reconstructedLine = lineDbTokens.joinToString(" ")
-            if (matchedWords.isNotEmpty()) {
-                lineEndTime = matchedWords.last().endTimeMs
+        // 3. Quyết định mốc thời gian cho cả câu chứa hợp âm
+        // Nếu câu này khớp được ít nhất 30% số chữ với nguồn Audio, ta xác nhận nó hợp lệ
+        if (matchedWords.size.toFloat() / dbWords.size.toFloat() >= 0.3f) {
+            result.add(SyncedDbLine(dbLine, lineStartTime, lineEndTime, matchedWords))
+        } else {
+            // Trường hợp xấu nhất (Câu này có trong DB mà Zing không hát): Nội suy tự động
+            val fallbackStart = if (result.isNotEmpty()) result.last().endTimeMs + 100L else {
+                if (allSyncWords.isNotEmpty()) allSyncWords[0].startTimeMs else 0L
             }
-            result.add(SyncedDbLine(reconstructedLine, lineStartTime, lineEndTime, matchedWords))
+            val fallbackEnd = fallbackStart + (dbWords.size * 350L).coerceIn(1500L, 4000L)
+
+            result.add(SyncedDbLine(dbLine, fallbackStart, fallbackEnd, emptyList()))
         }
     }
-
-    // --- BƯỚC 3: VÉT ĐÁY (Thêm các đoạn Outro) ---
-    if (dbPointer < rawDbTokens.size) {
-        val leftoverLine = rawDbTokens.subList(dbPointer, rawDbTokens.size).joinToString(" ")
-        val lastTime = result.lastOrNull()?.endTimeMs ?: 0L
-        result.add(SyncedDbLine(leftoverLine, lastTime + 500L, lastTime + 3500L, emptyList()))
-    }
-
     return result
 }
 @Composable
@@ -2962,39 +2354,6 @@ suspend fun searchYoutubeVideos(query: String): List<TutorialVideo> = kotlinx.co
     }
     return@withContext results
 }
-// Thêm component hiệu ứng sóng âm mới
-@Composable
-fun AudioWaveLoadingIndicator(color: Color, modifier: Modifier = Modifier) {
-    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "wave_loading")
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        for (i in 0..4) {
-            val heightMultiplier by infiniteTransition.animateFloat(
-                initialValue = 0.3f,
-                targetValue = 1f,
-                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                    animation = androidx.compose.animation.core.tween(
-                        durationMillis = 350,
-                        delayMillis = i * 100,
-                        easing = androidx.compose.animation.core.FastOutLinearInEasing
-                    ),
-                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-                ),
-                label = "wave_bar_$i"
-            )
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .height(24.dp * heightMultiplier)
-                    .background(color, CircleShape)
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TutorialBottomSheet(
@@ -3009,62 +2368,16 @@ fun TutorialBottomSheet(
     onVideoClick: (String) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-
-    // PHÂN TÁCH DANH SÁCH TAB DỰA VÀO NGUỒN GỌI
-    val isRhythmTutorial = songTitle == "điệu nhạc"
-    val instruments = if (isRhythmTutorial) {
-        listOf("Guitar", "Piano", "Ukulele") // Trang Điệu nhạc: Chỉ có 3 tab nhạc cụ
-    } else {
-        listOf("Guitar", "Piano", "Ukulele", "Học hát") // Trang Đệm hát: Có thêm tab Học hát
-    }
-
+    val instruments = listOf("Guitar", "Piano", "Ukulele")
     var selectedInstrument by remember { mutableStateOf("Guitar") }
     var videos by remember { mutableStateOf<List<TutorialVideo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(selectedInstrument) {
-        isLoading = true
-        videos = emptyList()
-
-        val query = when (selectedInstrument) {
-            "Guitar" -> "$songTitle $songSinger đệm hát guitar"
-            "Piano" -> "$songTitle $songSinger đệm hát piano"
-            "Ukulele" -> "$songTitle $songSinger đệm hát ukulele"
-            "Học hát" -> "$songTitle $songSinger học hát"
-            else -> "$songTitle $songSinger hướng dẫn $selectedInstrument"
-        }
-
-        val rawVideos = searchYoutubeVideos(query)
-
-        videos = rawVideos.filter { video ->
-            val titleLower = video.title.lowercase()
-            val songTitleLower = songTitle.lowercase()
-
-            if (isRhythmTutorial) {
-                // Bộ lọc cho trang Điệu nhạc (Khắt khe, chặn chéo nhạc cụ)
-                when (selectedInstrument) {
-                    "Guitar" -> titleLower.contains("guitar") && !titleLower.contains("ukulele") && !titleLower.contains("uku") && !titleLower.contains("piano") && !titleLower.contains("keyboard")
-                    "Piano" -> (titleLower.contains("piano") || titleLower.contains("keyboard")) && !titleLower.contains("guitar") && !titleLower.contains("ukulele") && !titleLower.contains("uku")
-                    "Ukulele" -> (titleLower.contains("ukulele") || titleLower.contains("uku")) && !titleLower.contains("guitar") && !titleLower.contains("piano") && !titleLower.contains("keyboard")
-                    else -> true
-                }
-            } else {
-                // Bộ lọc cho trang Đệm hát (Cho phép từ khóa mở rộng + Chặn chéo + Tab Học hát)
-                when (selectedInstrument) {
-                    "Guitar" -> (titleLower.contains("guitar") || titleLower.contains("đệm") || titleLower.contains("hợp âm") || titleLower.contains("chord") || titleLower.contains("tab") || titleLower.contains("hướng dẫn")) && !titleLower.contains("ukulele") && !titleLower.contains("uku") && !titleLower.contains("piano") && !titleLower.contains("keyboard")
-
-                    "Piano" -> (titleLower.contains("piano") || titleLower.contains("keyboard") || titleLower.contains("đệm") || titleLower.contains("hợp âm") || titleLower.contains("chord") || titleLower.contains("hướng dẫn") || titleLower.contains("sheet")) && !titleLower.contains("guitar") && !titleLower.contains("ukulele") && !titleLower.contains("uku")
-
-                    "Ukulele" -> (titleLower.contains("ukulele") || titleLower.contains("uku") || titleLower.contains("đệm") || titleLower.contains("hợp âm") || titleLower.contains("chord") || titleLower.contains("hướng dẫn")) && !titleLower.contains("guitar") && !titleLower.contains("piano") && !titleLower.contains("keyboard")
-
-                    "Học hát" -> titleLower.contains("học hát") && titleLower.contains(songTitleLower)
-
-                    else -> true
-                }
-            }
-        }
-
-        isLoading = false
+        isLoading = true; videos = emptyList()
+        val tutKeyword = try { CoreTranslator.getString("tutorial_keyword", currentLang) } catch (e: Exception) { "hướng dẫn" }
+        val query = "$songTitle $songSinger $tutKeyword $selectedInstrument"
+        videos = searchYoutubeVideos(query); isLoading = false
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color(0xFF121212), dragHandle = { BottomSheetDefaults.DragHandle(color = tunaGreen) }) {
@@ -3075,21 +2388,15 @@ fun TutorialBottomSheet(
                 instruments.forEach { inst ->
                     val isSelected = selectedInstrument == inst
                     Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (isSelected) Color(0xFF2C2C2C) else Color.Transparent).clickable { selectedInstrument = inst }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                        Text(text = inst, color = if (isSelected) Color.White else Color.Gray, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(text = inst, color = if (isSelected) Color.White else Color.Gray, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
             }
 
             Text(text = CoreTranslator.getString("tut_no_video_warning", currentLang), color = Color(0xFFFFB300), fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp, horizontal = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
 
-            if (isLoading) {
-                Box(modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 40.dp), contentAlignment = Alignment.Center) {
-                    AudioWaveLoadingIndicator(color = tunaGreen)
-                }
-            } else if (videos.isEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 40.dp), contentAlignment = Alignment.Center) {
-                    Text(CoreTranslator.getString("no_results_found", currentLang), color = Color.Gray)
-                }
+            if (isLoading) { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = tunaGreen) }
+            } else if (videos.isEmpty()) { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(CoreTranslator.getString("no_results_found", currentLang), color = Color.Gray) }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
                     items(videos) { video ->
@@ -3133,102 +2440,15 @@ fun PlayModeSelectionDialog(
     var offlineSongsList by remember { mutableStateOf<List<SearchResultItem>>(emptyList()) }
     var isLoadingList by remember { mutableStateOf(false) }
 
-    // BỔ SUNG 2 BIẾN MAP NÀY VÀO RAM
-    val viewCountMap = remember { mutableStateMapOf<String, Int>() }
-    val thumbnailMap = remember { mutableStateMapOf<String, String>() }
-
     // === BIẾN QUẢN LÝ TÌM KIẾM TRONG DIALOG ===
     var dialogSearchQuery by remember { mutableStateOf("") }
 
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // THAY THẾ TOÀN BỘ LAUNCHED_EFFECT CŨ BẰNG ĐOẠN NÀY
     LaunchedEffect(Unit) {
         isLoadingList = true
-        val rawList = SongScraper.getAvailableCachedSongs()
-
-        val (sortedList, vMap, tMap) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            // KHẮC PHỤC LỖI PRIVATE: Khởi tạo trực tiếp bằng biến context
-            val db = TunerDatabaseHelper(context).readableDatabase
-
-            val localMapById = HashMap<String, Pair<Int, String>>()
-            val localMapByTitle = HashMap<String, Pair<Int, String>>()
-
-            // 1. QUÉT SQLITE ĐÚNG 1 LẦN DUY NHẤT THAY VÌ HÀNG TRĂM LẦN
-            db?.rawQuery("SELECT id, title, youtubeUrl, viewCount FROM songs", null)?.use { cursor ->
-                val idIdx = cursor.getColumnIndex("id")
-                val titleIdx = cursor.getColumnIndex("title")
-                val ytIdx = cursor.getColumnIndex("youtubeUrl")
-                val viewIdx = cursor.getColumnIndex("viewCount")
-
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(idIdx) ?: ""
-                    val title = cursor.getString(titleIdx) ?: ""
-                    val yt = cursor.getString(ytIdx) ?: ""
-                    val views = cursor.getInt(viewIdx)
-
-                    val data = Pair(views, yt)
-                    if (id.isNotBlank()) localMapById[id] = data
-                    if (title.isNotBlank()) localMapByTitle[title.trim().lowercase()] = data
-                }
-            }
-
-            val tempVMap = HashMap<String, Int>()
-            val tempTMap = HashMap<String, String>()
-
-            // 2. SO KHỚP VÀ SẮP XẾP TRỰC TIẾP TRÊN RAM (O(1) Siêu Tốc)
-            val enriched = rawList.map { item ->
-                var views = 0
-                var thumb = ""
-
-                if (item.url.length == 11) {
-                    thumb = "https://img.youtube.com/vi/${item.url}/mqdefault.jpg"
-                    if (localMapById.containsKey(item.url)) {
-                        views = localMapById[item.url]!!.first
-                    } else {
-                        val titleKey = item.title.trim().lowercase()
-                        if (localMapByTitle.containsKey(titleKey)) views = localMapByTitle[titleKey]!!.first
-                    }
-                } else {
-                    var foundData = localMapById[item.url]
-                    if (foundData == null) {
-                        val titleKey = item.title.trim().lowercase()
-                        foundData = localMapByTitle[titleKey]
-                    }
-
-                    if (foundData != null) {
-                        views = foundData.first
-                        val ytUrl = foundData.second
-                        if (ytUrl.isNotBlank()) {
-                            var vId = ""
-                            if (ytUrl.contains("watch?v=")) vId = ytUrl.substringAfter("watch?v=").substringBefore("&")
-                            else if (ytUrl.contains("youtu.be/")) vId = ytUrl.substringAfter("youtu.be/").substringBefore("?")
-
-                            if (vId.isNotBlank()) thumb = "https://img.youtube.com/vi/$vId/mqdefault.jpg"
-                        }
-                    }
-                }
-
-                tempVMap[item.url] = views
-                tempTMap[item.url] = thumb
-
-                Pair(item, views)
-            }
-
-            val sorted = enriched.sortedByDescending { it.second }
-                .map { it.first }
-                .distinctBy { it.title.trim().lowercase() }
-            Triple(sorted, tempVMap, tempTMap)
-        }
-
-        // Đổ dữ liệu từ RAM lên UI
-        viewCountMap.clear()
-        viewCountMap.putAll(vMap)
-        thumbnailMap.clear()
-        thumbnailMap.putAll(tMap)
-
-        offlineSongsList = sortedList
+        offlineSongsList = SongScraper.getAvailableCachedSongs()
         isLoadingList = false
     }
 
@@ -3240,27 +2460,14 @@ fun PlayModeSelectionDialog(
             onDismiss()
 
             kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                val localSong = songRepository?.getSongByExactIdOrTitle(item.url, item.title, item.singer)
+                val localSong = songRepository?.getSongByExactIdOrTitle(item.url, item.title)
                 if (localSong != null) {
-                    // --- BẮT ĐẦU CẬP NHẬT: TĂNG LƯỢT XEM VÀ CẬP NHẬT TRÊN SERVER ---
-                    kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val sId = localSong.id
-                        if (sId.isNotBlank()) {
-                            // 1. Tăng view nội bộ SQLite
-                            songRepository.incrementViewCountLocal(sId)
-
-                            // 2. Gọi API để Server PHP tăng view trên MySQL
-                            SongScraper.fetchSongDetails(sId, userRole) // Giả định userRole có thể dùng tạm thay cho email nếu không cần chính xác email
-                        }
-                    }
-                    // --- KẾT THÚC CẬP NHẬT ---
-
                     // BẢN VÁ: Kéo biến isZing lên trên để kiểm tra trước
                     val isZing = item.url.length != 11
 
                     val detail = SongDetails(
                         title = localSong.title, singer = localSong.ca_si, composer = localSong.tac_gia,
-                        baseTone = localSong.tong, rhythm = localSong.dieu.ifBlank { localSong.rhythm }, bpm = if (localSong.bpm > 0) localSong.bpm.toString() else "",
+                        baseTone = localSong.tong, rhythm = localSong.rhythm, bpm = if (localSong.bpm > 0) localSong.bpm.toString() else "",
                         lyrics = localSong.lyrics.joinToString("\n"), videoUrl = localSong.youtubeUrl,
                         songId = localSong.id, slug = localSong.slug, imageCount = localSong.image_count,
 
@@ -3461,7 +2668,7 @@ fun PlayModeSelectionDialog(
                         ) {
                             // TÍNH TOÁN SỐ LƯỢNG BÀI HÁT TỪNG TAB
                             val countChayChu = offlineSongsList.count { it.hasLyricsCache }
-                            val countCaSi = offlineSongsList.count { it.hasAudioCache }
+                            val countCaSi = offlineSongsList.count { it.hasAudioCache && it.hasLyricsCache }
                             val countKaraoke = offlineSongsList.count { it.hasLyricsCache && it.hasAudioCache }
                             val countHopAm = offlineSongsList.count { it.chords.isNotEmpty() }
 
@@ -3605,7 +2812,7 @@ fun PlayModeSelectionDialog(
                             }
                             val matchTab = when (selectedSubTab) {
                                 0 -> song.hasLyricsCache
-                                1 -> song.hasAudioCache
+                                1 -> song.hasAudioCache && song.hasLyricsCache
                                 2 -> song.hasLyricsCache && song.hasAudioCache
                                 3 -> song.chords.isNotEmpty() // Tab Hợp Âm
                                 else -> true
@@ -3629,9 +2836,20 @@ fun PlayModeSelectionDialog(
                                 // ĐÃ SỬA LỖI ĐỎ BẰNG CÁCH ĐỔI TÊN BIẾN THÀNH 'songItem'
                                 items(filteredList) { songItem ->
 
-                                    // Lấy dữ liệu ngay từ RAM (Map), KHÔNG DÙNG LaunchedEffect cày ổ cứng nữa
-                                    val thumbnailUrl = thumbnailMap[songItem.url] ?: ""
-                                    val localViewCount = viewCountMap[songItem.url] ?: 0
+                                    var thumbnailUrl by remember(songItem.url) { mutableStateOf("") }
+                                    LaunchedEffect(songItem.url) {
+                                        if (songItem.url.length == 11) {
+                                            thumbnailUrl = "https://img.youtube.com/vi/${songItem.url}/mqdefault.jpg"
+                                        } else {
+                                            val localSong = songRepository?.getSongByExactIdOrTitle(songItem.url, songItem.title)
+                                            if (localSong != null && localSong.youtubeUrl.isNotBlank()) {
+                                                val vId = if (localSong.youtubeUrl.contains("watch?v=")) localSong.youtubeUrl.substringAfter("watch?v=").substringBefore("&") else if (localSong.youtubeUrl.contains("youtu.be/")) localSong.youtubeUrl.substringAfter("youtu.be/").substringBefore("?") else ""
+                                                if (vId.isNotBlank()) {
+                                                    thumbnailUrl = "https://img.youtube.com/vi/$vId/mqdefault.jpg"
+                                                }
+                                            }
+                                        }
+                                    }
 
                                     Row(
                                         modifier = Modifier
@@ -3671,7 +2889,7 @@ fun PlayModeSelectionDialog(
                                         }
 
                                         // ==========================================
-                                        // NÚT XÓA ĐỘC QUYỀN CHO SUPER ADMIN (CHỈ XÓA CACHE)
+                                        // NÚT XÓA ĐỘC QUYỀN CHO SUPER ADMIN
                                         // ==========================================
                                         if (userRole.equals("super_admin", ignoreCase = true) || userRole.equals("supper_admin", ignoreCase = true)) {
                                             var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -3682,7 +2900,7 @@ fun PlayModeSelectionDialog(
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Delete,
-                                                    contentDescription = "Xóa dữ liệu tải",
+                                                    contentDescription = "Xóa",
                                                     tint = Color.Red,
                                                     modifier = Modifier.size(20.dp)
                                                 )
@@ -3691,26 +2909,30 @@ fun PlayModeSelectionDialog(
                                             if (showDeleteConfirm) {
                                                 AlertDialog(
                                                     onDismissRequest = { showDeleteConfirm = false },
-                                                    title = { Text(try { CoreTranslator.getString("delete_cache_title", currentLang) } catch(e:Exception){"Dọn dẹp Kho nhạc"}, color = tunaGreen, fontWeight = FontWeight.Bold) },
-                                                    text = { Text("${try { CoreTranslator.getString("delete_cache_confirm", currentLang) } catch(e:Exception){"Bạn có muốn xóa dữ liệu đã tải của bài hát"}}\n'${songItem.title}'?", color = textColor) },
+                                                    title = { Text(try { CoreTranslator.getString("delete_song", currentLang) } catch(e:Exception){"Xóa bài hát"}, color = tunaGreen, fontWeight = FontWeight.Bold) },
+                                                    text = { Text("${try { CoreTranslator.getString("delete_confirm", currentLang) } catch(e:Exception){"Bạn có muốn xóa bài hát"}}\n'${songItem.title}'", color = textColor) },
                                                     containerColor = surfaceColor,
                                                     confirmButton = {
                                                         TextButton(onClick = {
                                                             showDeleteConfirm = false
                                                             coroutineScope.launch {
-                                                                // CHỈ XÓA FILE CACHE VẬT LÝ TRÊN MÁY CHỦ PYTHON (KHÔNG XÓA DB GỐC)
+                                                                // 1. Xóa Database PHP
+                                                                val successOnline = SongScraper.deleteSong(songItem.url)
+
+                                                                // 2. Xóa Cache Python (FILE VẬT LÝ)
                                                                 val successCache = SongScraper.deleteServerCachePython(songItem.url)
 
+                                                                // 3. Xóa Database Offline
+                                                                val successOffline = songRepository?.deleteSongOffline(songItem.url) ?: false
+
                                                                 // Đánh giá thành công
-                                                                if (successCache) {
-                                                                    Toast.makeText(context, try { CoreTranslator.getString("delete_cache_success", currentLang) } catch(e:Exception){"Đã dọn dẹp dữ liệu bài hát trong kho"}, Toast.LENGTH_SHORT).show()
-                                                                    // Làm mới lại danh sách
+                                                                if (successOnline || successOffline || successCache) {
+                                                                    Toast.makeText(context, try { CoreTranslator.getString("delete_success", currentLang) } catch(e:Exception){"Xóa thành công toàn bộ"}, Toast.LENGTH_SHORT).show()
                                                                     isLoadingList = true
                                                                     offlineSongsList = SongScraper.getAvailableCachedSongs()
-                                                                        .distinctBy { it.title.trim().lowercase() }
                                                                     isLoadingList = false
                                                                 } else {
-                                                                    Toast.makeText(context, try { CoreTranslator.getString("delete_error", currentLang) } catch(e:Exception){"Lỗi khi xóa dữ liệu"}, Toast.LENGTH_SHORT).show()
+                                                                    Toast.makeText(context, try { CoreTranslator.getString("delete_error", currentLang) } catch(e:Exception){"Lỗi khi xóa"}, Toast.LENGTH_SHORT).show()
                                                                 }
                                                             }
                                                         }) {
@@ -3725,25 +2947,6 @@ fun PlayModeSelectionDialog(
                                                 )
                                             }
                                         }
-
-                                        // --- BẮT ĐẦU ĐOẠN THÊM MỚI: Lượt xem và Icon mắt ---
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                imageVector = Icons.Default.Visibility,
-                                                contentDescription = "Lượt xem",
-                                                tint = Color.Gray,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = localViewCount.toString(),
-                                                color = Color.Gray,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                        }
-                                        // --- KẾT THÚC ĐOẠN THÊM MỚI ---
                                     }
                                 }
                             }
@@ -3808,104 +3011,98 @@ fun AudioPlayerBar(
     tunaGreen: Color,
     textColor: Color,
     surfaceColor: Color,
-    vocalStartMs: Long?,
-    detectedVocalStartMs: Long?,
-    onVocalStartChange: (Long) -> Unit,
-    onPrepareCountIn: () -> Unit,
-    onCountInPlay: (Long) -> Unit,
     onPlayPause: () -> Unit,
     onSeek: (Long) -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
+
     fun formatTime(ms: Long): String {
-        val seconds = ms.coerceAtLeast(0L) / 1000L
-        return String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60L, seconds % 60L)
+        val totalSec = ms / 1000
+        val m = totalSec / 60
+        val s = totalSec % 60
+        return String.format("%02d:%02d", m, s)
     }
 
-    fun parseTime(text: String): Long? {
-        val parts = text.trim().split(":")
-        val seconds = when (parts.size) {
-            1 -> parts[0].toLongOrNull()
-            2 -> {
-                val minute = parts[0].toLongOrNull() ?: return null
-                val second = parts[1].toLongOrNull() ?: return null
-                if (second !in 0L..59L) return null
-                minute * 60L + second
-            }
-            else -> return null
-        } ?: return null
-        if (seconds < 0L || seconds > 86_400L) return null
-        return seconds * 1000L
-    }
-
+    // Vị trí khi người dùng kéo tay (-1f nghĩa là không kéo)
     var dragPosition by remember { mutableFloatStateOf(-1f) }
     var isSeeking by remember { mutableStateOf(false) }
-    var smoothedMs by remember { mutableLongStateOf(0L) }
-    var showIntroSettings by remember { mutableStateOf(false) }
-    var inputTime by remember { mutableStateOf(formatTime(vocalStartMs ?: detectedVocalStartMs ?: 0L)) }
-    var invalidTime by remember { mutableStateOf(false) }
-    var countdownNumber by remember { mutableIntStateOf(0) }
-    var countJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
-    // Keep the user-dragged position stable until MediaPlayer completes seeking.
+    // THUẬT TOÁN LÀM MƯỢT (Lọc bỏ các sai số giật lùi của MediaPlayer)
+    var smoothedMs by remember { mutableLongStateOf(0L) }
+
+    // Xử lý đồng bộ thời gian từ MediaPlayer truyền vào
     LaunchedEffect(currentMs) {
         if (!isSeeking && dragPosition == -1f) {
+            // MediaPlayer đôi khi trả về thời gian bị thụt lùi vài chục mili-giây do trễ buffer.
+            // Ta chỉ cập nhật thanh trượt nếu thời gian mới TĂNG LÊN,
+            // HOẶC bị THỤT LÙI MẠNH (> 1 giây) do đổi bài/tua thật sự.
             if (currentMs >= smoothedMs || (smoothedMs - currentMs) > 1000L) {
                 smoothedMs = currentMs
             }
         }
     }
+
+    // Nếu đang kéo tay thì hiện theo tay, nếu không thì hiện theo thời gian đã làm mượt
     val displayPosition = if (dragPosition >= 0f) dragPosition else smoothedMs.toFloat()
 
     Row(
-        modifier = Modifier.fillMaxWidth().background(surfaceColor)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(surfaceColor)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // NÚT PLAY/PAUSE (Đã sửa lỗi bóng tràn bằng clip)
         Box(
-            modifier = Modifier.size(32.dp).clip(CircleShape)
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
                 .background(if (isPlaying) Color.Red.copy(alpha = 0.15f) else tunaGreen.copy(alpha = 0.15f))
-                .clickable(enabled = countdownNumber == 0) { onPlayPause() },
+                .clickable { onPlayPause() },
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = "Phát / tạm dừng",
+                contentDescription = "Play/Pause",
                 tint = if (isPlaying) Color.Red else tunaGreen,
                 modifier = Modifier.size(18.dp)
             )
         }
 
-        Spacer(modifier = Modifier.width(7.dp))
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // CHỮ THỜI GIAN HIỆN TẠI
         Text(
             text = formatTime(displayPosition.toLong()),
-            modifier = Modifier.width(42.dp),
             color = textColor,
             fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+            fontWeight = FontWeight.Medium
         )
 
-        // The seekbar remains seekable but is shorter to make room for two actions.
+        // THANH KÉO TRƯỢT (SEEKBAR)
         Slider(
             value = displayPosition.coerceIn(0f, totalMs.coerceAtLeast(1L).toFloat()),
-            onValueChange = { dragPosition = it },
+            onValueChange = {
+                dragPosition = it
+            },
             onValueChangeFinished = {
-                val targetMs = dragPosition.coerceAtLeast(0f).toLong()
+                val targetMs = dragPosition.toLong()
                 onSeek(targetMs)
+
+                // Khóa đồng bộ trong 800ms để chờ Android MediaPlayer xử lý âm thanh xong
                 coroutineScope.launch {
                     isSeeking = true
-                    smoothedMs = targetMs
+                    smoothedMs = targetMs // Ép thời gian nhảy ngay lập tức tới điểm nhả tay
                     delay(800)
-                    dragPosition = -1f
+                    dragPosition = -1f // Trả lại quyền chạy tự động
                     isSeeking = false
                 }
             },
-            valueRange = 0f..totalMs.coerceAtLeast(1L).toFloat(),
-            enabled = countdownNumber == 0,
-            modifier = Modifier.weight(1f).padding(horizontal = 2.dp).height(30.dp),
+            valueRange = 0f..(totalMs.coerceAtLeast(1L).toFloat()),
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 6.dp)
+                .height(30.dp),
             colors = SliderDefaults.colors(
                 thumbColor = tunaGreen,
                 activeTrackColor = tunaGreen,
@@ -3913,155 +3110,13 @@ fun AudioPlayerBar(
             )
         )
 
-        // Countdown: pause first, show 3-2-1, then start exactly five seconds before the vocal marker.
-        Box(
-            modifier = Modifier.size(30.dp).clip(CircleShape)
-                .clickable(enabled = countdownNumber == 0 && totalMs > 0L) {
-                    if (vocalStartMs == null) {
-                        inputTime = formatTime(detectedVocalStartMs ?: 0L)
-                        invalidTime = false
-                        showIntroSettings = true
-                    } else {
-                        onPrepareCountIn()
-                        countJob?.cancel()
-                        val beginMs = (vocalStartMs - 5_000L).coerceAtLeast(0L)
-                        countJob = coroutineScope.launch {
-                            for (n in 3 downTo 1) {
-                                countdownNumber = n
-                                delay(1000L)
-                            }
-                            countdownNumber = 0
-                            onCountInPlay(beginMs)
-                        }
-                    }
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Timer,
-                contentDescription = "Đếm ngược 3-2-1 rồi phát trước giọng hát 5 giây",
-                tint = tunaGreen, modifier = Modifier.size(21.dp)
-            )
-        }
-
-        Box(
-            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(enabled = countdownNumber == 0) {
-                inputTime = formatTime(vocalStartMs ?: detectedVocalStartMs ?: 0L)
-                invalidTime = false
-                showIntroSettings = true
-            },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = "Cài đặt thời gian bỏ qua dạo đầu",
-                tint = if (vocalStartMs != null) tunaGreen else Color.Gray,
-                modifier = Modifier.size(21.dp)
-            )
-        }
-
+        // CHỮ TỔNG THỜI GIAN
         Text(
             text = formatTime(totalMs),
-            modifier = Modifier.width(42.dp),
             color = Color.Gray,
             fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum")
+            fontWeight = FontWeight.Medium
         )
-    }
-
-    if (showIntroSettings) {
-        AlertDialog(
-            onDismissRequest = { showIntroSettings = false },
-            title = { Text("Bỏ qua dạo đầu") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Đặt mốc ca sĩ bắt đầu hát hoặc điểm kết thúc đoạn dạo đầu.",
-                        fontSize = 13.sp)
-                    OutlinedTextField(
-                        value = inputTime,
-                        onValueChange = {
-                            if (it.length <= 8 && it.all { c -> c.isDigit() || c == ':' }) {
-                                inputTime = it
-                                invalidTime = false
-                            }
-                        },
-                        singleLine = true,
-                        label = { Text("Thời điểm (mm:ss)") },
-                        placeholder = { Text("00:20") },
-                        isError = invalidTime,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (invalidTime) {
-                        Text("Nhập thời gian hợp lệ, ví dụ 00:20.", color = Color.Red, fontSize = 12.sp)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        TextButton(onClick = { inputTime = formatTime(currentMs); invalidTime = false }) {
-                            Text("Lấy vị trí hiện tại", fontSize = 12.sp)
-                        }
-                        if (detectedVocalStartMs != null) {
-                            TextButton(onClick = {
-                                inputTime = formatTime(detectedVocalStartMs)
-                                invalidTime = false
-                            }) { Text("Theo lời đồng bộ", fontSize = 12.sp) }
-                        }
-                    }
-                    val proposedMs = parseTime(inputTime)
-                    Text(
-                        if (proposedMs != null) {
-                            "Sau đếm ngược 3–2–1, nhạc phát từ ${formatTime((proposedMs - 5_000L).coerceAtLeast(0L))}, " +
-                                "giọng hát bắt đầu tại ${formatTime(proposedMs)}."
-                        } else {
-                            "Khi đếm ngược kết thúc, nhạc bắt đầu trước giọng hát 5 giây."
-                        },
-                        fontSize = 12.sp, color = Color.Gray
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val settingMs = parseTime(inputTime)
-                    if (settingMs == null || (totalMs > 0L && settingMs > totalMs)) {
-                        invalidTime = true
-                    } else {
-                        onVocalStartChange(settingMs)
-                        showIntroSettings = false
-                    }
-                }) { Text("Lưu", color = tunaGreen) }
-            },
-            dismissButton = { TextButton(onClick = { showIntroSettings = false }) { Text("Hủy") } }
-        )
-    }
-
-    if (countdownNumber > 0) {
-        Dialog(
-            onDismissRequest = {},
-            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
-        ) {
-            Surface(shape = RoundedCornerShape(22.dp), color = Color(0xFF181818)) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 48.dp, vertical = 26.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("CHUẨN BỊ", color = Color.White, fontSize = 15.sp)
-                    Text(countdownNumber.toString(), color = tunaGreen,
-                        fontSize = 76.sp, fontWeight = FontWeight.Bold)
-                    Text("Nhạc sẽ bắt đầu trước giọng hát 5 giây", color = Color.LightGray,
-                        fontSize = 12.sp)
-                    TextButton(onClick = {
-                        countJob?.cancel()
-                        countJob = null
-                        countdownNumber = 0
-                    }) { Text("Hủy", color = Color.White) }
-                }
-            }
-        }
     }
 }
 @Composable
