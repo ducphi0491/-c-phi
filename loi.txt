@@ -1,9 +1,15 @@
+find "$HOME" -maxdepth 6 -type f -name 'tt_documents_private.php*' -print
+
+ls -ld "$HOME/private"
+ls -l "$HOME/private/tt_documents_private.php"
+php -l "$HOME/private/tt_documents_private.php"
+
+
+
 $h = Invoke-RestMethod `
-  -Uri "https://tuner.alwaysdata.net/api_documents_drive.php?action=health" `
-  -TimeoutSec 30
+  "https://tuner.alwaysdata.net/api_documents_drive.php?action=health"
 
 $h | Select-Object `
-  drive_root_ready, permissions_ready, permission_users, `
   private_config_loaded, oauth_client_ready, `
   oauth_session_ready, oauth_sync_ready, oauth_ready |
   Format-List
