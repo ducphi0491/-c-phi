@@ -1,33 +1,55 @@
-ZING_AUDIO C:\TunerTools\Audio\AI_Music\ZING_AUDIO
-ZING_JSON  C:\TunerTools\Audio\AI_Music\ZING_JSON
+$folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
+$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
 
+$d = Invoke-RestMethod -Uri $url -TimeoutSec 120
+$files = @(Get-ChildItem -LiteralPath $folder -File -Filter "*.json")
 
-PS C:\Users\Administrator> $root = "C:\TunerTools\Audio\AI_Music"
->>
->> Get-ChildItem -LiteralPath $root -Directory |
->>     Where-Object { $_.Name -match "^ZING_(AUDIO|JSON)" } |
->>     Select-Object Name, FullName
->>
->>
->> $script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File $script
->>
+$keys = @{}
 
-==== TUNERTOOLS AI MISSING-FILE SYNC ====
-MODE: PREVIEW ONLY, NO CHANGES
-LOCAL: C:\TunerTools\Audio\AI_Music
-TOKEN: present, contents not printed
-NOTICE: Audio files with unrecognized names (not auto-uploaded): 8
-AUDIO: LOCAL=1284 DRIVE=1343 MISSING=0
-LYRICS: LOCAL=1820 DRIVE=1820 MISSING=0
-TOTAL MISSING VALID FILES: 0
-PREVIEW FINISHED. Use -Upload to create only the missing files.
-Name       FullName
-----       --------
-ZING_AUDIO C:\TunerTools\Audio\AI_Music\ZING_AUDIO
-ZING_JSON  C:\TunerTools\Audio\AI_Music\ZING_JSON
+foreach ($s in @($d.songs | Where-Object {
+    $_.source -eq "zing" -and $_.has_lyrics_cache -eq $true
+})) {
+    $key = ("{0}|{1}|{2}" -f $s.id,$s.title,$s.singer).
+        Normalize([Text.NormalizationForm]::FormC).
+        ToLowerInvariant()
+    $keys[$key] = $true
+}
 
+$issues = @(foreach ($f in $files) {
+    if ($f.Length -le 0 -or $f.Length -gt 2097152) {
+        [PSCustomObject]@{
+            File=$f.Name
+            Reason="JSON size outside PHP limit"
+        }
+    }
+    elseif ($f.BaseName -match "^([A-Za-z0-9]{6,64})_([^_]+)_(.+)$") {
+        $id=$Matches[1]
+        $title=$Matches[2].Replace("_"," ").Trim()
+        $singer=$Matches[3].Replace("_"," ").Trim()
 
-PS C:\Users\Administrator>
+        $key=("{0}|{1}|{2}" -f $id,$title,$singer).
+            Normalize([Text.NormalizationForm]::FormC).
+            ToLowerInvariant()
+
+        if (-not $keys.ContainsKey($key)) {
+            [PSCustomObject]@{
+                File=$f.Name
+                Reason="Not found in Drive song catalog"
+            }
+        }
+    }
+    elseif ($f.BaseName -notmatch "^[A-Za-z0-9]{6,64}$") {
+        [PSCustomObject]@{
+            File=$f.Name
+            Reason="Filename not recognized by PHP"
+        }
+    }
+})
+
+Write-Host "`n===== JSON CATALOG CHECK =====" -ForegroundColor Cyan
+Write-Host "LOCAL ZING JSON: $($files.Count)"
+Write-Host "DRIVE JSON ENTRIES: $($d.json_entries_scanned)"
+Write-Host "DRIVE CATALOG SONGS: $($d.count)"
+Write-Host "JSON SUSPECTED: $($issues.Count)"
+
+$issues | Format-List File,Reason
