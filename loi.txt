@@ -1,19 +1,20 @@
-$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_IIS_Patch_PHP_PATH_FIX_V2_20261108.zip"
-$dest = "C:\TunerTools\Tools\Documents_DrivePrimary"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
-
-cd "$dest\IIS_Patch"
-
-
-
-
-python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --check
-
-
-Get-ChildItem -Path "C:\PHP","C:\Program Files\PHP","C:\TunerTools\PHP","C:\inetpub\php" -Filter php.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object FullName
-
-
-
-
-python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_IIS_Patch_PHP_PATH_FIX_V2_20261108.zi
+p"
+>> $dest = "C:\TunerTools\Tools\Documents_DrivePrimary"
+>>
+>> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+>>
+>> cd "$dest\IIS_Patch"
+>>
+PS C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch> python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --check
+PHP_CLI_FOUND: C:\PHP\php.exe
+PATCH_CHECK_OK: No syntax errors detected in C:\Users\ADMINI~1\AppData\Local\Temp\ttdocs_lint_k0e4zvry\api_documents_preview.php
+PS C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch> python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
+PHP_CLI_FOUND: C:\PHP\php.exe
+SECURE_BACKUP: C:\TunerTools\Backups\Documents\api_documents.php.backup_DrivePrimary_20261108_154527.bak
+No syntax errors detected in C:\TunerTools\Web\API\.ttd_patch_zidpg6p5.php
+PATCH_OK; sha256=feef44b0e75723114e2d88f94149b7682c9ccdacb77474189878cac6e04d146b; no DB or Android changes made
+PS C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch>
