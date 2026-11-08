@@ -1,100 +1,15 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$urls = @{
+    "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
+    "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+}
 
-PS C:\Users\Administrator> $id = "BENRL6H8Y8KW"
->> $folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
->>
->> Write-Host "`n===== FILE TREN WINDOWS =====" -ForegroundColor Cyan
->>
->> Get-ChildItem -LiteralPath $folder -File -Filter "$id*.json" |
->>     Select-Object Name,Length | Format-Table -AutoSize
->>
->> Write-Host "`n===== FILE TREN GOOGLE DRIVE =====" -ForegroundColor Cyan
->>
->> foreach ($name in @(
->>     "${id}__WORLD_SEVENTEEN.json",
->>     "${id}_WORLD_SEVENTEEN.json"
->> )) {
->>     $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&kind=lyrics&filename=$([uri]::EscapeDataString($name))"
->>
->>     try {
->>         $r = Invoke-RestMethod -Uri $url -TimeoutSec 60
->>         Write-Host "$name -> FOUND=$($r.found)"
->>     } catch {
->>         Write-Host "ERROR: $($_.Exception.Message)"
->>     }
->> }
->>
->> $apis = @(
->>     @{Name="PYTHON_LOCAL"; Url="http://127.0.0.1:5000/api/get_cached_songs"},
->>     @{Name="PYTHON_PUBLIC"; Url="https://api.tunertools.top/api/get_cached_songs"},
->>     @{Name="GOOGLE_DRIVE"; Url="https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"}
->> )
->>
->> foreach ($api in $apis) {
->>     Write-Host "`n===== $($api.Name) =====" -ForegroundColor Yellow
->>
->>     try {
->>         $r = Invoke-RestMethod -Uri $api.Url -TimeoutSec 120
->>
->>         Write-Host "TOTAL: $(@($r.songs).Count)"
->>
->>         @($r.songs | Where-Object { $_.id -eq $id }) |
->>             Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
->>             Format-List
->>     } catch {
->>         Write-Host "ERROR: $($_.Exception.Message)"
->>     }
->> }
+foreach ($name in $urls.Keys) {
+    $d = Invoke-RestMethod $urls[$name] -TimeoutSec 120
 
-===== FILE TREN WINDOWS =====
+    Write-Host "`n===== $name =====" -ForegroundColor Cyan
 
-Name                              Length
-----                              ------
-BENRL6H8Y8KW_WORLD_SEVENTEEN.json  17029
-
-
-
-===== FILE TREN GOOGLE DRIVE =====
-BENRL6H8Y8KW__WORLD_SEVENTEEN.json -> FOUND=True
-BENRL6H8Y8KW_WORLD_SEVENTEEN.json -> FOUND=False
-
-===== PYTHON_LOCAL =====
-TOTAL: 1820
-
-
-id               : BENRL6H8Y8KW
-title            : WORLD
-singer           : SEVENTEEN
-has_audio_cache  : True
-has_lyrics_cache : True
-
-
-
-
-===== PYTHON_PUBLIC =====
-TOTAL: 1820
-
-
-id               : BENRL6H8Y8KW
-title            : WORLD
-singer           : SEVENTEEN
-has_audio_cache  : True
-has_lyrics_cache : True
-
-
-
-
-===== GOOGLE_DRIVE =====
-TOTAL: 1857
-
-
-id               : BENRL6H8Y8KW
-title            : _WORLD
-singer           : SEVENTEEN
-has_audio_cache  : True
-has_lyrics_cache : True
-
-
-
-PS C:\Users\Administrator>
+    $d.songs |
+        Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
+        Select-Object id,title,singer,has_lyrics_cache |
+        Format-List
+}
