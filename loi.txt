@@ -1,4 +1,22 @@
 $script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File $script -Upload -PauseSeconds 5
+    -File $script
+
+
+
+$filename = "zing_acapella_BVARZBZJNS3E.ogg"
+
+$local = "C:\TunerTools\Audio\AI_Music\ZING_AUDIO\$filename"
+
+Write-Host "=== WINDOWS SERVER ==="
+Get-Item $local |
+    Select-Object Name, Length
+
+Write-Host "=== GOOGLE DRIVE ==="
+
+$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&filename=$([uri]::EscapeDataString($filename))"
+
+Invoke-RestMethod -Uri $url -TimeoutSec 30 |
+    Select-Object ok, found, source, size_bytes |
+    Format-List
