@@ -6,3 +6,25 @@ $h | Select-Object `
   private_config_loaded, oauth_client_ready, `
   oauth_session_ready, oauth_sync_ready, oauth_ready |
   Format-List
+
+
+
+PS C:\Users\Administrator> $h = Invoke-RestMethod `
+>>   -Uri "https://tuner.alwaysdata.net/api_documents_drive.php?action=health" `
+>>   -TimeoutSec 30
+>>
+>> $h | Select-Object `
+>>   private_config_loaded, oauth_client_ready, `
+>>   oauth_session_ready, oauth_sync_ready, oauth_ready |
+>>   Format-List
+
+
+private_config_loaded : True
+oauth_client_ready    : True
+oauth_session_ready   : False
+oauth_sync_ready      : True
+oauth_ready           : False
+
+
+
+PS C:\Users\Administrator>
