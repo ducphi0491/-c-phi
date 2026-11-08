@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Replace the value with the exact Web application OAuth Client ID
+         currently configured on Alwaysdata for TunerTools Documents.
+         This is a Client ID, NOT a client secret or Google Drive token. -->
+    <string name="tt_documents_web_client_id" translatable="false">263677770333-vmagnt2t1csq64v27dtia7ctb8h3o1p5.apps.googleusercontent.com</string>
+</resources>
