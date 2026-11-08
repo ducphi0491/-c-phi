@@ -1,32 +1,17 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$urls = @{
+    "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
+    "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+}
 
-PS C:\Users\Administrator> $folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
->>
->> Get-ChildItem -LiteralPath $folder -Filter "*Phố Hoa*Cẩm Ly*.json" |
->>     Select-Object Name, Length
+foreach ($name in $urls.Keys) {
+    $d = Invoke-RestMethod -Uri $urls[$name] -TimeoutSec 120
+    $songs = @($d.songs)
 
-Name                             Length
-----                             ------
-RLCRTT2RFR3M_Phố Hoa_Cẩm Ly.json  19477
-_Phố Hoa_Cẩm Ly.json              19477
+    Write-Host "`n===== $name =====" -ForegroundColor Cyan
+    Write-Host "TOTAL SONGS: $($songs.Count)"
 
-
-PS C:\Users\Administrator> $bad = "C:\TunerTools\Audio\AI_Music\ZING_JSON\_Phố Hoa_Cẩm Ly.json"
->>
->> Rename-Item -LiteralPath $bad `
->>     -NewName "_Phố Hoa_Cẩm Ly.json.bak"
->>
-PS C:\Users\Administrator> $s = Invoke-RestMethod `
->>     -Uri "http://127.0.0.1:5000/api/get_cached_songs"
->>
->> @($s.songs | Where-Object { $_.title -like "*Phố Hoa*" }) |
->>     Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
->>     Format-Table -AutoSize
-
-id           title   singer has_audio_cache has_lyrics_cache
---           -----   ------ --------------- ----------------
-RLCRTT2RFR3M Phố Hoa Cẩm Ly            True             True
-
-
-PS C:\Users\Administrator>
+    $songs |
+        Where-Object { $_.title -like "*Phố Hoa*" } |
+        Select-Object id,title,singer |
+        Format-Table -AutoSize
+}
