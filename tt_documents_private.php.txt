@@ -1,0 +1,12 @@
+<?php
+/**
+ * PLACE THIS FILE ONLY AT /home/<YOUR_ALWAYS_DATA_ACCOUNT>/private/tt_documents_private.php
+ * NEVER upload this file to /www, /public_html, or another public web directory.
+ * Replace placeholders locally on Alwaysdata; do not share the completed file.
+ * Keep it readable only by your hosting account: chmod 600.
+ */
+return [
+    'TUNERTOOLS_DOCUMENTS_WEB_CLIENT_ID' => 'YOUR_REAL_WEB_APPLICATION_CLIENT_ID.apps.googleusercontent.com',
+    'TUNERTOOLS_DOCUMENT_SESSION_SECRET' => 'REPLACE_WITH_NEW_RANDOM_SECRET_AT_LEAST_48_CHARACTERS',
+    'TUNERTOOLS_DOCUMENT_SYNC_SHARED_SECRET' => 'REPLACE_WITH_NEW_SHARED_SECRET_SAME_AS_IIS_AT_LEAST_48_CHARACTERS',
+];
