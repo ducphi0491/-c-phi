@@ -1,17 +1,53 @@
-$urls = @{
-    "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
-    "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
-}
+PS C:\Users\Administrator> $bad = "C:\TunerTools\Audio\AI_Music\ZING_JSON\_Phố Hoa_Cẩm Ly.json"
+>>
+>> Rename-Item -LiteralPath $bad `
+>>     -NewName "_Phố Hoa_Cẩm Ly.json.bak"
+>>
+PS C:\Users\Administrator> $s = Invoke-RestMethod `
+>>     -Uri "http://127.0.0.1:5000/api/get_cached_songs"
+>>
+>> @($s.songs | Where-Object { $_.title -like "*Phố Hoa*" }) |
+>>     Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
+>>     Format-Table -AutoSize
 
-foreach ($name in $urls.Keys) {
-    $d = Invoke-RestMethod -Uri $urls[$name] -TimeoutSec 120
-    $songs = @($d.songs)
+id           title   singer has_audio_cache has_lyrics_cache
+--           -----   ------ --------------- ----------------
+RLCRTT2RFR3M Phố Hoa Cẩm Ly            True             True
 
-    Write-Host "`n===== $name =====" -ForegroundColor Cyan
-    Write-Host "TOTAL SONGS: $($songs.Count)"
 
-    $songs |
-        Where-Object { $_.title -like "*Phố Hoa*" } |
-        Select-Object id,title,singer |
-        Format-Table -AutoSize
-}
+PS C:\Users\Administrator> $urls = @{
+>>     "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
+>>     "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+>> }
+>>
+>> foreach ($name in $urls.Keys) {
+>>     $d = Invoke-RestMethod -Uri $urls[$name] -TimeoutSec 120
+>>     $songs = @($d.songs)
+>>
+>>     Write-Host "`n===== $name =====" -ForegroundColor Cyan
+>>     Write-Host "TOTAL SONGS: $($songs.Count)"
+>>
+>>     $songs |
+>>         Where-Object { $_.title -like "*Phố Hoa*" } |
+>>         Select-Object id,title,singer |
+>>         Format-Table -AutoSize
+>> }
+
+===== SERVER =====
+TOTAL SONGS: 1819
+
+id           title   singer
+--           -----   ------
+RLCRTT2RFR3M Phố Hoa Cẩm Ly
+
+
+
+===== DRIVE =====
+TOTAL SONGS: 1857
+
+id           title   singer
+--           -----   ------
+RLCRTT2RFR3M Phố Hoa Cẩm Ly
+
+
+PS C:\Users\Administrator>
