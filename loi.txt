@@ -1,34 +1,41 @@
-parts = fname.replace(".json", "").split("_")
-if len(parts) >= 3:
-    song_id = parts[0]
-    title = parts[1]
-    singer = "_".join(parts[2:])
+$root = "C:\TunerTools\Audio\AI_Music"
+$audit = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
+$report = Join-Path $root "Reports\Drive_Audit"
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $audit
+if ($LASTEXITCODE -ne 0) { throw "Audit failed" }
 
+$s = Get-Content (Join-Path $report "SUMMARY.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+$z = @(Get-ChildItem (Join-Path $root "ZING_JSON") -File -Filter "*.json")
+$yt = @(Get-ChildItem (Join-Path $root "YOUTUBE_CACHE") -File -Filter "*.json" | Where-Object { $_.Name -match "^(lyrics_|meta_)" })
 
+Write-Host "`n===== SO SANH FILE JSON THUC TE =====" -ForegroundColor Cyan
+Write-Host "SERVER ZING JSON : $($z.Count)"
+Write-Host "SERVER YOUTUBE JSON : $($yt.Count)"
+Write-Host "SERVER JSON VALID : $($s.lyrics.local_file_count)"
+Write-Host "DRIVE JSON : $($s.lyrics.drive_file_count)"
+Write-Host "SAME FILENAMES : $($s.lyrics.same_filename)"
+Write-Host "MISSING ON DRIVE : $($s.lyrics.missing_on_drive)"
+Write-Host "ONLY ON DRIVE : $($s.lyrics.only_on_drive)"
+Write-Host "DIFFERENT SIZE : $($s.lyrics.size_different)"
 
+Write-Host "`n===== FILE CHI CO TREN SERVER =====" -ForegroundColor Yellow
+Import-Csv (Join-Path $report "lyrics_missing_on_drive.csv") -Encoding UTF8 | Select-Object -ExpandProperty filename
+Write-Host "`n===== FILE CHI CO TREN DRIVE =====" -ForegroundColor Yellow
+Import-Csv (Join-Path $report "lyrics_only_on_drive.csv") -Encoding UTF8 | Select-Object -ExpandProperty filename
 
-parts = fname[:-5].split("_")
-
-if len(parts) >= 3 and parts[0]:
-    song_id = parts[0]
-
-    if parts[1] == "" and len(parts) >= 4 and parts[2]:
-        title = "_" + parts[2]
-        singer = "_".join(parts[3:])
-    else:
-        title = parts[1]
-        singer = "_".join(parts[2:])
-
-    if not title or not singer:
-        continue
-
-
-
-$d = Invoke-RestMethod `
-    "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
-
-$d.songs |
-    Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
-    Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
-    Format-List
+$p = Invoke-RestMethod "http://127.0.0.1:5000/api/get_cached_songs" -TimeoutSec 120
+$d = Invoke-RestMethod "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" -TimeoutSec 120
+$driveWithLyrics = @{}
+foreach ($item in @($d.songs)) {
+    if ($item.has_lyrics_cache -eq $true) {
+        $driveWithLyrics["$($item.source)|$($item.id)"] = $true
+    }
+}
+$unmatched = @($p.songs | Where-Object {
+    $_.has_lyrics_cache -eq $true -and
+    -not $driveWithLyrics.ContainsKey("$($_.source)|$($_.id)")
+})
+Write-Host "`n===== SERVER CO LOI, DRIVE KHONG NHAN DIEN =====" -ForegroundColor Cyan
+Write-Host "COUNT: $($unmatched.Count)"
+$unmatched | Select-Object source,id,title,singer,has_lyrics_cache | Format-Table -AutoSize
