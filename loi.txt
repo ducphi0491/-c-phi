@@ -1,111 +1,34 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> $server = Invoke-RestMethod `
->>     "http://127.0.0.1:5000/api/get_cached_songs"
->>
->> $drive = Invoke-RestMethod `
->>     "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
->>
->> function SongKey($s) {
->>     $parts = @(
->>         ([string]$s.source).Trim()
->>         ([string]$s.id).Trim()
->>         ([string]$s.title).Trim()
->>         ([string]$s.singer).Trim()
->>     )
->>     return ($parts -join "|").Normalize(
->>         [Text.NormalizationForm]::FormC
->>     ).ToLowerInvariant()
->> }
->>
->> $serverSongs = @($server.songs)
->> $driveSongs = @($drive.songs)
->>
->> $serverKeys = @{}
->> $driveKeys = @{}
->>
->> foreach ($s in $serverSongs) {
->>     $serverKeys[(SongKey $s)] = $true
->> }
->>
->> foreach ($s in $driveSongs) {
->>     $driveKeys[(SongKey $s)] = $true
->> }
->>
->> $onlyServer = @($serverSongs | Where-Object {
->>     -not $driveKeys.ContainsKey((SongKey $_))
->> })
->>
->> $onlyDrive = @($driveSongs | Where-Object {
->>     -not $serverKeys.ContainsKey((SongKey $_))
->> })
->>
->> Write-Host "`n===== DOI CHIEU BAI HAT =====" -ForegroundColor Cyan
->> Write-Host "SERVER TOTAL: $($serverSongs.Count)"
->> Write-Host "DRIVE TOTAL : $($driveSongs.Count)"
->> Write-Host "CHI CO SERVER: $($onlyServer.Count)"
->> Write-Host "CHI CO DRIVE : $($onlyDrive.Count)"
->>
->> Write-Host "`n===== CHI CO SERVER =====" -ForegroundColor Yellow
->> $onlyServer |
->>     Select-Object source,id,title,singer,has_audio_cache,has_lyrics_cache |
->>     Format-Table -AutoSize
->>
->> Write-Host "`n===== CHI CO DRIVE (30 BAI DAU) =====" -ForegroundColor Yellow
->> $onlyDrive |
->>     Select-Object -First 30 source,id,title,singer,has_audio_cache,has_lyrics_cache |
->>     Format-Table -AutoSize
-
-===== DOI CHIEU BAI HAT =====
-SERVER TOTAL: 1819
-DRIVE TOTAL : 1857
-CHI CO SERVER: 2
-CHI CO DRIVE : 40
-
-===== CHI CO SERVER =====
-
-source  id           title singer          has_audio_cache has_lyrics_cache
-------  --           ----- ------          --------------- ----------------
-zing    BENRL6H8Y8KW       WORLD_SEVENTEEN            True             True
-youtube xv6k139l14A  Oanh  Ưng Hoàng Phúc            False            False
+parts = fname.replace(".json", "").split("_")
+if len(parts) >= 3:
+    song_id = parts[0]
+    title = parts[1]
+    singer = "_".join(parts[2:])
 
 
 
-===== CHI CO DRIVE (30 BAI DAU) =====
-
-source  id           title               singer has_audio_cache has_lyrics_cache
-------  --           -----               ------ --------------- ----------------
-youtube 2vbXxiHmtH4  YouTube 2vbXxiHmtH4                   True            False
-zing    19QNTOBINZUW Zing 19QNTOBINZUW                     True            False
-zing    5PXB84EGL5HI Zing 5PXB84EGL5HI                     True            False
-zing    AGF6DFVPZEQJ Zing AGF6DFVPZEQJ                     True            False
-zing    BDPFSO7ALVLL Zing BDPFSO7ALVLL                     True            False
-zing    BENRL6H8Y8KW Zing BENRL6H8Y8KW                     True            False
-zing    BMHYC6SM7AXE Zing BMHYC6SM7AXE                     True            False
-zing    BVARZBZJNS3E Zing BVARZBZJNS3E                     True            False
-zing    GJKNRKFDSW61 Zing GJKNRKFDSW61                     True            False
-zing    HI5DTLIKY8YW Zing HI5DTLIKY8YW                     True            False
-zing    HJWE9U9B2VDP Zing HJWE9U9B2VDP                     True            False
-zing    HQBIQR6M1XX3 Zing HQBIQR6M1XX3                     True            False
-zing    IYVKA79BAIFQ Zing IYVKA79BAIFQ                     True            False
-zing    JOG92VDEWV5O Zing JOG92VDEWV5O                     True            False
-zing    MZWXW3OVI6NC Zing MZWXW3OVI6NC                     True            False
-zing    O0ULIWPVLQY4 Zing O0ULIWPVLQY4                     True            False
-zing    OUCN3CFUJH6O Zing OUCN3CFUJH6O                     True            False
-zing    UJ9CWH6HWGN  Zing UJ9CWH6HWGN                      True            False
-zing    VANJGWMBSQUQ Zing VANJGWMBSQUQ                     True            False
-zing    WZOZLIH2JKI2 Zing WZOZLIH2JKI2                     True            False
-zing    XEFTUJMSGYZ2 Zing XEFTUJMSGYZ2                     True            False
-zing    Z6A8B8FI     Zing Z6A8B8FI                         True            False
-zing    Z6WOZIOA     Zing Z6WOZIOA                         True            False
-zing    Z77W087Z     Zing Z77W087Z                         True            False
-zing    Z7E7C78A     Zing Z7E7C78A                         True            False
-zing    Z7FFFI8F     Zing Z7FFFI8F                         True            False
-zing    Z7WA6ZFU     Zing Z7WA6ZFU                         True            False
-zing    Z86DE0F7     Zing Z86DE0F7                         True            False
-zing    Z88B7A7W     Zing Z88B7A7W                         True            False
-zing    Z8ZUB90A     Zing Z8ZUB90A                         True            False
 
 
-PS C:\Users\Administrator>
+parts = fname[:-5].split("_")
+
+if len(parts) >= 3 and parts[0]:
+    song_id = parts[0]
+
+    if parts[1] == "" and len(parts) >= 4 and parts[2]:
+        title = "_" + parts[2]
+        singer = "_".join(parts[3:])
+    else:
+        title = parts[1]
+        singer = "_".join(parts[2:])
+
+    if not title or not singer:
+        continue
+
+
+
+$d = Invoke-RestMethod `
+    "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+
+$d.songs |
+    Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
+    Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
+    Format-List
