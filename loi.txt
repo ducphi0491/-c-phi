@@ -1,1 +1,21 @@
-QGQK47AO9MIR
+$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_AutoSync_Drive_20261108.zip"
+$dest = "C:\TunerTools\Tools\AI_Drive_AutoSync"
+
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+
+
+
+
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1"
+
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CAI_LICH_DONG_BO_15_PHUT.ps1"
+
+
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\TunerTools\Tools\AI_Drive_AutoSync\KIEM_TRA_MOT_DEM_SAY.ps1"
