@@ -1,1 +1,20 @@
-C:\TunerTools\Tools\Document_Permissions_Export
+=============================================================
+ TUNERTOOLS - DOCUMENT PERMISSIONS (MYSQL -> GOOGLE DRIVE)
+=============================================================
+Run as Administrator. Existing Android code will NOT be changed.
+====================================================
+ TUNERTOOLS - MYSQL DOCUMENT RIGHTS -> GOOGLE DRIVE
+ STAGE 1: NO ANDROID CHANGES, NO MYSQL WRITES
+====================================================
+PHP 8.3.26 (cli) (built: Sep 23 2025 18:39:02) (NTS Visual C++ 2019 x64)
+Copyright (c) The PHP Group
+Zend Engine v4.3.26, Copyright (c) Zend Technologies
+  File "<string>", line 1
+    import sys; print(PYTHON_VERSION:
+                                    ^
+SyntaxError: invalid syntax
+STAGE_1_ERROR: Python 3.9+ is required.
+No database records or Android files were modified.
+
+ERROR: See message above. No changes to admin.kt.
+Press any key to continue . . .
