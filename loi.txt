@@ -1,3 +1,4 @@
 AAAA_263677770333-vmagnt2t1csq64v27dtia7ctb8h3o1p5.apps.googleusercontent.com_A
 
 AAAA_GOCSPX-Q6avxwSP06bxcS9Bl57yEcANbwB6_A
+.\gradlew signingReport
