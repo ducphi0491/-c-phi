@@ -1,72 +1,32 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
 
-PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_JSON_Drive_Server_DongNhat_20261108.zip"
->> $dest = "C:\TunerTools\Tools\AI_JSON_Exact_Sync"
->>
->> New-Item -ItemType Directory -Force -Path $dest | Out-Null
->> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
->>
->> $script = Join-Path $dest "CHAY_DONG_NHAT_JSON.ps1"
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
-==== GOOGLE DRIVE <-> WINDOWS JSON RECONCILE ====
-MODE: PREVIEW ONLY (read-only)
+$d = Invoke-RestMethod -Uri $url -TimeoutSec 120
+$songs = @($d.songs)
 
-==== BEFORE LIVE AUDIT ====
-LOCAL JSON: 1820 | DRIVE JSON: 1820 | SAME NAME: 1818
-MISSING_ON_DRIVE: 2 | ONLY_ON_DRIVE: 2 | SIZE_DIFFERENT: 0
-  MISSING: BENRL6H8Y8KW_WORLD_SEVENTEEN.json
-  MISSING: QGQK47AO9MIR_Một Đêm Say_Thịnh Suy.json
-  EXTRA: BENRL6H8Y8KW__WORLD_SEVENTEEN.json
-  EXTRA: _Phố Hoa_Cẩm Ly.json
-WORLD payload check: Size and MD5 match
-PHO HOA malformed duplicate found; it will be moved to archive, not deleted.
+$audio = @($songs | Where-Object {
+    $_.has_audio_cache -eq $true
+})
 
-==== 3 EXACT ACTIONS (NO AUDIO, NO DELETE) ====
-1. Rename JSON on Drive: BENRL6H8Y8KW__WORLD_SEVENTEEN.json -> BENRL6H8Y8KW_WORLD_SEVENTEEN.json
-2. Upload missing JSON: QGQK47AO9MIR_Một Đêm Say_Thịnh Suy.json
-3. Move orphan JSON to AI_Music/lyrics_quarantine: _Phố Hoa_Cẩm Ly.json
-MODE: PREVIEW / READ ONLY
+$both = @($songs | Where-Object {
+    $_.has_audio_cache -eq $true -and
+    $_.has_lyrics_cache -eq $true
+})
 
-No changes made. Run with --apply after reviewing the 3 exact actions.
-PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_JSON_Exact_Sync\CHAY_DONG_NHAT_JSON.ps1"
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File $script -Apply
-==== GOOGLE DRIVE <-> WINDOWS JSON RECONCILE ====
-MODE: APPLY exact 3 JSON fixes (no deletes)
+$audioOnly = @($songs | Where-Object {
+    $_.has_audio_cache -eq $true -and
+    $_.has_lyrics_cache -ne $true
+})
 
-==== BEFORE LIVE AUDIT ====
-LOCAL JSON: 1820 | DRIVE JSON: 1820 | SAME NAME: 1818
-MISSING_ON_DRIVE: 2 | ONLY_ON_DRIVE: 2 | SIZE_DIFFERENT: 0
-  MISSING: BENRL6H8Y8KW_WORLD_SEVENTEEN.json
-  MISSING: QGQK47AO9MIR_Một Đêm Say_Thịnh Suy.json
-  EXTRA: BENRL6H8Y8KW__WORLD_SEVENTEEN.json
-  EXTRA: _Phố Hoa_Cẩm Ly.json
-WORLD payload check: Size and MD5 match
-PHO HOA malformed duplicate found; it will be moved to archive, not deleted.
+Write-Host "`n===== NGUON GOC SO 1280 =====" -ForegroundColor Cyan
 
-==== 3 EXACT ACTIONS (NO AUDIO, NO DELETE) ====
-1. Rename JSON on Drive: BENRL6H8Y8KW__WORLD_SEVENTEEN.json -> BENRL6H8Y8KW_WORLD_SEVENTEEN.json
-2. Upload missing JSON: QGQK47AO9MIR_Một Đêm Say_Thịnh Suy.json
-3. Move orphan JSON to AI_Music/lyrics_quarantine: _Phố Hoa_Cẩm Ly.json
-MODE: APPLY
+Write-Host "AUDIO FILES IN STREAM_CACHE : $($d.audio_entries_scanned)"
+Write-Host "JSON FILES IN LYRICS       : $($d.json_entries_scanned)"
+Write-Host "SONGS HAS AUDIO            : $($audio.Count)"
+Write-Host "SONGS HAS AUDIO + JSON     : $($both.Count)"
+Write-Host "SONGS AUDIO ONLY           : $($audioOnly.Count)"
 
-[1/3] Rename WORLD JSON on Drive...
-  OK: WORLD filename and MD5 are correct.
+Write-Host "`n===== CAC BAI CHI CO AUDIO =====" -ForegroundColor Yellow
 
-[2/3] Uploading ONE missing JSON: QGQK47AO9MIR_Một Đêm Say_Thịnh Suy.json
-  OK: new JSON has same size and MD5 on Drive.
-
-[3/3] Archiving orphan Phố Hoa JSON (NOT deleting)...
-  OK: archived in AI_Music/lyrics_quarantine/_Phố Hoa_Cẩm Ly.json
-
-==== FINAL LIVE DRIVE AUDIT ====
-LOCAL JSON: 1820 | DRIVE JSON: 1820 | SAME NAME: 1820
-MISSING_ON_DRIVE: 0 | ONLY_ON_DRIVE: 0 | SIZE_DIFFERENT: 0
-SUCCESS: JSON filename sets and byte sizes now match. No Drive files deleted.
-NOTE: The Alwaysdata PHP catalog may need up to 600 seconds to refresh.
-PS C:\Users\Administrator>
-
-
+$audioOnly |
+    Select-Object source,id,title,singer,has_audio_cache,has_lyrics_cache |
+    Format-Table -AutoSize
