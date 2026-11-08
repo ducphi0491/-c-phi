@@ -2,3 +2,4 @@ AAAA_263677770333-vmagnt2t1csq64v27dtia7ctb8h3o1p5.apps.googleusercontent.com_A
 
 AAAA_GOCSPX-Q6avxwSP06bxcS9Bl57yEcANbwB6_A
 .\gradlew signingReport
+24:8E:D4:18:47:A3:62:98:9E:DF:D5:19:1F:C5:9D:9A:E0:CA:C0:EC
