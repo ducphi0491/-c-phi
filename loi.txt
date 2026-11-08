@@ -1,4 +1,105 @@
-$script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File $script -Upload -PauseSeconds 2.5
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Repair_41_Missing_20261108.zip"
+>> $dest = "C:\TunerTools\Tools\AI_Repair_Missing"
+>>
+>> if (!(Test-Path $zip)) {
+>>     throw "Chua tim thay ZIP trong Downloads"
+>> }
+>>
+>> New-Item -ItemType Directory -Force -Path $dest | Out-Null
+>> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+>>
+>> $script = Join-Path $dest "CHAY_DONG_BO_FILE_THIEU.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+==== TUNERTOOLS AI MISSING-FILE SYNC ====
+MODE: PREVIEW ONLY, NO CHANGES
+LOCAL: C:\TunerTools\Audio\AI_Music
+TOKEN: present, contents not printed
+NOTICE: Audio files with unrecognized names (not auto-uploaded): 8
+AUDIO: LOCAL=1284 DRIVE=1342 MISSING=1
+  MISSING: zing_acapella_BVARZBZJNS3E.ogg
+LYRICS: LOCAL=1820 DRIVE=1780 MISSING=40
+  MISSING: 5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json
+  MISSING: 5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json
+  MISSING: 6PA5IIKLEFIF_Cảm Giác Yêu_AMEE.json
+  MISSING: 7SGYVIRAKQJT_Stop_Spice Girls.json
+  MISSING: AO4KYPEJDBR8_Chờ Em Trong Mơ_Ngô Kiến Huy.json
+TOTAL MISSING VALID FILES: 41
+PREVIEW FINISHED. Use -Upload to create only the missing files.
+PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File $script -Upload -PauseSeconds 2.5
+==== TUNERTOOLS AI MISSING-FILE SYNC ====
+MODE: UPLOAD ONLY MISSING
+LOCAL: C:\TunerTools\Audio\AI_Music
+TOKEN: present, contents not printed
+NOTICE: Audio files with unrecognized names (not auto-uploaded): 8
+AUDIO: LOCAL=1284 DRIVE=1342 MISSING=1
+  MISSING: zing_acapella_BVARZBZJNS3E.ogg
+LYRICS: LOCAL=1820 DRIVE=1780 MISSING=40
+  MISSING: 5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json
+  MISSING: 5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json
+  MISSING: 6PA5IIKLEFIF_Cảm Giác Yêu_AMEE.json
+  MISSING: 7SGYVIRAKQJT_Stop_Spice Girls.json
+  MISSING: AO4KYPEJDBR8_Chờ Em Trong Mơ_Ngô Kiến Huy.json
+TOTAL MISSING VALID FILES: 41
+[1/41] FAILED zing_acapella_BVARZBZJNS3E.ogg: URLError: <urlopen error EOF occurred in violation of protocol (_ssl.c:2427)>; post_status=missing
+[2/41] OK 5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json
+[3/41] OK 5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json
+[4/41] OK 6PA5IIKLEFIF_Cảm Giác Yêu_AMEE.json
+[5/41] OK 7SGYVIRAKQJT_Stop_Spice Girls.json
+[6/41] OK AO4KYPEJDBR8_Chờ Em Trong Mơ_Ngô Kiến Huy.json
+[7/41] OK ARZVQFK04YIV_Cua_Obito.json
+[8/41] OK B7AUEN8EAOP1_Mưa Trên Cuộc Tình_Đan Trường.json
+[9/41] OK BB5HLYDXD1IB_Nửa Vầng Trăng_Thúy Anh.json
+[10/41] OK BVOJ6EKZ3607_Đợi Chờ_Nam Cường.json
+[11/41] OK CWXJEHS76XS_Trách Ai Vô Tình_Hồ Văn Cường.json
+[12/41] OK DRBQPCHTJUCZ_Không Bao Giờ Quên Anh_Trường Vũ.json
+[13/41] OK FEY7FTG86KO7_Chuyến Tàu Hoàng Hôn_Ngọc Trâm.json
+[14/41] FAILED G6QVG4JESNNB_Blue Sky_S.E.S.json: RemoteDisconnected: Remote end closed connection without response; post_status=missing
+[15/41] OK H58BFKPOAMOS_Bad Boy_AMEE.json
+[16/41] OK HITJFCZOSBI_Nửa Đêm Ngoài Phố_Giao Linh.json
+[17/41] OK HIXOQQXPGO6Q_Vì Sao Trong Lòng Tôi_Vĩnh Thuyên Kim.json
+[18/41] OK HQFMFSS9HCF7_Lê Thê_Cao Thái Sơn.json
+[19/41] OK IACCHPRU7FR2_Tiễn Anh Đi_Hương Tràm.json
+[20/41] OK IAUICGNZQRB1_Lạc Nhau Có Phải Muôn Đời_Erik.json
+[21/41] OK INF5VMZDDBHV_Với Em Là Mãi Mãi_Hương Tràm.json
+[22/41] OK MEGGKQAAOTTZ_Sau Bao Năm_Trịnh Thăng Bình.json
+[23/41] OK N19XIWGAG9ZB_Đoạn Tuyệt_Trung Quang.json
+[24/41] OK N1NC9XWXUOXP_Độc Thoại_Tuấn Hưng.json
+[25/41] OK ND05UGL13SYQ_Umpah Umpah_Red Velvet.json
+[26/41] OK NEXGPLLZBARQ_Hát Cho Người Ở Lại_Quang Vinh.json
+[27/41] OK O9JQKVWYHA4Q_Sugar Rush Ride_TXT.json
+[28/41] FAILED QFEW4E7NAXCL_Buồn Trong Kỷ Niệm_Tuấn Vũ.json: RemoteDisconnected: Remote end closed connection without response; post_status=missing
+[29/41] OK QFY3KTQXEKMQ_Xin Còn Gọi Tên Nhau_Phạm Khánh Hưng.json
+[30/41] OK RUW9DJMPPRG5_Thức Tỉnh_Bảo Thy.json
+[31/41] OK SZOUARCLUH5Y_Armageddon_aespa.json
+[32/41] OK XAIC0HWKWGJQ_Dĩ Vãng_Khánh Đơn.json
+[33/41] OK XNTQCHD3BFJB_Đoạn Buồn Đêm Mưa_Trường Vũ.json
+[34/41] OK XUYJCSDYFCLG_Work It_NCT.json
+[35/41] OK ZAAPCV7QOD4_Hàn Mặc Tử_Lệ Quyên.json
+[36/41] OK ZW79B9UZ_Vùng Lá Me Bay_Dương Hồng Loan.json
+[37/41] OK ZWBWCC7D_Đoạn Tái Bút_Chế Linh.json
+[38/41] OK ZWZ9880D_Ngôi Nhà Hoa Hồng_Quang Vinh.json
+[39/41] OK ZWZ9Z9UB_Chạm Tay Vào Điều Ước_Cao Thái Sơn.json
+[40/41] OK ZWZA90FB_Until You_Shayne Ward.json
+[41/41] OK ZWZD9U9Z_Kiếp Đỏ Đen_Duy Mạnh.json
+
+==== FINAL LIVE DRIVE AUDIT ====
+AUDIO: MISSING_ON_DRIVE=1 ONLY_ON_DRIVE=59 SIZE_DIFFERENT=0
+LYRICS: MISSING_ON_DRIVE=2 ONLY_ON_DRIVE=0 SIZE_DIFFERENT=0
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit\UPLOAD_MISSING_RESULT.json
+CREATED=38 SKIPPED=0 FAILED=3
+No Drive files were deleted or overwritten.
+AI reconcile finished with exit code 1
+At C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1:24 char:28
++ ... DE -ne 0) { throw "AI reconcile finished with exit code $LASTEXITCODE ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (AI reconcile finished with exit code 1:String) [], RuntimeException
+    + FullyQualifiedErrorId : AI reconcile finished with exit code 1
+
+PS C:\Users\Administrator>
