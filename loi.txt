@@ -1,23 +1,19 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$zip = "$env:USERPROFILE\Downloads\TunerTools_Documents_IIS_Patch_PHP_PATH_FIX_V2_20261108.zip"
+$dest = "C:\TunerTools\Tools\Documents_DrivePrimary"
 
-PS C:\Users\Administrator> cd C:\TunerTools\Tools\Documents_DrivePrimary
->> .\02_KIEM_TRA_ALWAYS_DATA.ps1
-DRIVE_ROOT_READY=True
-PERMISSIONS_READY=True
-OAUTH_READY=False
-PERMISSION_ACCOUNTS=93
-NOT_READY: check PHP version and server environment variables
-PS C:\TunerTools\Tools\Documents_DrivePrimary> cd C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch
->>
->> python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
-PATCH_FAILED: PHP CLI is required to check syntax before installation
-PS C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch> $root = "C:\TunerTools\Tools\Documents_DrivePrimary"
->>
->> Test-Path "$root\02_KIEM_TRA_ALWAYS_DATA.ps1"
->> Test-Path "$root\IIS_Patch\PATCH_API_DOCUMENTS.py"
->> Test-Path "$root\IIS_Patch\iis_helpers.php.fragment"
-True
-True
-True
-PS C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch>
+Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+
+cd "$dest\IIS_Patch"
+
+
+
+
+python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --check
+
+
+Get-ChildItem -Path "C:\PHP","C:\Program Files\PHP","C:\TunerTools\PHP","C:\inetpub\php" -Filter php.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object FullName
+
+
+
+
+python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
