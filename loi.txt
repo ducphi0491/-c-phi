@@ -1,76 +1,33 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$urls = @{
+    "WINDOWS SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
+    "GOOGLE DRIVE" = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+}
 
-PS C:\Users\Administrator> $folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
->> $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
->>
->> $d = Invoke-RestMethod -Uri $url -TimeoutSec 120
->> $files = @(Get-ChildItem -LiteralPath $folder -File -Filter "*.json")
->>
->> $keys = @{}
->>
->> foreach ($s in @($d.songs | Where-Object {
->>     $_.source -eq "zing" -and $_.has_lyrics_cache -eq $true
->> })) {
->>     $key = ("{0}|{1}|{2}" -f $s.id,$s.title,$s.singer).
->>         Normalize([Text.NormalizationForm]::FormC).
->>         ToLowerInvariant()
->>     $keys[$key] = $true
->> }
->>
->> $issues = @(foreach ($f in $files) {
->>     if ($f.Length -le 0 -or $f.Length -gt 2097152) {
->>         [PSCustomObject]@{
->>             File=$f.Name
->>             Reason="JSON size outside PHP limit"
->>         }
->>     }
->>     elseif ($f.BaseName -match "^([A-Za-z0-9]{6,64})_([^_]+)_(.+)$") {
->>         $id=$Matches[1]
->>         $title=$Matches[2].Replace("_"," ").Trim()
->>         $singer=$Matches[3].Replace("_"," ").Trim()
->>
->>         $key=("{0}|{1}|{2}" -f $id,$title,$singer).
->>             Normalize([Text.NormalizationForm]::FormC).
->>             ToLowerInvariant()
->>
->>         if (-not $keys.ContainsKey($key)) {
->>             [PSCustomObject]@{
->>                 File=$f.Name
->>                 Reason="Not found in Drive song catalog"
->>             }
->>         }
->>     }
->>     elseif ($f.BaseName -notmatch "^[A-Za-z0-9]{6,64}$") {
->>         [PSCustomObject]@{
->>             File=$f.Name
->>             Reason="Filename not recognized by PHP"
->>         }
->>     }
->> })
->>
->> Write-Host "`n===== JSON CATALOG CHECK =====" -ForegroundColor Cyan
->> Write-Host "LOCAL ZING JSON: $($files.Count)"
->> Write-Host "DRIVE JSON ENTRIES: $($d.json_entries_scanned)"
->> Write-Host "DRIVE CATALOG SONGS: $($d.count)"
->> Write-Host "JSON SUSPECTED: $($issues.Count)"
->>
->> $issues | Format-List File,Reason
+foreach ($source in $urls.Keys) {
+    $data = Invoke-RestMethod -Uri $urls[$source] -TimeoutSec 120
 
-===== JSON CATALOG CHECK =====
-LOCAL ZING JSON: 1819
-DRIVE JSON ENTRIES: 1820
-DRIVE CATALOG SONGS: 1857
-JSON SUSPECTED: 2
+    Write-Host "`n===== $source =====" -ForegroundColor Cyan
 
+    @($data.songs | Where-Object {
+        $_.id -eq "BENRL6H8Y8KW" -or
+        $_.title -like "*Phố Hoa*"
+    }) |
+        Select-Object id, title, singer, has_audio_cache, has_lyrics_cache |
+        Format-List
+}
 
-File   : BENRL6H8Y8KW__WORLD_SEVENTEEN.json
-Reason : Filename not recognized by PHP
+Write-Host "`n===== KIEM TRA JSON PHO HOA =====" -ForegroundColor Yellow
 
-File   : _Phố Hoa_Cẩm Ly.json
-Reason : Filename not recognized by PHP
+$file = "C:\TunerTools\Audio\AI_Music\ZING_JSON\_Phố Hoa_Cẩm Ly.json"
 
+if (Test-Path -LiteralPath $file) {
+    $j = Get-Content -LiteralPath $file -Raw -Encoding UTF8 |
+        ConvertFrom-Json
 
+    Write-Host "Cac truong JSON:"
+    $j.PSObject.Properties.Name
 
-PS C:\Users\Administrator>
-
+    Write-Host "`nThong tin ma bai hat:"
+    $j | Select-Object id, song_id, songId, encodeId, title, singer |
+        Format-List
+}
