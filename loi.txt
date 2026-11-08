@@ -1,8 +1,109 @@
-$zip = "$env:USERPROFILE\Downloads\TunerTools_KiemTra_3_Backup_ChuyenToken_20261108.zip"
-$dest = "$env:TEMP\TT_Backup_Audit"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_KiemTra_3_Backup_ChuyenToken_20261108.zip"
+>> $dest = "$env:TEMP\TT_Backup_Audit"
+>>
+>> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>   -File "$dest\KIEM_TRA_3_BACKUP_VA_TOKEN.ps1" `
+>>   -ApplyToken -RemoveLegacyAITask
+===============================================================
+TUNERTOOLS BACKUP AUDIT: READ-ONLY UNTIL OPTIONAL ACTION FLAGS
+SERVER PATH: C:\TunerTools
+MODE: ApplyToken=True / RemoveLegacyAITask=True
+TIME: 2026-11-08 18:25:50
+===============================================================
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File "$dest\KIEM_TRA_3_BACKUP_VA_TOKEN.ps1" `
-  -ApplyToken -RemoveLegacyAITask
+=== C:\TunerTools\BackupPrep ===
+FILE COUNT: 15 / DIR COUNT: 7 / TOTAL: 41.44 MB
+ROOT ENTRIES: 5
+  [DIR]  Documents_Only2_20261107_130752 | 2026-11-07
+  [DIR]  Drive_AI_Music | 2026-11-07
+  [DIR]  Drive_AppGuides | 2026-11-06
+  [DIR]  Drive_Documents | 2026-11-07
+  [DIR]  Drive_Documents_Only2 | 2026-11-07
+
+=== C:\TunerTools\Backups ===
+FILE COUNT: 31 / DIR COUNT: 1 / TOTAL: 3.55 MB
+ROOT ENTRIES: 29
+  [FILE] api_AI.bat.20261105_001634.bak | 2026-07-06
+  [FILE] api_documents_before_move_20261105_142330.php | 2026-10-09
+  [FILE] api_documents_live_20261105_143013.php | 2026-10-09
+  [FILE] api_documents_stage_20261105_142330.php | 2026-11-05
+  [FILE] api_gp_search.php.20261105_001634.bak | 2026-10-04
+  [FILE] api_gp_search.php.20261105_013656.bak | 2026-11-05
+  [FILE] api_gp_search.php.before_cache_20261105_131126.bak | 2026-11-05
+  [FILE] api_gp_search.php.before_upload_20261105_015010.bak | 2026-11-05
+  [FILE] api_gp_search.php.stage_20261105_015010.php | 2026-11-05
+  [FILE] api_gp_search.php_20261105_115659.bak | 2026-11-05
+  [FILE] api_gp_search.php_20261105_115659.new.php | 2026-11-05
+  [FILE] api_gp_search_20261105_005541.php.bak | 2026-11-05
+  [FILE] api_gp_search_before_move_20261105_010441.php | 2026-11-05
+  [FILE] api_gp_search_live_20261105_013943.php.bak | 2026-11-05
+  [FILE] api_songs.php.20261105_001634.bak | 2026-11-04
+  [FILE] api_songs.php.20261105_013656.bak | 2026-11-05
+  [FILE] api_songs.php.before_cache_20261105_131126.bak | 2026-11-05
+  [FILE] api_songs.php.before_upload_20261105_015010.bak | 2026-11-05
+  [FILE] api_songs.php.stage_20261105_015010.php | 2026-11-05
+  [FILE] api_songs.php_20261105_115659.bak | 2026-11-05
+  [FILE] api_songs.php_20261105_115659.new.php | 2026-11-05
+  [FILE] api_songs_before_gp_20261105_013354.php.bak | 2026-11-05
+  [FILE] api_songs_live_20261105_014209.php.bak | 2026-11-05
+  [FILE] document_copy_20261105_141312.log | 2026-11-05
+  [FILE] document_final_sync_20261105_143013.log | 2026-11-05
+  [FILE] documents_guard_20261105_143013.php | 2026-11-05
+  [FILE] documents_wrapper_20261105_143013.php | 2026-11-05
+  [FILE] documents_wrapper_guard_20261105_143013.php | 2026-11-05
+  [DIR]  DocumentsIIS_DriveAuth | 2026-11-07
+
+=== C:\TunerTools\BackupScripts ===
+FILE COUNT: 41 / DIR COUNT: 7 / TOTAL: 2.14 MB
+ROOT ENTRIES: 5
+  [DIR]  Documents_DriveAuth_Fix | 2026-11-07
+  [DIR]  Documents_DriveFirst | 2026-11-07
+  [DIR]  Drive_AI_Music | 2026-11-07
+  [DIR]  Drive_Buoc2D | 2026-11-05
+  [DIR]  Drive_Documents | 2026-11-07
+
+=== SCHEDULED TASKS REFERENCING BACKUP FOLDERS ===
+NONE (does not rule out references in manual scripts or services).
+
+=== WINDOWS SERVICES REFERENCING BACKUP FOLDERS ===
+NONE
+
+=== SCRIPT REFERENCES TO BACKUP FOLDERS ===
+REF: C:\TunerTools\Tools\AI_Drive_AutoSync\KIEM_TRA_3_BACKUP_VA_TOKEN.ps1 -> BackupPrep,Backups,BackupScripts
+REF: C:\TunerTools\Tools\AI_Drive_AutoSync\SYNC_AI_DRIVE.py -> BackupScripts
+REF: C:\TunerTools\BackupScripts\Documents_DriveAuth_Fix\PATCH_IIS_PHP_THAT.ps1 -> Backups
+REF: C:\TunerTools\BackupScripts\Documents_DriveFirst\PATCH_IIS_DOCUMENTS_AUTH.ps1 -> Backups
+REF: C:\TunerTools\BackupScripts\Drive_AI_Music\CHAY_UPLOAD_AI.ps1 -> BackupPrep,BackupScripts
+REF: C:\TunerTools\BackupScripts\Drive_Buoc2D\02_drive_appguides.ps1 -> BackupPrep
+REF: C:\TunerTools\BackupScripts\Drive_Documents\00_GiaiNen_Upload_Documents.ps1 -> BackupPrep,BackupScripts
+REF: C:\TunerTools\BackupScripts\Drive_Documents\03_drive_documents.ps1 -> BackupPrep
+REF: C:\TunerTools\BackupScripts\Drive_Documents\CHAY_UPLOAD_DOCUMENTS.bat -> BackupPrep
+REF: C:\TunerTools\BackupScripts\Drive_Documents\CHAY_UPLOAD_DOCUMENTS.ps1 -> BackupPrep,BackupScripts
+REF: C:\TunerTools\BackupScripts\Drive_Documents\KIEM_TRA_UPLOAD.ps1 -> BackupPrep
+SCANNED SCRIPTS: 41
+NOTE: A script can still be used manually even without scheduled-task references.
+
+=== GOOGLE DRIVE OAUTH JSON CANDIDATES (VALUES HIDDEN) ===
+TOKEN: C:\TunerTools\BackupScripts\Drive_Buoc2D\drive_token.json | size=794 | has refresh/client fields=YES
+
+=== APPLY: STAGED TOKEN MIGRATION ===
+SOURCE TOKEN: C:\TunerTools\BackupScripts\Drive_Buoc2D\drive_token.json
+TOKEN COPY: OK; SHA256 match; SYSTEM + Administrators access only.
+PYTHON CONFIG: Tools token path added as FIRST candidate. Backup: C:\TunerTools\Backups\AI_Drive_Script_PreMigration\SYNC_AI_DRIVE_20261108_182550.py
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+NameError: name 'utf' is not defined
+ERROR: Python syntax check failed after update; inspect backup and do not delete old token.
+Python syntax check failed after update; inspect backup and do not delete old token.
+At C:\Users\Administrator\AppData\Local\Temp\TT_Backup_Audit\KIEM_TRA_3_BACKUP_VA_TOKEN.ps1:76 char:32
++ ... DE -ne 0) { throw 'Python syntax check failed after update; inspect b ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Python syntax c...lete old token.:String) [], RuntimeException
+    + FullyQualifiedErrorId : Python syntax check failed after update; inspect backup and do not delete old token.
+
+PS C:\Users\Administrator>
