@@ -1,3 +1,12 @@
-cd C:\TunerTools\Tools\Documents_DrivePrimary
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-.\02_KIEM_TRA_ALWAYS_DATA.ps1
+PS C:\Users\Administrator> cd C:\TunerTools\Tools\Documents_DrivePrimary
+>>
+>> .\02_KIEM_TRA_ALWAYS_DATA.ps1
+DRIVE_ROOT_READY=True
+PERMISSIONS_READY=True
+OAUTH_READY=False
+PERMISSION_ACCOUNTS=93
+NOT_READY: check PHP version and server environment variables
+PS C:\TunerTools\Tools\Documents_DrivePrimary>
