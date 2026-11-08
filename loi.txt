@@ -9,22 +9,13 @@ $h | Select-Object `
 
 
 
-PS C:\Users\Administrator> $h = Invoke-RestMethod `
->>   -Uri "https://tuner.alwaysdata.net/api_documents_drive.php?action=health" `
->>   -TimeoutSec 30
->>
->> $h | Select-Object `
->>   private_config_loaded, oauth_client_ready, `
->>   oauth_session_ready, oauth_sync_ready, oauth_ready |
->>   Format-List
-
-
-private_config_loaded : True
-oauth_client_ready    : True
-oauth_session_ready   : False
-oauth_sync_ready      : True
-oauth_ready           : False
+$bytes = New-Object byte[] 64
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+$rng.Dispose()
+[Convert]::ToBase64String($bytes)
 
 
 
-PS C:\Users\Administrator>
+
+
