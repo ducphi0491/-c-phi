@@ -19,3 +19,51 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File "C:\TunerTools\Tools\AI_Drive_AutoSync\KIEM_TRA_MOT_DEM_SAY.ps1"
+
+
+
+
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> $zip = "$env:USERPROFILE\Downloads\TunerTools_AI_AutoSync_Drive_20261108.zip"
+>> $dest = "C:\TunerTools\Tools\AI_Drive_AutoSync"
+>>
+>> New-Item -ItemType Directory -Force -Path $dest | Out-Null
+>> Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+>>
+PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>   -File "C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1"
+====== TUNERTOOLS: QGQK47AO9MIR -> AI_Music/stream_cache ======
+MODE: UPLOAD EXACT ONE AUDIO FILE
+===== TUNERTOOLS AI DRIVE SYNC =====
+MODE: APPLY / CREATE ONLY
+SOURCE: C:\TunerTools\Audio\AI_Music
+DRIVE: TunerTools_AppBackup/AI_Music/{stream_cache,lyrics} ONLY
+TOKEN: found, never printed
+UTC: 2026-11-08T10:11:59+00:00
+DRIVE AUDIO FILENAMES: 1343
+DRIVE JSON FILENAMES: 1820
+LOCAL AUDIO: 1 LOCAL JSON: 0
+PRESENT: 0 MISSING NEW: 1 CONFLICT: 0 NOT_READY: 0
+  TO UPLOAD: AUDIO zing_acapella_QGQK47AO9MIR.ogg
+[1/1] zing_acapella_QGQK47AO9MIR.ogg
+  FAILED: RuntimeError: Upload status unresolved: URLError: <urlopen error The write operation timed out>
+===== COMPLETE =====
+UPLOADED: 0 FAILED: 1 QUEUED_FOR_NEXT_RUN: 0
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_AutoSync\AI_DRIVE_SYNC_LAST_RUN.json
+PHP cached_songs may be stale for up to 600 seconds.
+No files on Google Drive were overwritten, renamed or deleted.
+AI Drive upload failed (exit=1)
+At C:\TunerTools\Tools\AI_Drive_AutoSync\CHAY_UPLOAD_MOT_DEM_SAY.ps1:30 char:28
++ ... ITCODE -ne 0) { throw "AI Drive upload failed (exit=$LASTEXITCODE)" }
++                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (AI Drive upload failed (exit=1):String) [], RuntimeException
+    + FullyQualifiedErrorId : AI Drive upload failed (exit=1)
+
+PS C:\Users\Administrator>
+PS C:\Users\Administrator>
+PS C:\Users\Administrator>
+PS C:\Users\Administrator>
+PS C:\Users\Administrator>
