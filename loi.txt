@@ -1,1 +1,11 @@
-Documents_DrivePrimary
+cd C:\TunerTools\Tools\Documents_DrivePrimary
+
+.\01_TAO_KHOA_BAO_MAT.ps1
+
+
+
+.\02_KIEM_TRA_ALWAYS_DATA.ps1
+
+
+
+python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
