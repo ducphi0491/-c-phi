@@ -1,104 +1,13 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Repair_41_Missing_20261108.zip"
+$dest = "C:\TunerTools\Tools\AI_Repair_Missing"
 
-PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_VA_HIEN_KET_QUA.ps1"
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File $script
-==== WINDOWS SERVER <-> GOOGLE DRIVE AI AUDIT ====
-MODE: READ ONLY - NO DRIVE UPLOAD / DELETE / UPDATE
-LOCAL SOURCE: C:\TunerTools\Audio\AI_Music
-TOKEN FILE: Found (content never printed)
-Scanning Drive folders...
-Drive stream_cache entries: 1342
-Drive lyrics entries: 1780
+if (!(Test-Path $zip)) {
+    throw "Chua tim thay ZIP trong Downloads"
+}
 
-===========================================================================
-AUDIO
-  LOCAL: 1284 files / 1284 unique names
-  DRIVE: 1342 files / 1342 unique names
-  SAME FILENAMES: 1283
-  MISSING ON DRIVE: 1
-  ONLY ON DRIVE: 59
-  SIZE DIFFERENT: 0
-  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
-  EXAMPLE MISSING: ['zing_acapella_BVARZBZJNS3E.ogg']
-LYRICS JSON
-  LOCAL: 1820 files / 1820 unique names
-  DRIVE: 1780 files / 1780 unique names
-  SAME FILENAMES: 1780
-  MISSING ON DRIVE: 40
-  ONLY ON DRIVE: 0
-  SIZE DIFFERENT: 0
-  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
-  EXAMPLE MISSING: ['5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json', '5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json', '6PA5IIKLEFIF_Cảm Giác Yêu_AMEE.json']
-WARNING: Unrecognized local audio filenames: 8
-REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit
-DETAILS: audio_missing_on_drive.csv and lyrics_missing_on_drive.csv
-NOTICE: A matched filename + file size is not a content hash verification.
-NOTICE: This compares live Drive API files, not the 600-second Alwaysdata catalog cache.
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
 
-========== SUMMARY FOR CHATGPT ==========
-AuditDateUTC : 2026-11-08T04:03:44+00:00
-LocalRoot    : C:\TunerTools\Audio\AI_Music
-DriveRoot    : My Drive/TunerTools_AppBackup/AI_Music
+$script = Join-Path $dest "CHAY_DONG_BO_FILE_THIEU.ps1"
 
-==== AUDIO ====
-
-
-LocalFiles     : 1284
-DriveFiles     : 1342
-SameNames      : 1283
-MissingOnDrive : 1
-OnlyOnDrive    : 59
-DifferentSize  : 0
-DuplicateLocal : 0
-DuplicateDrive : 0
-CaseDifference : 0
-
-
-
-First 20 missing files on Drive:
-- zing_acapella_BVARZBZJNS3E.ogg
-
-==== LYRICS ====
-
-
-LocalFiles     : 1820
-DriveFiles     : 1780
-SameNames      : 1780
-MissingOnDrive : 40
-OnlyOnDrive    : 0
-DifferentSize  : 0
-DuplicateLocal : 0
-DuplicateDrive : 0
-CaseDifference : 0
-
-
-
-First 20 missing files on Drive:
-- 5MBFESL9LSEC_Nhật Ký Đời Tôi_Trung Quang.json
-- 5WRJU6RRSDK6_Giải Cứu Tiểu Thư_Hồ Việt Trung.json
-- 6PA5IIKLEFIF_Cảm Giác Yêu_AMEE.json
-- 7SGYVIRAKQJT_Stop_Spice Girls.json
-- AO4KYPEJDBR8_Chờ Em Trong Mơ_Ngô Kiến Huy.json
-- ARZVQFK04YIV_Cua_Obito.json
-- B7AUEN8EAOP1_Mưa Trên Cuộc Tình_Đan Trường.json
-- BB5HLYDXD1IB_Nửa Vầng Trăng_Thúy Anh.json
-- BVOJ6EKZ3607_Đợi Chờ_Nam Cường.json
-- CWXJEHS76XS_Trách Ai Vô Tình_Hồ Văn Cường.json
-- DRBQPCHTJUCZ_Không Bao Giờ Quên Anh_Trường Vũ.json
-- FEY7FTG86KO7_Chuyến Tàu Hoàng Hôn_Ngọc Trâm.json
-- G6QVG4JESNNB_Blue Sky_S.E.S.json
-- H58BFKPOAMOS_Bad Boy_AMEE.json
-- HITJFCZOSBI_Nửa Đêm Ngoài Phố_Giao Linh.json
-- HIXOQQXPGO6Q_Vì Sao Trong Lòng Tôi_Vĩnh Thuyên Kim.json
-- HQFMFSS9HCF7_Lê Thê_Cao Thái Sơn.json
-- IACCHPRU7FR2_Tiễn Anh Đi_Hương Tràm.json
-- IAUICGNZQRB1_Lạc Nhau Có Phải Muôn Đời_Erik.json
-- INF5VMZDDBHV_Với Em Là Mãi Mãi_Hương Tràm.json
-
-LocalFoldersComplete : True
-Reports: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit
-Finished. Copy the SUMMARY FOR CHATGPT section to chat.
-PS C:\Users\Administrator>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
