@@ -1,1 +1,8 @@
-C:\TunerTools\Audio\AI_Music
+$zip = "$env:USERPROFILE\Downloads\TunerTools_KiemTra_3_Backup_ChuyenToken_20261108.zip"
+$dest = "$env:TEMP\TT_Backup_Audit"
+
+Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$dest\KIEM_TRA_3_BACKUP_VA_TOKEN.ps1" `
+  -ApplyToken -RemoveLegacyAITask
