@@ -1,53 +1,55 @@
-PS C:\Users\Administrator> $bad = "C:\TunerTools\Audio\AI_Music\ZING_JSON\_Phố Hoa_Cẩm Ly.json"
->>
->> Rename-Item -LiteralPath $bad `
->>     -NewName "_Phố Hoa_Cẩm Ly.json.bak"
->>
-PS C:\Users\Administrator> $s = Invoke-RestMethod `
->>     -Uri "http://127.0.0.1:5000/api/get_cached_songs"
->>
->> @($s.songs | Where-Object { $_.title -like "*Phố Hoa*" }) |
->>     Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
->>     Format-Table -AutoSize
+$server = Invoke-RestMethod `
+    "http://127.0.0.1:5000/api/get_cached_songs"
 
-id           title   singer has_audio_cache has_lyrics_cache
---           -----   ------ --------------- ----------------
-RLCRTT2RFR3M Phố Hoa Cẩm Ly            True             True
+$drive = Invoke-RestMethod `
+    "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
 
+function SongKey($s) {
+    $parts = @(
+        ([string]$s.source).Trim()
+        ([string]$s.id).Trim()
+        ([string]$s.title).Trim()
+        ([string]$s.singer).Trim()
+    )
+    return ($parts -join "|").Normalize(
+        [Text.NormalizationForm]::FormC
+    ).ToLowerInvariant()
+}
 
-PS C:\Users\Administrator> $urls = @{
->>     "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
->>     "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
->> }
->>
->> foreach ($name in $urls.Keys) {
->>     $d = Invoke-RestMethod -Uri $urls[$name] -TimeoutSec 120
->>     $songs = @($d.songs)
->>
->>     Write-Host "`n===== $name =====" -ForegroundColor Cyan
->>     Write-Host "TOTAL SONGS: $($songs.Count)"
->>
->>     $songs |
->>         Where-Object { $_.title -like "*Phố Hoa*" } |
->>         Select-Object id,title,singer |
->>         Format-Table -AutoSize
->> }
+$serverSongs = @($server.songs)
+$driveSongs = @($drive.songs)
 
-===== SERVER =====
-TOTAL SONGS: 1819
+$serverKeys = @{}
+$driveKeys = @{}
 
-id           title   singer
---           -----   ------
-RLCRTT2RFR3M Phố Hoa Cẩm Ly
+foreach ($s in $serverSongs) {
+    $serverKeys[(SongKey $s)] = $true
+}
 
+foreach ($s in $driveSongs) {
+    $driveKeys[(SongKey $s)] = $true
+}
 
+$onlyServer = @($serverSongs | Where-Object {
+    -not $driveKeys.ContainsKey((SongKey $_))
+})
 
-===== DRIVE =====
-TOTAL SONGS: 1857
+$onlyDrive = @($driveSongs | Where-Object {
+    -not $serverKeys.ContainsKey((SongKey $_))
+})
 
-id           title   singer
---           -----   ------
-RLCRTT2RFR3M Phố Hoa Cẩm Ly
+Write-Host "`n===== DOI CHIEU BAI HAT =====" -ForegroundColor Cyan
+Write-Host "SERVER TOTAL: $($serverSongs.Count)"
+Write-Host "DRIVE TOTAL : $($driveSongs.Count)"
+Write-Host "CHI CO SERVER: $($onlyServer.Count)"
+Write-Host "CHI CO DRIVE : $($onlyDrive.Count)"
 
+Write-Host "`n===== CHI CO SERVER =====" -ForegroundColor Yellow
+$onlyServer |
+    Select-Object source,id,title,singer,has_audio_cache,has_lyrics_cache |
+    Format-Table -AutoSize
 
-PS C:\Users\Administrator>
+Write-Host "`n===== CHI CO DRIVE (30 BAI DAU) =====" -ForegroundColor Yellow
+$onlyDrive |
+    Select-Object -First 30 source,id,title,singer,has_audio_cache,has_lyrics_cache |
+    Format-Table -AutoSize
