@@ -1,96 +1,18 @@
-PS C:\Users\Administrator> $urls = @{
->>     "WINDOWS SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
->>     "GOOGLE DRIVE" = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
->> }
->>
->> foreach ($source in $urls.Keys) {
->>     $data = Invoke-RestMethod -Uri $urls[$source] -TimeoutSec 120
->>
->>     Write-Host "`n===== $source =====" -ForegroundColor Cyan
->>
->>     @($data.songs | Where-Object {
->>         $_.id -eq "BENRL6H8Y8KW" -or
->>         $_.title -like "*Phố Hoa*"
->>     }) |
->>         Select-Object id, title, singer, has_audio_cache, has_lyrics_cache |
->>         Format-List
->> }
->>
->> Write-Host "`n===== KIEM TRA JSON PHO HOA =====" -ForegroundColor Yellow
->>
->> $file = "C:\TunerTools\Audio\AI_Music\ZING_JSON\_Phố Hoa_Cẩm Ly.json"
->>
->> if (Test-Path -LiteralPath $file) {
->>     $j = Get-Content -LiteralPath $file -Raw -Encoding UTF8 |
->>         ConvertFrom-Json
->>
->>     Write-Host "Cac truong JSON:"
->>     $j.PSObject.Properties.Name
->>
->>     Write-Host "`nThong tin ma bai hat:"
->>     $j | Select-Object id, song_id, songId, encodeId, title, singer |
->>         Format-List
->> }
+$folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
 
-===== WINDOWS SERVER =====
+Get-ChildItem -LiteralPath $folder -Filter "*Phố Hoa*Cẩm Ly*.json" |
+    Select-Object Name, Length
 
 
-id               : BENRL6H8Y8KW
-title            :
-singer           : WORLD_SEVENTEEN
-has_audio_cache  : True
-has_lyrics_cache : True
+$bad = "C:\TunerTools\Audio\AI_Music\ZING_JSON\_Phố Hoa_Cẩm Ly.json"
 
-id               : RLCRTT2RFR3M
-title            : Phố Hoa
-singer           : Cẩm Ly
-has_audio_cache  : True
-has_lyrics_cache : True
-
-id               :
-title            : Phố Hoa
-singer           : Cẩm Ly
-has_audio_cache  : True
-has_lyrics_cache : True
+Rename-Item -LiteralPath $bad `
+    -NewName "_Phố Hoa_Cẩm Ly.json.bak"
 
 
+$s = Invoke-RestMethod `
+    -Uri "http://127.0.0.1:5000/api/get_cached_songs"
 
-
-===== GOOGLE DRIVE =====
-
-
-id               : RLCRTT2RFR3M
-title            : Phố Hoa
-singer           : Cẩm Ly
-has_audio_cache  : True
-has_lyrics_cache : True
-
-id               : BENRL6H8Y8KW
-title            : Zing BENRL6H8Y8KW
-singer           :
-has_audio_cache  : True
-has_lyrics_cache : False
-
-
-
-
-===== KIEM TRA JSON PHO HOA =====
-Cac truong JSON:
-err
-msg
-data
-timestamp
-
-Thong tin ma bai hat:
-
-
-id       :
-song_id  :
-songId   :
-encodeId :
-title    :
-singer   :
-
-
-
-PS C:\Users\Administrator>
+@($s.songs | Where-Object { $_.title -like "*Phố Hoa*" }) |
+    Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
+    Format-Table -AutoSize
