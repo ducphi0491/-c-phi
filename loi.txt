@@ -1,1 +1,45 @@
-BENRL6H8Y8KW
+$id = "BENRL6H8Y8KW"
+$folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
+
+Write-Host "`n===== FILE TREN WINDOWS =====" -ForegroundColor Cyan
+
+Get-ChildItem -LiteralPath $folder -File -Filter "$id*.json" |
+    Select-Object Name,Length | Format-Table -AutoSize
+
+Write-Host "`n===== FILE TREN GOOGLE DRIVE =====" -ForegroundColor Cyan
+
+foreach ($name in @(
+    "${id}__WORLD_SEVENTEEN.json",
+    "${id}_WORLD_SEVENTEEN.json"
+)) {
+    $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=lookup&kind=lyrics&filename=$([uri]::EscapeDataString($name))"
+
+    try {
+        $r = Invoke-RestMethod -Uri $url -TimeoutSec 60
+        Write-Host "$name -> FOUND=$($r.found)"
+    } catch {
+        Write-Host "ERROR: $($_.Exception.Message)"
+    }
+}
+
+$apis = @(
+    @{Name="PYTHON_LOCAL"; Url="http://127.0.0.1:5000/api/get_cached_songs"},
+    @{Name="PYTHON_PUBLIC"; Url="https://api.tunertools.top/api/get_cached_songs"},
+    @{Name="GOOGLE_DRIVE"; Url="https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"}
+)
+
+foreach ($api in $apis) {
+    Write-Host "`n===== $($api.Name) =====" -ForegroundColor Yellow
+
+    try {
+        $r = Invoke-RestMethod -Uri $api.Url -TimeoutSec 120
+
+        Write-Host "TOTAL: $(@($r.songs).Count)"
+
+        @($r.songs | Where-Object { $_.id -eq $id }) |
+            Select-Object id,title,singer,has_audio_cache,has_lyrics_cache |
+            Format-List
+    } catch {
+        Write-Host "ERROR: $($_.Exception.Message)"
+    }
+}
