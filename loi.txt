@@ -1,20 +1,8 @@
-Microsoft Windows [Version 10.0.17763.8389]
-(c) 2018 Microsoft Corporation. All rights reserved.
+$h = Invoke-RestMethod `
+  -Uri "https://tuner.alwaysdata.net/api_documents_drive.php?action=health" `
+  -TimeoutSec 30
 
-C:\Users\Administrator>find "$HOME" -maxdepth 6 -type f -name 'tt_documents_private.php*' -print
-File not found - 'tt_documents_private.php*'
-
-C:\Users\Administrator>ls -ld "$HOME/private"
-'ls' is not recognized as an internal or external command,
-operable program or batch file.
-
-C:\Users\Administrator>ls -l "$HOME/private/tt_documents_private.php"
-'ls' is not recognized as an internal or external command,
-operable program or batch file.
-
-C:\Users\Administrator>php -l "$HOME/private/tt_documents_private.php"
-'php' is not recognized as an internal or external command,
-operable program or batch file.
-
-C:\Users\Administrator>
-
+$h | Select-Object `
+  private_config_loaded, oauth_client_ready, `
+  oauth_session_ready, oauth_sync_ready, oauth_ready |
+  Format-List
