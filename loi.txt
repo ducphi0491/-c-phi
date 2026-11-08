@@ -12,3 +12,11 @@ $root = "C:\TunerTools\Audio\AI_Music"
 Get-ChildItem -LiteralPath $root -Directory |
     Where-Object { $_.Name -match "^ZING_(AUDIO|JSON)" } |
     Select-Object Name, FullName
+
+
+$script = "C:\TunerTools\Tools\AI_Repair_Missing\CHAY_DONG_BO_FILE_THIEU.ps1"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File $script
+
+
