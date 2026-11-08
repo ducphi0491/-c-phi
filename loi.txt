@@ -1,16 +1,108 @@
-$script = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
-$report = "C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit"
+indows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+PS C:\Users\Administrator> $urls = @{
+>>     "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
+>>     "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+>> }
+>>
+>> foreach ($name in $urls.Keys) {
+>>     $d = Invoke-RestMethod $urls[$name] -TimeoutSec 120
+>>
+>>     Write-Host "`n===== $name =====" -ForegroundColor Cyan
+>>
+>>     $d.songs |
+>>         Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
+>>         Select-Object id,title,singer,has_lyrics_cache |
+>>         Format-List
+>> }
 
-Write-Host "`n=== JSON THIEU TREN DRIVE ===" -ForegroundColor Yellow
+===== SERVER =====
 
-Import-Csv "$report\lyrics_missing_on_drive.csv" -Encoding UTF8 |
-    Where-Object { $_.filename -like "*BENRL6H8Y8KW*" } |
-    Format-List
 
-Write-Host "`n=== JSON CHI CO TREN DRIVE ===" -ForegroundColor Yellow
+id               : BENRL6H8Y8KW
+title            : WORLD
+singer           : SEVENTEEN
+has_lyrics_cache : True
 
-Import-Csv "$report\lyrics_only_on_drive.csv" -Encoding UTF8 |
-    Where-Object { $_.filename -like "*BENRL6H8Y8KW*" } |
-    Format-List
+
+
+
+===== DRIVE =====
+
+
+id               : BENRL6H8Y8KW
+title            : _WORLD
+singer           : SEVENTEEN
+has_lyrics_cache : True
+
+
+
+PS C:\Users\Administrator> $script = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
+>> $report = "C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+>>
+>> Write-Host "`n=== JSON THIEU TREN DRIVE ===" -ForegroundColor Yellow
+>>
+>> Import-Csv "$report\lyrics_missing_on_drive.csv" -Encoding UTF8 |
+>>     Where-Object { $_.filename -like "*BENRL6H8Y8KW*" } |
+>>     Format-List
+>>
+>> Write-Host "`n=== JSON CHI CO TREN DRIVE ===" -ForegroundColor Yellow
+>>
+>> Import-Csv "$report\lyrics_only_on_drive.csv" -Encoding UTF8 |
+>>     Where-Object { $_.filename -like "*BENRL6H8Y8KW*" } |
+>>     Format-List
+MODE: READ ONLY - NO DRIVE UPLOAD / DELETE / UPDATE
+LOCAL SOURCE: C:\TunerTools\Audio\AI_Music
+TOKEN FILE: Found (content never printed)
+Scanning Drive folders...
+Drive stream_cache entries: 1343
+Drive lyrics entries: 1820
+
+===========================================================================
+AUDIO
+  LOCAL: 1285 files / 1285 unique names
+  DRIVE: 1343 files / 1343 unique names
+  SAME FILENAMES: 1284
+  MISSING ON DRIVE: 1
+  ONLY ON DRIVE: 59
+  SIZE DIFFERENT: 0
+  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
+  EXAMPLE MISSING: ['zing_acapella_QGQK47AO9MIR.ogg']
+LYRICS JSON
+  LOCAL: 1820 files / 1820 unique names
+  DRIVE: 1820 files / 1820 unique names
+  SAME FILENAMES: 1818
+  MISSING ON DRIVE: 2
+  ONLY ON DRIVE: 2
+  SIZE DIFFERENT: 0
+  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
+  EXAMPLE MISSING: ['BENRL6H8Y8KW_WORLD_SEVENTEEN.json', 'QGQK47AO9MIR_Một Đêm Say_Thịnh Suy.json']
+WARNING: Unrecognized local audio filenames: 8
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit
+DETAILS: audio_missing_on_drive.csv and lyrics_missing_on_drive.csv
+NOTICE: A matched filename + file size is not a content hash verification.
+NOTICE: This compares live Drive API files, not the 600-second Alwaysdata catalog cache.
+
+=== JSON THIEU TREN DRIVE ===
+
+
+filename   : BENRL6H8Y8KW_WORLD_SEVENTEEN.json
+local_path : C:\TunerTools\Audio\AI_Music\ZING_JSON\BENRL6H8Y8KW_WORLD_SEVENTEEN.json
+size_bytes : 17029
+
+
+
+
+=== JSON CHI CO TREN DRIVE ===
+
+
+filename   : BENRL6H8Y8KW__WORLD_SEVENTEEN.json
+drive_id   : 1jwxTdrq9CTHLL8t2Wb-01GgGjr338OKR
+size_bytes : 17029
+
+
+
+PS C:\Users\Administrator>
