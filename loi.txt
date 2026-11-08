@@ -1,16 +1,1 @@
-=============================================
- TUNERTOOLS - AI MUSIC -> GOOGLE DRIVE
-=============================================
-Drive chi dung 2 folder: stream_cache + lyrics
-Upload file moi, khong xoa/ghi de Drive.
-
-LICH: DANG BAT (moi 1 gio); Status=Ready
-LAN CHAY TIEP: 2026-11-08 17:40:40
-
-  1. CHAY THU CONG NGAY (upload file con thieu)
-  2. CHAY THEO THOI GIAN (1/2/6/12 gio)
-  0. THOAT
-
-Chon:
-
-
+C:\TunerTools\Audio\AI_Music
