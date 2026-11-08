@@ -1,41 +1,16 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+$script = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
+$report = "C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit"
 
-PS C:\Users\Administrator> $urls = @{
->>     "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
->>     "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
->> }
->>
->> foreach ($name in $urls.Keys) {
->>     $d = Invoke-RestMethod $urls[$name] -TimeoutSec 120
->>
->>     Write-Host "`n===== $name =====" -ForegroundColor Cyan
->>
->>     $d.songs |
->>         Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
->>         Select-Object id,title,singer,has_lyrics_cache |
->>         Format-List
->> }
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
 
-===== SERVER =====
+Write-Host "`n=== JSON THIEU TREN DRIVE ===" -ForegroundColor Yellow
 
+Import-Csv "$report\lyrics_missing_on_drive.csv" -Encoding UTF8 |
+    Where-Object { $_.filename -like "*BENRL6H8Y8KW*" } |
+    Format-List
 
-id               : BENRL6H8Y8KW
-title            : WORLD
-singer           : SEVENTEEN
-has_lyrics_cache : True
+Write-Host "`n=== JSON CHI CO TREN DRIVE ===" -ForegroundColor Yellow
 
-
-
-
-===== DRIVE =====
-
-
-id               : BENRL6H8Y8KW
-title            : _WORLD
-singer           : SEVENTEEN
-has_lyrics_cache : True
-
-
-
-PS C:\Users\Administrator>
+Import-Csv "$report\lyrics_only_on_drive.csv" -Encoding UTF8 |
+    Where-Object { $_.filename -like "*BENRL6H8Y8KW*" } |
+    Format-List
