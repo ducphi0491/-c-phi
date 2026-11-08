@@ -1,55 +1,76 @@
-$folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
-$url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-$d = Invoke-RestMethod -Uri $url -TimeoutSec 120
-$files = @(Get-ChildItem -LiteralPath $folder -File -Filter "*.json")
+PS C:\Users\Administrator> $folder = "C:\TunerTools\Audio\AI_Music\ZING_JSON"
+>> $url = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+>>
+>> $d = Invoke-RestMethod -Uri $url -TimeoutSec 120
+>> $files = @(Get-ChildItem -LiteralPath $folder -File -Filter "*.json")
+>>
+>> $keys = @{}
+>>
+>> foreach ($s in @($d.songs | Where-Object {
+>>     $_.source -eq "zing" -and $_.has_lyrics_cache -eq $true
+>> })) {
+>>     $key = ("{0}|{1}|{2}" -f $s.id,$s.title,$s.singer).
+>>         Normalize([Text.NormalizationForm]::FormC).
+>>         ToLowerInvariant()
+>>     $keys[$key] = $true
+>> }
+>>
+>> $issues = @(foreach ($f in $files) {
+>>     if ($f.Length -le 0 -or $f.Length -gt 2097152) {
+>>         [PSCustomObject]@{
+>>             File=$f.Name
+>>             Reason="JSON size outside PHP limit"
+>>         }
+>>     }
+>>     elseif ($f.BaseName -match "^([A-Za-z0-9]{6,64})_([^_]+)_(.+)$") {
+>>         $id=$Matches[1]
+>>         $title=$Matches[2].Replace("_"," ").Trim()
+>>         $singer=$Matches[3].Replace("_"," ").Trim()
+>>
+>>         $key=("{0}|{1}|{2}" -f $id,$title,$singer).
+>>             Normalize([Text.NormalizationForm]::FormC).
+>>             ToLowerInvariant()
+>>
+>>         if (-not $keys.ContainsKey($key)) {
+>>             [PSCustomObject]@{
+>>                 File=$f.Name
+>>                 Reason="Not found in Drive song catalog"
+>>             }
+>>         }
+>>     }
+>>     elseif ($f.BaseName -notmatch "^[A-Za-z0-9]{6,64}$") {
+>>         [PSCustomObject]@{
+>>             File=$f.Name
+>>             Reason="Filename not recognized by PHP"
+>>         }
+>>     }
+>> })
+>>
+>> Write-Host "`n===== JSON CATALOG CHECK =====" -ForegroundColor Cyan
+>> Write-Host "LOCAL ZING JSON: $($files.Count)"
+>> Write-Host "DRIVE JSON ENTRIES: $($d.json_entries_scanned)"
+>> Write-Host "DRIVE CATALOG SONGS: $($d.count)"
+>> Write-Host "JSON SUSPECTED: $($issues.Count)"
+>>
+>> $issues | Format-List File,Reason
 
-$keys = @{}
+===== JSON CATALOG CHECK =====
+LOCAL ZING JSON: 1819
+DRIVE JSON ENTRIES: 1820
+DRIVE CATALOG SONGS: 1857
+JSON SUSPECTED: 2
 
-foreach ($s in @($d.songs | Where-Object {
-    $_.source -eq "zing" -and $_.has_lyrics_cache -eq $true
-})) {
-    $key = ("{0}|{1}|{2}" -f $s.id,$s.title,$s.singer).
-        Normalize([Text.NormalizationForm]::FormC).
-        ToLowerInvariant()
-    $keys[$key] = $true
-}
 
-$issues = @(foreach ($f in $files) {
-    if ($f.Length -le 0 -or $f.Length -gt 2097152) {
-        [PSCustomObject]@{
-            File=$f.Name
-            Reason="JSON size outside PHP limit"
-        }
-    }
-    elseif ($f.BaseName -match "^([A-Za-z0-9]{6,64})_([^_]+)_(.+)$") {
-        $id=$Matches[1]
-        $title=$Matches[2].Replace("_"," ").Trim()
-        $singer=$Matches[3].Replace("_"," ").Trim()
+File   : BENRL6H8Y8KW__WORLD_SEVENTEEN.json
+Reason : Filename not recognized by PHP
 
-        $key=("{0}|{1}|{2}" -f $id,$title,$singer).
-            Normalize([Text.NormalizationForm]::FormC).
-            ToLowerInvariant()
+File   : _Phố Hoa_Cẩm Ly.json
+Reason : Filename not recognized by PHP
 
-        if (-not $keys.ContainsKey($key)) {
-            [PSCustomObject]@{
-                File=$f.Name
-                Reason="Not found in Drive song catalog"
-            }
-        }
-    }
-    elseif ($f.BaseName -notmatch "^[A-Za-z0-9]{6,64}$") {
-        [PSCustomObject]@{
-            File=$f.Name
-            Reason="Filename not recognized by PHP"
-        }
-    }
-})
 
-Write-Host "`n===== JSON CATALOG CHECK =====" -ForegroundColor Cyan
-Write-Host "LOCAL ZING JSON: $($files.Count)"
-Write-Host "DRIVE JSON ENTRIES: $($d.json_entries_scanned)"
-Write-Host "DRIVE CATALOG SONGS: $($d.count)"
-Write-Host "JSON SUSPECTED: $($issues.Count)"
 
-$issues | Format-List File,Reason
+PS C:\Users\Administrator>
+
