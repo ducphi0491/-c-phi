@@ -1,26 +1,15 @@
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+cd C:\TunerTools\Tools\Documents_DrivePrimary
+.\02_KIEM_TRA_ALWAYS_DATA.ps1
 
-PS C:\Users\Administrator> cd C:\TunerTools\Tools\Documents_DrivePrimary
->>
->> .\01_TAO_KHOA_BAO_MAT.ps1
-Store these values only in your private server environment settings.
-DO NOT send them in a message or upload them to Drive.
 
-TUNERTOOLS_DOCUMENT_SESSION_SECRET=b9OEZUL+ZdIrctTBaW5ZvMXaT2weLJkVW64TLe/vhxzGfvNbR5qygf4aCmXgvBjc
-TUNERTOOLS_DOCUMENT_SYNC_SHARED_SECRET=Rn4Mlw4iyAbe2pe7NzIYEDuGZUE0vQRoWXKypzMp55neVWPG8CVzNkLa1EbMjMW9
-PS C:\TunerTools\Tools\Documents_DrivePrimary>
->> .\02_KIEM_TRA_ALWAYS_DATA.ps1\
-.\02_KIEM_TRA_ALWAYS_DATA.ps1\ : The term '.\02_KIEM_TRA_ALWAYS_DATA.ps1\' is not recognized as the name of a cmdlet,
-function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the
-path is correct and try again.
-At line:2 char:1
-+ .\02_KIEM_TRA_ALWAYS_DATA.ps1\
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : ObjectNotFound: (.\02_KIEM_TRA_ALWAYS_DATA.ps1\:String) [], CommandNotFoundException
-    + FullyQualifiedErrorId : CommandNotFoundException
+cd C:\TunerTools\Tools\Documents_DrivePrimary\IIS_Patch
 
-PS C:\TunerTools\Tools\Documents_DrivePrimary>
->> python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
-C:\Program Files\Python311\python.exe: can't open file 'C:\\TunerTools\\Tools\\Documents_DrivePrimary\\PATCH_API_DOCUMENTS.py': [Errno 2] No such file or directory
-PS C:\TunerTools\Tools\Documents_DrivePrimary>
+python .\PATCH_API_DOCUMENTS.py --source "C:\TunerTools\Web\API\api_documents.php" --install
+
+
+
+$root = "C:\TunerTools\Tools\Documents_DrivePrimary"
+
+Test-Path "$root\02_KIEM_TRA_ALWAYS_DATA.ps1"
+Test-Path "$root\IIS_Patch\PATCH_API_DOCUMENTS.py"
+Test-Path "$root\IIS_Patch\iis_helpers.php.fragment"
