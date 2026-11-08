@@ -1,53 +1,17 @@
-$script = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
-$reportDir = "C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit"
+$zip = "$env:USERPROFILE\Downloads\TunerTools_AI_Drive_Audit_CONSOLE_20261108.zip"
+$dest = "C:\TunerTools\Tools\AI_Drive_Audit"
 
-if (!(Test-Path $script)) {
-    throw "Khong tim thay script: $script"
+if (!(Test-Path $zip)) {
+    throw "Khong tim thay file ZIP trong Downloads"
 }
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+New-Item -ItemType Directory -Force -Path $dest |
+    Out-Null
 
-if ($LASTEXITCODE -notin @(0, 2)) {
-    throw "Kiem tra Drive that bai"
-}
+Expand-Archive -LiteralPath $zip `
+    -DestinationPath $dest -Force
 
-$summary = Get-Content `
-    (Join-Path $reportDir "SUMMARY.json") `
-    -Raw -Encoding UTF8 | ConvertFrom-Json
+$script = Join-Path $dest "CHAY_VA_HIEN_KET_QUA.ps1"
 
-Write-Host "`n========== TONG HOP DOI CHIEU ==========" -ForegroundColor Cyan
-
-foreach ($type in @("audio", "lyrics")) {
-    $x = $summary.$type
-
-    Write-Host "`n===== $($type.ToUpper()) =====" -ForegroundColor Yellow
-
-    [PSCustomObject]@{
-        LocalFiles     = $x.local_file_count
-        DriveFiles     = $x.drive_file_count
-        SameNames      = $x.same_filename
-        MissingOnDrive = $x.missing_on_drive
-        OnlyOnDrive    = $x.only_on_drive
-        DifferentSize  = $x.size_different
-        DuplicateLocal = $x.duplicate_local_filenames
-        DuplicateDrive = $x.duplicate_drive_filenames
-    } | Format-List
-
-    $csv = Join-Path $reportDir ($type + "_missing_on_drive.csv")
-
-    Write-Host "20 FILE THIEU TREN DRIVE DAU TIEN:" -ForegroundColor Yellow
-
-    Import-Csv $csv -Encoding UTF8 |
-        Select-Object -First 20 -ExpandProperty filename
-}
-
-Write-Host "`nLOCAL FOLDERS COMPLETE: $($summary.local_folders_complete)"
-
-if (-not $summary.local_folders_complete) {
-    Write-Warning (
-        "Thieu thu muc nguon: " +
-        ($summary.local_scan.folders_missing -join ", ")
-    )
-}
-
-Write-Host "`nHOAN TAT - COPY KET QUA GUI CHATGPT" -ForegroundColor Green
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File $script
