@@ -1,15 +1,41 @@
-$urls = @{
-    "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
-    "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
-}
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-foreach ($name in $urls.Keys) {
-    $d = Invoke-RestMethod $urls[$name] -TimeoutSec 120
+PS C:\Users\Administrator> $urls = @{
+>>     "SERVER" = "http://127.0.0.1:5000/api/get_cached_songs"
+>>     "DRIVE"  = "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs"
+>> }
+>>
+>> foreach ($name in $urls.Keys) {
+>>     $d = Invoke-RestMethod $urls[$name] -TimeoutSec 120
+>>
+>>     Write-Host "`n===== $name =====" -ForegroundColor Cyan
+>>
+>>     $d.songs |
+>>         Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
+>>         Select-Object id,title,singer,has_lyrics_cache |
+>>         Format-List
+>> }
 
-    Write-Host "`n===== $name =====" -ForegroundColor Cyan
+===== SERVER =====
 
-    $d.songs |
-        Where-Object { $_.id -eq "BENRL6H8Y8KW" } |
-        Select-Object id,title,singer,has_lyrics_cache |
-        Format-List
-}
+
+id               : BENRL6H8Y8KW
+title            : WORLD
+singer           : SEVENTEEN
+has_lyrics_cache : True
+
+
+
+
+===== DRIVE =====
+
+
+id               : BENRL6H8Y8KW
+title            : _WORLD
+singer           : SEVENTEEN
+has_lyrics_cache : True
+
+
+
+PS C:\Users\Administrator>
