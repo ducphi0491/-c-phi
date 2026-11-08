@@ -1,41 +1,101 @@
-$root = "C:\TunerTools\Audio\AI_Music"
-$audit = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
-$report = Join-Path $root "Reports\Drive_Audit"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $audit
-if ($LASTEXITCODE -ne 0) { throw "Audit failed" }
+PS C:\Users\Administrator> $root = "C:\TunerTools\Audio\AI_Music"
+>> $audit = "C:\TunerTools\Tools\AI_Drive_Audit\CHAY_DOI_CHIEU_AI_DRIVE.ps1"
+>> $report = Join-Path $root "Reports\Drive_Audit"
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass -File $audit
+>> if ($LASTEXITCODE -ne 0) { throw "Audit failed" }
+>>
+>> $s = Get-Content (Join-Path $report "SUMMARY.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+>> $z = @(Get-ChildItem (Join-Path $root "ZING_JSON") -File -Filter "*.json")
+>> $yt = @(Get-ChildItem (Join-Path $root "YOUTUBE_CACHE") -File -Filter "*.json" | Where-Object { $_.Name -match "^(lyrics_|meta_)" })
+>>
+>> Write-Host "`n===== SO SANH FILE JSON THUC TE =====" -ForegroundColor Cyan
+>> Write-Host "SERVER ZING JSON : $($z.Count)"
+>> Write-Host "SERVER YOUTUBE JSON : $($yt.Count)"
+>> Write-Host "SERVER JSON VALID : $($s.lyrics.local_file_count)"
+>> Write-Host "DRIVE JSON : $($s.lyrics.drive_file_count)"
+>> Write-Host "SAME FILENAMES : $($s.lyrics.same_filename)"
+>> Write-Host "MISSING ON DRIVE : $($s.lyrics.missing_on_drive)"
+>> Write-Host "ONLY ON DRIVE : $($s.lyrics.only_on_drive)"
+>> Write-Host "DIFFERENT SIZE : $($s.lyrics.size_different)"
+>>
+>> Write-Host "`n===== FILE CHI CO TREN SERVER =====" -ForegroundColor Yellow
+>> Import-Csv (Join-Path $report "lyrics_missing_on_drive.csv") -Encoding UTF8 | Select-Object -ExpandProperty filename
+>> Write-Host "`n===== FILE CHI CO TREN DRIVE =====" -ForegroundColor Yellow
+>> Import-Csv (Join-Path $report "lyrics_only_on_drive.csv") -Encoding UTF8 | Select-Object -ExpandProperty filename
+>>
+>> $p = Invoke-RestMethod "http://127.0.0.1:5000/api/get_cached_songs" -TimeoutSec 120
+>> $d = Invoke-RestMethod "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" -TimeoutSec 120
+>> $driveWithLyrics = @{}
+>> foreach ($item in @($d.songs)) {
+>>     if ($item.has_lyrics_cache -eq $true) {
+>>         $driveWithLyrics["$($item.source)|$($item.id)"] = $true
+>>     }
+>> }
+>> $unmatched = @($p.songs | Where-Object {
+>>     $_.has_lyrics_cache -eq $true -and
+>>     -not $driveWithLyrics.ContainsKey("$($_.source)|$($_.id)")
+>> })
+>> Write-Host "`n===== SERVER CO LOI, DRIVE KHONG NHAN DIEN =====" -ForegroundColor Cyan
+>> Write-Host "COUNT: $($unmatched.Count)"
+>> $unmatched | Select-Object source,id,title,singer,has_lyrics_cache | Format-Table -AutoSize
+MODE: READ ONLY - NO DRIVE UPLOAD / DELETE / UPDATE
+LOCAL SOURCE: C:\TunerTools\Audio\AI_Music
+TOKEN FILE: Found (content never printed)
+Scanning Drive folders...
+Drive stream_cache entries: 1343
+Drive lyrics entries: 1820
 
-$s = Get-Content (Join-Path $report "SUMMARY.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-$z = @(Get-ChildItem (Join-Path $root "ZING_JSON") -File -Filter "*.json")
-$yt = @(Get-ChildItem (Join-Path $root "YOUTUBE_CACHE") -File -Filter "*.json" | Where-Object { $_.Name -match "^(lyrics_|meta_)" })
+===========================================================================
+AUDIO
+  LOCAL: 1284 files / 1284 unique names
+  DRIVE: 1343 files / 1343 unique names
+  SAME FILENAMES: 1284
+  MISSING ON DRIVE: 0
+  ONLY ON DRIVE: 59
+  SIZE DIFFERENT: 0
+  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
+  EXAMPLE MISSING: []
+LYRICS JSON
+  LOCAL: 1819 files / 1819 unique names
+  DRIVE: 1820 files / 1820 unique names
+  SAME FILENAMES: 1819
+  MISSING ON DRIVE: 0
+  ONLY ON DRIVE: 1
+  SIZE DIFFERENT: 0
+  DUPLICATE NAMES (LOCAL / DRIVE): 0 / 0
+  EXAMPLE MISSING: []
+WARNING: Unrecognized local audio filenames: 8
+REPORT: C:\TunerTools\Audio\AI_Music\Reports\Drive_Audit
+DETAILS: audio_missing_on_drive.csv and lyrics_missing_on_drive.csv
+NOTICE: A matched filename + file size is not a content hash verification.
+NOTICE: This compares live Drive API files, not the 600-second Alwaysdata catalog cache.
 
-Write-Host "`n===== SO SANH FILE JSON THUC TE =====" -ForegroundColor Cyan
-Write-Host "SERVER ZING JSON : $($z.Count)"
-Write-Host "SERVER YOUTUBE JSON : $($yt.Count)"
-Write-Host "SERVER JSON VALID : $($s.lyrics.local_file_count)"
-Write-Host "DRIVE JSON : $($s.lyrics.drive_file_count)"
-Write-Host "SAME FILENAMES : $($s.lyrics.same_filename)"
-Write-Host "MISSING ON DRIVE : $($s.lyrics.missing_on_drive)"
-Write-Host "ONLY ON DRIVE : $($s.lyrics.only_on_drive)"
-Write-Host "DIFFERENT SIZE : $($s.lyrics.size_different)"
+===== SO SANH FILE JSON THUC TE =====
+SERVER ZING JSON : 1818
+SERVER YOUTUBE JSON : 1
+SERVER JSON VALID : 1819
+DRIVE JSON : 1820
+SAME FILENAMES : 1819
+MISSING ON DRIVE : 0
+ONLY ON DRIVE : 1
+DIFFERENT SIZE : 0
 
-Write-Host "`n===== FILE CHI CO TREN SERVER =====" -ForegroundColor Yellow
-Import-Csv (Join-Path $report "lyrics_missing_on_drive.csv") -Encoding UTF8 | Select-Object -ExpandProperty filename
-Write-Host "`n===== FILE CHI CO TREN DRIVE =====" -ForegroundColor Yellow
-Import-Csv (Join-Path $report "lyrics_only_on_drive.csv") -Encoding UTF8 | Select-Object -ExpandProperty filename
+===== FILE CHI CO TREN SERVER =====
 
-$p = Invoke-RestMethod "http://127.0.0.1:5000/api/get_cached_songs" -TimeoutSec 120
-$d = Invoke-RestMethod "https://tuner.alwaysdata.net/api_ai_media_drive.php?action=cached_songs" -TimeoutSec 120
-$driveWithLyrics = @{}
-foreach ($item in @($d.songs)) {
-    if ($item.has_lyrics_cache -eq $true) {
-        $driveWithLyrics["$($item.source)|$($item.id)"] = $true
-    }
-}
-$unmatched = @($p.songs | Where-Object {
-    $_.has_lyrics_cache -eq $true -and
-    -not $driveWithLyrics.ContainsKey("$($_.source)|$($_.id)")
-})
-Write-Host "`n===== SERVER CO LOI, DRIVE KHONG NHAN DIEN =====" -ForegroundColor Cyan
-Write-Host "COUNT: $($unmatched.Count)"
-$unmatched | Select-Object source,id,title,singer,has_lyrics_cache | Format-Table -AutoSize
+===== FILE CHI CO TREN DRIVE =====
+_Phố Hoa_Cẩm Ly.json
+
+===== SERVER CO LOI, DRIVE KHONG NHAN DIEN =====
+COUNT: 1
+
+source id           title singer          has_lyrics_cache
+------ --           ----- ------          ----------------
+zing   BENRL6H8Y8KW       WORLD_SEVENTEEN             True
+
+
+PS C:\Users\Administrator>
+
