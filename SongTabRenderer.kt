@@ -2272,7 +2272,7 @@ internal fun getAlphaTabHtml(
                     return true;
                 }
 
-                // Tránh hiển thị lỗi giải mã ký tự như "V?ng Tr?ng Kh�c".
+                // Tránh hiển thị lỗi giải mã ký tự như "V?ng Tr?ng Kh c".
                 // Dấu ? NẰM GIỮA chữ và ký tự thay thế U+FFFD là dấu hiệu hỏng dữ liệu,
                 // khác với dấu hỏi thông thường ở cuối một câu/tên bài hát.
                 function isUsableScoreTitle(raw) {
@@ -5972,6 +5972,13 @@ internal fun getAlphaTabHtml(
                 var pianoPendingToken = 0;
                 var pianoKeyboardBase = 48; // C3..B4; move only when necessary.
                 var pianoScoreMessage = '';
+                // Piano mode keeps the imported GP notes/rhythm, but temporarily changes
+                // the selected track's MIDI instrument to General MIDI program 0
+                // (Acoustic Grand Piano). The original program/bank and every instrument
+                // automation are restored when Piano mode closes.
+                var pianoInstrumentOverride = null;
+                var pianoMidiReloadRestoreTick = null;
+                var pianoMidiReloadResume = false;
                 // Piano left-hand arranger. Preserve the imported GP file and the original player.
                 // The arranger only adds derived notation/events when harmony is unambiguous.
                 var pianoAccompStyle = 'original';
@@ -6684,6 +6691,266 @@ internal fun getAlphaTabHtml(
                         return false;
                     }
                 }
+                // [Piano SF3 Diagnostic] All instrumentation here is in-memory only.
+                // The imported GP score is NEVER re-saved or exported with these changes.
+                var pianoMidiDiagnostic = null;
+                var pianoSf3LastCheck = null;
+                function pianoAudioReport(stage, details) {
+                    var entry = {
+                        stage: String(stage || 'unknown'),
+                        piano: !!pianoEnabled,
+                        soundfont: String(activeSoundFontMode || pendingSoundFontMode || 'uninitialized'),
+                        trackIndex: Number(selectedTrackForPlayback) || 0,
+                        playerReady: !!(api && api.isReadyForPlayback),
+                        soundfontLoading: !!isSoundFontLoading,
+                        data: details || {}
+                    };
+                    try {
+                        var serialized = JSON.stringify(entry);
+                        console.info('[TunerToolsPianoAudio] ' + serialized);
+                        if (window.AndroidInterface &&
+                            typeof AndroidInterface.onPianoAudioDiagnostic === 'function') {
+                            AndroidInterface.onPianoAudioDiagnostic(serialized);
+                        }
+                    } catch (_) {}
+                }
+                function pianoAnalyzeGeneratedMidi(file) {
+                    // This callback runs BEFORE the synth receives MIDI.
+                    // It records the real channels, presets and NoteOn events.
+                    if (!file || !file.events) return;
+                    var track = pianoSourceTrack();
+                    var info = track && track.playbackInfo || null;
+                    var primary = Number(info && info.primaryChannel);
+                    var secondary = Number(info && info.secondaryChannel);
+                    var selectIndex = Number(selectedTrackForPlayback) || 0;
+                    var validChannels = [];
+                    if (Number.isInteger(primary) && primary >= 0 && primary <= 15)
+                        validChannels.push(primary);
+                    if (Number.isInteger(secondary) && secondary >= 0 && secondary <= 15 &&
+                        validChannels.indexOf(secondary) < 0) validChannels.push(secondary);
+                    var events = file.events;
+                    var len = Math.min(Number(events.length) || 0, 150000);
+                    var noteOns = 0, selectedNoteOns = 0, firstNoteTick = null;
+                    var programs = [], channels = [], bankChanges = [], correctedPrograms = 0;
+                    var correctedBanks = 0;
+                    for (var i = 0; i < len; i++) {
+                        var event = events[i];
+                        if (!event) continue;
+                        var midiTrack = Number(event.track);
+                        var channel = Number(event.channel);
+                        var trackMatch = Number.isFinite(midiTrack) && midiTrack === selectIndex;
+                        var channelMatch = validChannels.indexOf(channel) >= 0;
+                        var selected = trackMatch || channelMatch || currentTracks.length === 1;
+                        if (Number.isInteger(channel) && channel >= 0 && channel <= 15 &&
+                            channels.indexOf(channel) < 0) channels.push(channel);
+                        // NoteOn has writable noteKey/noteVelocity in alphaTab's MidiFile model.
+                        // A NoteOff or zero-velocity NoteOn is not an audible attack.
+                        var type = Number(event.type);
+                        var command = Number(event.command);
+                        var eventClass = event.constructor && event.constructor.name || '';
+                        var isNoteOn = (type === 0x90 || type === 9 || command === 0x90 ||
+                            String(event.type).toLowerCase() === 'noteon' ||
+                            eventClass === 'NoteOnEvent');
+                        if (event.noteKey !== undefined && Number(event.noteVelocity) > 0 &&
+                            isNoteOn) {
+                            noteOns++;
+                            if (selected) {
+                                selectedNoteOns++;
+                                var tick = Number(event.tick);
+                                if (Number.isFinite(tick) &&
+                                    (firstNoteTick === null || tick < firstNoteTick)) firstNoteTick = tick;
+                            }
+                        }
+                        if (event.program !== undefined && Number.isFinite(Number(event.program))) {
+                            if (programs.length < 12) programs.push({
+                                track: midiTrack, ch: channel, program: Number(event.program)
+                            });
+                            if (pianoEnabled && track && !track.isPercussion && selected &&
+                                channel !== 9 && Number(event.program) !== 0) {
+                                try { event.program = 0; correctedPrograms++; } catch (_) {}
+                            }
+                        }
+                        // Bank Select MSB/LSB: 0/32. Bank 0 is necessary for GM Piano.
+                        // Do not touch percussion channel 10 (index 9) or other tracks.
+                        var controller = Number(event.controller);
+                        if (controller === 0 || controller === 32) {
+                            if (bankChanges.length < 12) bankChanges.push({
+                                track: midiTrack, ch: channel,
+                                controller: controller, value: Number(event.value)
+                            });
+                            if (pianoEnabled && track && !track.isPercussion && selected &&
+                                channel !== 9 && Number(event.value) !== 0) {
+                                try { event.value = 0; correctedBanks++; } catch (_) {}
+                            }
+                        }
+                    }
+                    pianoMidiDiagnostic = {
+                        fileEvents: Number(events.length) || 0,
+                        inspectedEvents: len,
+                        noteOns: noteOns,
+                        selectedNoteOns: selectedNoteOns,
+                        firstNoteTick: firstNoteTick,
+                        channels: channels,
+                        selectedChannels: validChannels,
+                        requestedBank: info ? Number(info.bank) : null,
+                        requestedProgram: info ? Number(info.program) : null,
+                        isMuted: !!(info && info.isMute),
+                        volume: info ? Number(info.volume) : null,
+                        programsBeforeOverride: programs,
+                        bankChangesBeforeOverride: bankChanges,
+                        correctedPrograms: correctedPrograms,
+                        correctedBanks: correctedBanks
+                    };
+                    if (pianoEnabled || activeSoundFontMode === 'musescore_sf3') {
+                        pianoAudioReport('midi_load', pianoMidiDiagnostic);
+                    }
+                }
+                function pianoAutomationTypeNumber(value) {
+                    var numeric = Number(value);
+                    if (Number.isFinite(numeric)) return Math.round(numeric);
+                    var text = String(value == null ? '' : value).toLowerCase();
+                    return text.indexOf('instrument') >= 0 ? 2 : -1;
+                }
+
+                function pianoInstrumentAutomations(track) {
+                    var result = [];
+                    if (!track || !track.staves) return result;
+                    for (var staffIndex = 0; staffIndex < track.staves.length; staffIndex++) {
+                        var staff = track.staves[staffIndex];
+                        if (!staff || !staff.bars) continue;
+                        for (var barIndex = 0; barIndex < staff.bars.length; barIndex++) {
+                            var bar = staff.bars[barIndex];
+                            if (!bar || !bar.voices) continue;
+                            for (var voiceIndex = 0; voiceIndex < bar.voices.length; voiceIndex++) {
+                                var voice = bar.voices[voiceIndex];
+                                if (!voice || !voice.beats) continue;
+                                for (var beatIndex = 0; beatIndex < voice.beats.length; beatIndex++) {
+                                    var beat = voice.beats[beatIndex];
+                                    var automations = fretboardCollectionItems(beat && beat.automations);
+                                    for (var automationIndex = 0;
+                                         automationIndex < automations.length;
+                                         automationIndex++) {
+                                        var automation = automations[automationIndex];
+                                        if (!automation ||
+                                            pianoAutomationTypeNumber(automation.type) !== 2) continue;
+                                        if (result.indexOf(automation) < 0) result.push(automation);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return result;
+                }
+
+                function pianoReloadMidiPreservingPlayback() {
+                    if (!api || !api.score || typeof api.loadMidiForScore !== 'function') {
+                        return false;
+                    }
+                    var currentTick = Number(api.tickPosition);
+                    pianoMidiReloadRestoreTick = Number.isFinite(currentTick)
+                        ? Math.max(0, currentTick)
+                        : null;
+                    pianoMidiReloadResume = lastKnownPlayerState === 1;
+                    try {
+                        api.loadMidiForScore();
+                        return true;
+                    } catch (error) {
+                        pianoMidiReloadRestoreTick = null;
+                        pianoMidiReloadResume = false;
+                        console.warn('Could not rebuild MIDI after changing Piano instrument', error);
+                        return false;
+                    }
+                }
+
+                function pianoDiscardInstrumentOverride() {
+                    // A newly loaded score invalidates references to the previous score model.
+                    pianoInstrumentOverride = null;
+                    pianoMidiReloadRestoreTick = null;
+                    pianoMidiReloadResume = false;
+                    pianoMidiDiagnostic = null;
+                    pianoSf3LastCheck = null;
+                }
+
+                function pianoRestoreOriginalInstrument(reloadMidi) {
+                    var saved = pianoInstrumentOverride;
+                    if (!saved) return false;
+                    pianoInstrumentOverride = null;
+                    try {
+                        if (saved.track && saved.track.playbackInfo) {
+                            saved.track.playbackInfo.program = saved.program;
+                            saved.track.playbackInfo.bank = saved.bank;
+                        }
+                        for (var i = 0; i < saved.automations.length; i++) {
+                            var item = saved.automations[i];
+                            if (item && item.automation) item.automation.value = item.value;
+                        }
+                    } catch (error) {
+                        console.warn('Could not fully restore the original GP instrument', error);
+                    }
+                    if (reloadMidi) pianoReloadMidiPreservingPlayback();
+                    return true;
+                }
+
+                function pianoUseAcousticGrandPiano(track, reloadMidi) {
+                    if (!track || track.isPercussion || !track.playbackInfo) return false;
+                    if (pianoInstrumentOverride && pianoInstrumentOverride.track === track) {
+                        return false;
+                    }
+
+                    // Switching tracks while Piano mode is open must first restore the old track.
+                    if (pianoInstrumentOverride) pianoRestoreOriginalInstrument(false);
+
+                    var info = track.playbackInfo;
+                    var originalProgram = Number(info.program);
+                    var originalBank = Number(info.bank);
+                    if (!Number.isFinite(originalProgram)) originalProgram = 0;
+                    if (!Number.isFinite(originalBank)) originalBank = 0;
+
+                    var instrumentAutomations = pianoInstrumentAutomations(track);
+                    var savedAutomations = [];
+                    for (var i = 0; i < instrumentAutomations.length; i++) {
+                        savedAutomations.push({
+                            automation: instrumentAutomations[i],
+                            value: instrumentAutomations[i].value
+                        });
+                    }
+
+                    pianoInstrumentOverride = {
+                        track: track,
+                        program: originalProgram,
+                        bank: originalBank,
+                        automations: savedAutomations
+                    };
+
+                    try {
+                        // General MIDI bank 0, program 0 = Acoustic Grand Piano.
+                        info.bank = 0;
+                        info.program = 0;
+                        for (var automationIndex = 0;
+                             automationIndex < instrumentAutomations.length;
+                             automationIndex++) {
+                            // Prevent an in-song Program Change from switching back to Guitar.
+                            instrumentAutomations[automationIndex].value = 0;
+                        }
+                    } catch (error) {
+                        console.warn('Could not enable Acoustic Grand Piano playback', error);
+                        pianoRestoreOriginalInstrument(false);
+                        return false;
+                    }
+
+                    pianoAudioReport('force_piano_program', {
+                        originalBank: originalBank,
+                        originalProgram: originalProgram,
+                        bank: Number(info.bank),
+                        program: Number(info.program),
+                        primaryChannel: Number(info.primaryChannel),
+                        secondaryChannel: Number(info.secondaryChannel),
+                        instrumentAutomationCount: instrumentAutomations.length
+                    });
+                    if (reloadMidi) pianoReloadMidiPreservingPlayback();
+                    return true;
+                }
+
                 // The original GP source provides playback and, optionally, a visible TAB.
                 // The second AlphaTab instance renders the derived Grand Staff ONLY.
                 function pianoEnterMode(showScore, showTab) {
@@ -6758,6 +7025,11 @@ internal fun getAlphaTabHtml(
                         syncWebViewViewportBox(lastAndroidViewportWidth, lastAndroidViewportHeight);
                         return false;
                     }
+                    // Reuse the existing AlphaTab player and currently selected SoundFont,
+                    // but force the source GP track to the Piano preset while this mode is open.
+                    var pianoInstrumentChanged = pianoUseAcousticGrandPiano(track, false);
+                    if (pianoInstrumentChanged) pianoReloadMidiPreservingPlayback();
+
                     pianoDrawKeyboard();
                     pianoAccompStyleInfo();
                     var staff = track.staves && track.staves[0];
@@ -6780,6 +7052,7 @@ internal fun getAlphaTabHtml(
                 }
                 function pianoLeaveMode() {
                     if (!pianoEnabled) return;
+                    var pianoInstrumentRestored = pianoRestoreOriginalInstrument(false);
                     pianoEnabled = false;
                     pianoAccompResetAudio();
                     pianoCloseAccompChooser(false);
@@ -6793,6 +7066,7 @@ internal fun getAlphaTabHtml(
                     if (cursor) cursor.style.display = 'none';
                     syncWebViewViewportBox(lastAndroidViewportWidth, lastAndroidViewportHeight);
                     pianoSetHeader();
+                    if (pianoInstrumentRestored) pianoReloadMidiPreservingPlayback();
                 }
                 function pianoGroupForBeat(beat) {
                     if (!beat) return {left:[],right:[]};
@@ -7197,15 +7471,33 @@ internal fun getAlphaTabHtml(
 
                 async function verifySelectedSoundFontProducesAudio() {
                     if (!api || !api.score || activeSoundFontMode === 'standard') return true;
-                    if (typeof api.exportAudio !== 'function') return true;
+                    if (typeof api.exportAudio !== 'function') {
+                        pianoAudioReport('export_unavailable', {});
+                        return true;
+                    }
 
                     var noteRange = selectedTrackNoteRange();
-                    // Track khong co not la van de noi dung/track, khong phai loi SoundFont.
-                    if (!noteRange) return true;
+                    // Track không có nốt, bị mute, hoặc volume=0: không đổ lỗi cho SoundFont.
+                    if (!noteRange) {
+                        pianoAudioReport('no_playable_notes_in_track', {
+                            midi: pianoMidiDiagnostic
+                        });
+                        return true;
+                    }
+                    if (pianoEnabled && activeSoundFontMode === 'musescore_sf3' &&
+                        (!pianoMidiDiagnostic || pianoMidiDiagnostic.selectedNoteOns <= 0)) {
+                        // Without MIDI NoteOn evidence the offline exporter can't prove
+                        // SoundFont incompatibility. Play normally, but record this condition.
+                        pianoAudioReport('midi_noteon_not_verified', {
+                            midi: pianoMidiDiagnostic, noteRange: noteRange
+                        });
+                        return true;
+                    }
 
                     var cacheKey = [
                         soundFontCompatibilityScoreGeneration,
                         selectedTrackForPlayback,
+                        pianoEnabled ? 'piano' : 'guitar',
                         activeSoundFontMode
                     ].join('|');
                     if (Object.prototype.hasOwnProperty.call(soundFontCompatibilityCache, cacheKey)) {
@@ -7216,8 +7508,19 @@ internal fun getAlphaTabHtml(
                     soundFontCompatibilityCheckInProgress = true;
                     AndroidInterface.onSoundFontCompatibilityCheckChanged(true);
                     var exporter = null;
+                    var totalChunks = 0;
+                    var renderedSamples = 0;
+                    var maxPeak = 0;
+                    var renderTicks = [];
+                    pianoAudioReport('export_start', {
+                        noteRange: noteRange,
+                        midiSelectedNoteOns: pianoMidiDiagnostic && pianoMidiDiagnostic.selectedNoteOns
+                    });
 
                     try {
+                        // Only called while stopped/paused, immediately before pressing Play.
+                        // Export is best-effort evidence from a separate offline synthesizer,
+                        // not direct capture from device speakers.
                         api.stop();
                         var options = new alphaTab.synth.AudioExportOptions();
                         options.sampleRate = 22050;
@@ -7244,7 +7547,15 @@ internal fun getAlphaTabHtml(
                             if (checkToken !== soundFontCompatibilityCheckToken) return true;
                             var chunk = await exporter.render(400);
                             if (!chunk) break;
-                            if (containsAudibleSamples(chunk.samples)) {
+                            totalChunks++;
+                            var samples = chunk.samples || [];
+                            renderedSamples += Number(samples.length) || 0;
+                            for (var sampleIndex = 0; sampleIndex < samples.length; sampleIndex++) {
+                                var amplitude = Math.abs(Number(samples[sampleIndex]) || 0);
+                                if (amplitude > maxPeak) maxPeak = amplitude;
+                            }
+                            if (renderTicks.length < 6) renderTicks.push(Number(chunk.currentTick));
+                            if (containsAudibleSamples(samples)) {
                                 audible = true;
                                 break;
                             }
@@ -7256,13 +7567,32 @@ internal fun getAlphaTabHtml(
                             }
                         }
 
+                        pianoSf3LastCheck = {
+                            audible: audible,
+                            chunks: totalChunks,
+                            renderedSamples: renderedSamples,
+                            peak: maxPeak,
+                            ticks: renderTicks,
+                            midiNotes: pianoMidiDiagnostic && pianoMidiDiagnostic.selectedNoteOns
+                        };
+                        pianoAudioReport(audible ? 'export_audible' : 'export_silent',
+                            pianoSf3LastCheck);
                         if (checkToken === soundFontCompatibilityCheckToken) {
-                            soundFontCompatibilityCache[cacheKey] = audible;
+                            // Do not cache unsupported/empty renders as a SoundFont failure.
+                            var sufficientEvidence = renderedSamples > 1024 && totalChunks >= 2;
+                            if (audible || sufficientEvidence) {
+                                soundFontCompatibilityCache[cacheKey] = audible;
+                            }
                         }
+                        // An empty offline export is not evidence of silent live sound.
+                        if (!audible && (totalChunks < 2 || renderedSamples <= 1024)) return true;
                         return audible;
                     } catch (error) {
-                        // Neu WebView/alphaTab khong ho tro exportAudio, khong duoc fallback nham.
+                        // WebView/AlphaTab offline exporter may not be available.
                         console.warn('SoundFont compatibility check skipped', error);
+                        pianoAudioReport('export_failed', {
+                            message: String(error && error.message || error)
+                        });
                         soundFontCompatibilityCache[cacheKey] = true;
                         return true;
                     } finally {
@@ -7742,6 +8072,10 @@ internal fun getAlphaTabHtml(
                             activeSoundFontMode,
                             wasTemporaryFallback
                         );
+                        pianoAudioReport('soundfont_loaded', {
+                            temporaryFallback: !!wasTemporaryFallback,
+                            mode: activeSoundFontMode
+                        });
 
                         // Doi SoundFont trong luc score dang mo phai tao lai MIDI truoc khi Play.
                         if (api && api.score && typeof api.loadMidiForScore === 'function') {
@@ -7750,7 +8084,29 @@ internal fun getAlphaTabHtml(
                     });
                     api.playerReady.on(function() {
                         AndroidInterface.onPlayerReady();
-                        if (autoPlayAfterSoundFontReady) {
+                        if (pianoEnabled || activeSoundFontMode === 'musescore_sf3') {
+                            pianoAudioReport('player_ready', {
+                                endTick: Number(api && api.endTick) || 0,
+                                midiNoteOns: pianoMidiDiagnostic && pianoMidiDiagnostic.selectedNoteOns
+                            });
+                        }
+
+                        var restoreTick = pianoMidiReloadRestoreTick;
+                        pianoMidiReloadRestoreTick = null;
+                        if (restoreTick !== null && Number.isFinite(Number(restoreTick))) {
+                            try {
+                                var endTick = Number(api && api.endTick);
+                                var safeTick = Math.max(0, Number(restoreTick));
+                                if (Number.isFinite(endTick) && endTick > 0) {
+                                    safeTick = Math.min(safeTick, Math.max(0, endTick - 1));
+                                }
+                                api.tickPosition = safeTick;
+                            } catch (ignored) {}
+                        }
+
+                        var resumeAfterPianoInstrumentChange = pianoMidiReloadResume;
+                        pianoMidiReloadResume = false;
+                        if (autoPlayAfterSoundFontReady || resumeAfterPianoInstrumentChange) {
                             autoPlayAfterSoundFontReady = false;
                             autoFallbackInProgress = false;
                             setTimeout(function() {
@@ -7798,9 +8154,26 @@ internal fun getAlphaTabHtml(
                             practiceOnPlayerFinished(e);
                         });
                     }
+                    if (api.midiLoad && typeof api.midiLoad.on === 'function') {
+                        api.midiLoad.on(function(file) {
+                            try { pianoAnalyzeGeneratedMidi(file); }
+                            catch (error) {
+                                pianoAudioReport('midi_analysis_failed', {
+                                    message: String(error && error.message || error)
+                                });
+                            }
+                        });
+                    }
                     api.midiLoaded.on(function() {
                         // loadMidiForScore() tạo lại MIDI khi đổi BPM; áp lại track đang solo.
                         applySelectedTrackSolo(false);
+                        if (pianoEnabled) pianoAudioReport('midi_loaded', {
+                            midi: pianoMidiDiagnostic ? {
+                                selectedNoteOns: pianoMidiDiagnostic.selectedNoteOns,
+                                requestedBank: pianoMidiDiagnostic.requestedBank,
+                                requestedProgram: pianoMidiDiagnostic.requestedProgram
+                            } : null
+                        });
                     });
 
                     api.playerPositionChanged.on(function(e) {
@@ -7839,6 +8212,7 @@ internal fun getAlphaTabHtml(
                     api.error.on(function(e) {
                         var message = 'Lỗi AlphaTab: ' +
                             (e && e.message ? e.message : e);
+                        pianoAudioReport('alphatab_error', { message: message });
 
                         if (isScoreLoading) {
                             isScoreLoading = false;
@@ -7901,6 +8275,9 @@ internal fun getAlphaTabHtml(
                     }
 
                     api.scoreLoaded.on(function(score) {
+                        // The saved override references the previous score model. A new score
+                        // receives its own fresh Piano override below when Piano mode is active.
+                        pianoDiscardInstrumentOverride();
                         pianoAccompResetAudio();
                         pianoAccompLastTick = null;
                         pianoAccompBars=[];pianoAccompEvents=[];
@@ -7932,10 +8309,15 @@ internal fun getAlphaTabHtml(
                             applySelectedTrackSolo(true);
                         }
                         if (fretboardEnabled) scheduleFretboardRefresh();
+                        var pianoInstrumentChangedForNewScore = false;
                         if (pianoEnabled) {
                             pianoAccompSourceIdentity = null;
                             pianoCurrentBeat = null;
                             pianoPitchGroups = {left:[],right:[]};
+                            pianoInstrumentChangedForNewScore = pianoUseAcousticGrandPiano(
+                                pianoSourceTrack(),
+                                false
+                            );
                             if (pianoShowScore) requestAnimationFrame(function() { pianoRebuildFromSource(); });
                             else {pianoIndexSourceBeats(pianoSourceTrack());pianoAccompRebuild(pianoSourceTrack());}
                         }
@@ -7951,6 +8333,14 @@ internal fun getAlphaTabHtml(
                                     window.AndroidInterface.onDisplayModeRestoreFailed();
                                 }
                             }
+                        }
+
+                        if (pianoInstrumentChangedForNewScore) {
+                            // Defer until scoreLoaded finishes so AlphaTab does not rebuild MIDI
+                            // in the middle of its own score initialization callback.
+                            setTimeout(function() {
+                                pianoReloadMidiPreservingPlayback();
+                            }, 0);
                         }
 
                         var title = String(currentScoreTitle || score.title || 'Bản nhạc').trim();
@@ -8024,7 +8414,13 @@ internal fun getAlphaTabHtml(
                     if (!currentTracks || index < 0 || index >= currentTracks.length) return;
                     normalClearPausedSeek();
                     practiceResetForNewScore();
+                    if (pianoEnabled && index !== selectedTrackForPlayback) {
+                        pianoRestoreOriginalInstrument(false);
+                    }
                     selectedTrackForPlayback = index;
+                    var pianoInstrumentChangedForTrack = pianoEnabled
+                        ? pianoUseAcousticGrandPiano(pianoSourceTrack(), false)
+                        : false;
                     pianoAccompResetAudio();
                     pianoAccompLastTick = null;
                     fretboardLatestBeat = null;
@@ -8035,6 +8431,7 @@ internal fun getAlphaTabHtml(
                     applySelectedTrackSolo(true);
                     if (pianoEnabled && pianoShowScore) pianoRebuildFromSource();
                     else if (pianoEnabled) {pianoIndexSourceBeats(pianoSourceTrack());pianoAccompRebuild(pianoSourceTrack());}
+                    if (pianoInstrumentChangedForTrack) pianoReloadMidiPreservingPlayback();
                 }
 
                 async function playPause() {
@@ -8058,15 +8455,51 @@ internal fun getAlphaTabHtml(
                         return false;
                     }
 
-                    if (activeSoundFontMode && activeSoundFontMode !== 'standard') {
+                    // For Piano + SF3, inspect the actual generated MIDI (midiLoad)
+                    // AND a real offline synth render. Never classify a file as
+                    // unsupported just because its title/notation was originally Guitar.
+                    // If the exporter cannot provide enough samples, play normally.
+                    // If playable NoteOn events exist but SF3 output is consistently
+                    // zero, use Sonivox temporarily and keep the user's SF3 download.
+                    var shouldVerifyAudio = activeSoundFontMode &&
+                        activeSoundFontMode !== 'standard';
+                    if (shouldVerifyAudio) {
+                        var startedInPiano = !!pianoEnabled;
+                        var checkMode = String(activeSoundFontMode);
+                        var checkScoreGeneration = soundFontCompatibilityScoreGeneration;
+                        var checkTrackIndex = selectedTrackForPlayback;
                         var compatible = await verifySelectedSoundFontProducesAudio();
+                        if (startedInPiano !== !!pianoEnabled ||
+                            checkMode !== String(activeSoundFontMode) ||
+                            checkScoreGeneration !== soundFontCompatibilityScoreGeneration ||
+                            checkTrackIndex !== selectedTrackForPlayback) return false;
                         if (!compatible) {
+                            if (pianoEnabled) {
+                                pianoAudioReport('offline_silent_try_sonivox', {
+                                    // Best available fallback signal; this is NOT a
+                                    // microphone recording of the Android speaker.
+                                    midi: pianoMidiDiagnostic,
+                                    exportCheck: pianoSf3LastCheck
+                                });
+                            }
                             autoFallbackToStandard();
                             return true;
                         }
                     }
-
-                    return api.play();
+                    var started = api.play();
+                    pianoAudioReport('play_requested', {
+                        playResult: started === false ? false : true,
+                        midi: pianoMidiDiagnostic ? {
+                            selectedNoteOns: pianoMidiDiagnostic.selectedNoteOns,
+                            channels: pianoMidiDiagnostic.channels
+                        } : null
+                    });
+                    if (started === false && pianoEnabled &&
+                        activeSoundFontMode === 'musescore_sf3') {
+                        pianoAudioReport('play_declined_try_sonivox', {});
+                        return autoFallbackToStandard();
+                    }
+                    return started;
                 }
                 function stopPlayer() {
                     pianoAccompResetAudio();
