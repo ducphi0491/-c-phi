@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -61,6 +62,9 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -78,6 +82,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -89,6 +94,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -98,6 +104,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -120,7 +127,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
@@ -134,6 +148,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -150,7 +165,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -161,6 +175,7 @@ import android.content.pm.ActivityInfo
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -168,6 +183,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 private val SUPPORTED_GP_EXTENSIONS = setOf("gp3", "gp4", "gp5", "gpx", "gp")
 
 // Android Storage Access Framework lọc theo MIME, không lọc trực tiếp theo đuôi file.
@@ -191,7 +208,7 @@ private val SUPPORTED_GP_MIME_TYPES = arrayOf(
 private const val LOCAL_SCORE_MAX_BYTES = 50L * 1024L * 1024L
 private const val LOCAL_SCORE_URL_PREFIX = "https://tunertools.top/__local_score__/"
 
-private const val STANDARD_SOUNDFONT_URL =
+internal const val STANDARD_SOUNDFONT_URL =
     "https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/soundfont/sonivox.sf2"
 private const val FLUIDR3_SOUNDFONT_FILE_NAME = "FluidR3_GM.sf2"
 private const val MUSESCORE_SOUNDFONT_FILE_NAME = "MuseScore_General.sf3"
@@ -201,95 +218,214 @@ private const val LOCAL_MUSESCORE_SOUNDFONT_URL =
     "https://tunertools.top/__local_soundfont__/MuseScore_General.sf3"
 private const val SOUNDFONT_PREFS_NAME = "SongTabSoundFontPrefs"
 private const val SOUNDFONT_PREF_MODE = "selected_mode"
+// Piano uses its own compatible preset. Keep the Guitar SF2 preference unchanged.
+private const val SOUNDFONT_PREF_PIANO_MODE = "piano_selected_mode"
 private const val SOUNDFONT_PREF_SIZE = "downloaded_size"
 private const val SOUNDFONT_PREF_VERSION = "downloaded_version"
 private const val SOUNDFONT_PREF_PART_VERSION = "partial_version"
 private const val TAB_DISPLAY_PREFS_NAME = "SongTabDisplayPrefs"
 private const val TAB_DISPLAY_PREF_NOTE_NAMES = "show_note_names"
+private const val TAB_DISPLAY_PREF_MODE = "display_mode_combination"
+// Thu/phong CHI khuong nhac + TAB; khong thay doi kich thuoc can dan.
+// -1 = mac dinh cua che do (S+T+F: 82%, S+T / TAB / Score: 100%).
+private const val TAB_DISPLAY_PREF_SCORE_ZOOM = "score_notation_zoom_percent"
+private const val TAB_SCORE_ZOOM_MIN = 50
+private const val TAB_SCORE_ZOOM_MAX = 150
+private const val TAB_APPEARANCE_PREF_THEME_MODE = "appearance_theme_mode"
+private const val TAB_APPEARANCE_PREF_CURSOR_COLOR = "appearance_cursor_color"
+private const val TAB_APPEARANCE_PREF_ACTIVE_REGION_COLOR = "appearance_active_region_color"
+private const val TAB_APPEARANCE_PREF_TAB_COLOR = "appearance_tab_color"
+private const val TAB_APPEARANCE_PREF_NOTE_COLOR = "appearance_note_color"
+private const val TAB_APPEARANCE_PREF_FRETBOARD_COLOR = "appearance_fretboard_color"
+private const val TAB_APPEARANCE_PREF_PANEL_COLOR = "appearance_fretboard_panel_color"
+private const val TAB_APPEARANCE_PREF_CURSOR_WIDTH = "appearance_cursor_width"
+private const val TAB_APPEARANCE_PREF_REGION_OPACITY = "appearance_region_opacity"
+// v2: light score, purple narrow cursor, black guitar fretboard by default.
+private const val TAB_APPEARANCE_PREF_DEFAULTS_VERSION = "appearance_defaults_version"
+private const val TAB_APPEARANCE_DEFAULTS_VERSION = 2
+private const val TAB_METRONOME_PREFS_NAME = "SongTabMetronomePrefs"
+private const val TAB_METRONOME_PREF_ENABLED = "metronome_enabled"
 
-// Thoi gian dung thu chuc nang Ban nhac duoc luu rieng theo tai khoan Google.
-// Tai khoan da duoc cap quyen canView/canManage tren server van duoc su dung khong gioi han.
-private const val SONG_TAB_TRIAL_PREFS_NAME = "SongTabTrialPrefs"
-private const val SONG_TAB_TRIAL_DAYS = 30L
-private const val SONG_TAB_TRIAL_DURATION_MS =
-    SONG_TAB_TRIAL_DAYS * 24L * 60L * 60L * 1000L
-private const val SONG_TAB_TRIAL_START_PREFIX = "trial_start_"
-private const val SONG_TAB_TRIAL_MAX_SEEN_PREFIX = "trial_max_seen_"
+private enum class TabAppearanceThemeMode(val storedValue: String) {
+    FOLLOW_APP("follow_app"),
+    LIGHT("light"),
+    DARK("dark");
 
-private data class SongTabTrialStatus(
-    val email: String = "",
-    val startedAt: Long = 0L,
-    val expiresAt: Long = 0L,
-    val effectiveNow: Long = 0L
+    fun resolve(appIsDark: Boolean): Boolean = when (this) {
+        FOLLOW_APP -> appIsDark
+        LIGHT -> false
+        DARK -> true
+    }
+
+    fun title(currentLang: String): String {
+        val isVietnamese = currentLang
+            .lowercase(Locale.ROOT)
+            .substringBefore('-')
+            .substringBefore('_') == "vi"
+        return when (this) {
+            FOLLOW_APP -> if (isVietnamese) "Theo ứng dụng" else "Follow app"
+            LIGHT -> if (isVietnamese) "Sáng" else "Light"
+            DARK -> if (isVietnamese) "Tối" else "Dark"
+        }
+    }
+
+    companion object {
+        fun fromStoredValue(value: String?): TabAppearanceThemeMode =
+            values().firstOrNull { it.storedValue == value } ?: LIGHT
+    }
+}
+
+private data class TabAppearanceColorOption(
+    val id: String,
+    val vietnameseName: String,
+    val englishName: String,
+    val lightHex: String,
+    val darkHex: String
 ) {
-    val isStarted: Boolean get() = email.isNotBlank() && startedAt > 0L
-    val isActive: Boolean get() = isStarted && effectiveNow < expiresAt
-    val isExpired: Boolean get() = isStarted && !isActive
-    val remainingMillis: Long get() = (expiresAt - effectiveNow).coerceAtLeast(0L)
+    fun resolve(isDark: Boolean): String = if (isDark) darkHex else lightHex
+
+    fun title(currentLang: String): String {
+        val isVietnamese = currentLang
+            .lowercase(Locale.ROOT)
+            .substringBefore('-')
+            .substringBefore('_') == "vi"
+        return if (isVietnamese) vietnameseName else englishName
+    }
 }
 
-private enum class SongTabGateReason {
-    DEFAULT,
-    TRIAL_EXPIRED
+private val TAB_EXTRA_COLORS = listOf(
+    TabAppearanceColorOption("white", "Tr\u1eafng", "White", "#FFFFFF", "#FFFFFF"),
+    TabAppearanceColorOption("black", "\u0110en", "Black", "#000000", "#000000"),
+    TabAppearanceColorOption("cream", "Kem", "Cream", "#FFF9E6", "#FFF9E6"),
+    TabAppearanceColorOption("pearl", "Ng\u1ecdc trai", "Pearl", "#E9EDF3", "#E9EDF3"),
+    TabAppearanceColorOption("charcoal", "Than", "Charcoal", "#202733", "#202733"),
+    TabAppearanceColorOption("gray", "X\u00e1m", "Gray", "#9CA3AF", "#9CA3AF"),
+    TabAppearanceColorOption("brown", "N\u00e2u", "Brown", "#8B5E3C", "#8B5E3C"),
+    TabAppearanceColorOption("gold", "V\u00e0ng kim", "Gold", "#EAB308", "#FACC15"),
+    TabAppearanceColorOption("yellow", "V\u00e0ng", "Yellow", "#FBBF24", "#FFD43B"),
+    TabAppearanceColorOption("lime", "Xanh chanh", "Lime", "#84CC16", "#A3E635"),
+    TabAppearanceColorOption("teal", "Xanh l\u1ee5c", "Teal", "#0D9488", "#2DD4BF"),
+    TabAppearanceColorOption("indigo", "Ch\u00e0m", "Indigo", "#4F46E5", "#818CF8"),
+    TabAppearanceColorOption("magenta", "T\u00edm h\u1ed3ng", "Magenta", "#C026D3", "#E879F9"),
+    TabAppearanceColorOption("pink", "H\u1ed3ng", "Pink", "#EC4899", "#F472B6"),
+    TabAppearanceColorOption("coral", "San h\u00f4", "Coral", "#FB7185", "#FDA4AF"),
+    TabAppearanceColorOption("mintlight", "B\u1ea1c h\u00e0 nh\u1ea1t", "Pale mint", "#D1FAE5", "#D1FAE5"),
+    TabAppearanceColorOption("skyblue", "Xanh tr\u1eddi nh\u1ea1t", "Pale blue", "#DBEAFE", "#DBEAFE")
+)
+
+private fun tabAppearanceExpandedPalette(
+    base: List<TabAppearanceColorOption>
+): List<TabAppearanceColorOption> = base + TAB_EXTRA_COLORS.filter { extra ->
+    base.none { it.id == extra.id }
 }
 
-private fun songTabTrialUserKey(email: String): String {
-    val normalized = email.trim().lowercase(Locale.ROOT)
-    if (normalized.isBlank()) return ""
+private val TAB_CURSOR_COLOR_OPTIONS = tabAppearanceExpandedPalette(listOf(
+    TabAppearanceColorOption("purple", "T\u00edm", "Purple", "#7C3AED", "#C084FC"),
+    TabAppearanceColorOption("blue", "Xanh d\u01b0\u01a1ng", "Blue", "#2563EB", "#60A5FA"),
+    TabAppearanceColorOption("cyan", "Xanh ng\u1ecdc", "Cyan", "#0891B2", "#22D3EE"),
+    TabAppearanceColorOption("green", "Xanh l\u00e1", "Green", "#059669", "#34D399"),
+    TabAppearanceColorOption("orange", "Cam", "Orange", "#EA580C", "#FB923C"),
+    TabAppearanceColorOption("red", "\u0110\u1ecf", "Red", "#DC2626", "#F87171")
+))
 
-    val digest = MessageDigest.getInstance("SHA-256")
-        .digest(normalized.toByteArray(StandardCharsets.UTF_8))
-    return digest.joinToString(separator = "") { byte ->
-        "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
-    }.take(32)
+private val TAB_ACTIVE_REGION_COLOR_OPTIONS = tabAppearanceExpandedPalette(listOf(
+    TabAppearanceColorOption("lavender", "T\u00edm nh\u1ea1t", "Lavender", "#8B5CF6", "#7C3AED"),
+    TabAppearanceColorOption("sky", "Xanh tr\u1eddi", "Sky", "#0EA5E9", "#0284C7"),
+    TabAppearanceColorOption("mint", "B\u1ea1c h\u00e0", "Mint", "#10B981", "#059669"),
+    TabAppearanceColorOption("amber", "H\u1ed5 ph\u00e1ch", "Amber", "#F59E0B", "#D97706"),
+    TabAppearanceColorOption("rose", "H\u1ed3ng", "Rose", "#F43F5E", "#E11D48"),
+    TabAppearanceColorOption("slate", "X\u00e1m xanh", "Slate", "#64748B", "#475569")
+))
+
+private val TAB_GLYPH_COLOR_OPTIONS = tabAppearanceExpandedPalette(listOf(
+    TabAppearanceColorOption("auto", "T\u1ef1 \u0111\u1ed9ng", "Automatic", "#111827", "#F8FAFC"),
+    TabAppearanceColorOption("purple", "T\u00edm", "Purple", "#5B21B6", "#E9D5FF"),
+    TabAppearanceColorOption("blue", "Xanh d\u01b0\u01a1ng", "Blue", "#1D4ED8", "#BFDBFE"),
+    TabAppearanceColorOption("green", "Xanh l\u00e1", "Green", "#047857", "#A7F3D0"),
+    TabAppearanceColorOption("amber", "H\u1ed5 ph\u00e1ch", "Amber", "#92400E", "#FDE68A"),
+    TabAppearanceColorOption("rose", "H\u1ed3ng", "Rose", "#9F1239", "#FECDD3")
+))
+
+private val TAB_NOTE_COLOR_OPTIONS = tabAppearanceExpandedPalette(listOf(
+    TabAppearanceColorOption("yellow", "V\u00e0ng", "Yellow", "#FBBF24", "#FFD43B"),
+    TabAppearanceColorOption("orange", "Cam", "Orange", "#F97316", "#FB923C"),
+    TabAppearanceColorOption("cyan", "Xanh ng\u1ecdc", "Cyan", "#06B6D4", "#22D3EE"),
+    TabAppearanceColorOption("green", "Xanh l\u00e1", "Green", "#10B981", "#34D399"),
+    TabAppearanceColorOption("pink", "H\u1ed3ng", "Pink", "#EC4899", "#F472B6"),
+    TabAppearanceColorOption("purple", "T\u00edm", "Purple", "#8B5CF6", "#C084FC")
+))
+
+private val TAB_FRETBOARD_COLOR_OPTIONS = tabAppearanceExpandedPalette(listOf(
+    TabAppearanceColorOption("auto", "T\u1ef1 \u0111\u1ed9ng", "Automatic", "#F8FAFC", "#171B24"),
+    TabAppearanceColorOption("slate", "X\u00e1m \u0111\u00e1", "Slate", "#E2E8F0", "#0F172A"),
+    TabAppearanceColorOption("navy", "Xanh navy", "Navy", "#DBEAFE", "#0B1F3A"),
+    TabAppearanceColorOption("forest", "Xanh r\u1eebng", "Forest", "#DCFCE7", "#10251B"),
+    TabAppearanceColorOption("wood", "M\u00e0u g\u1ed7", "Wood", "#F3E2C7", "#3A2418"),
+    TabAppearanceColorOption("graphite", "Than ch\u00ec", "Graphite", "#E5E7EB", "#111827")
+))
+
+private val TAB_FRETBOARD_PANEL_OPTIONS = tabAppearanceExpandedPalette(listOf(
+    TabAppearanceColorOption("auto", "T\u1ef1 \u0111\u1ed9ng", "Automatic", "#F4F6FB", "#0F131C"),
+    TabAppearanceColorOption("panelblue", "Xanh nh\u1ea1t", "Pale blue", "#E8F3FF", "#142237"),
+    TabAppearanceColorOption("panelgray", "X\u00e1m s\u00e1ng", "Soft gray", "#F3F4F6", "#292E3A"),
+    TabAppearanceColorOption("panelgreen", "Xanh l\u00e1 nh\u1ea1t", "Soft green", "#E8FAF2", "#153228"),
+    TabAppearanceColorOption("panelwood", "M\u00e0u kem", "Cream", "#FFF4DF", "#32251F")
+))
+
+private fun tabAppearanceCustomHex(id: String?): String? =
+    id?.takeIf { it.length == 7 && it[0] == '#' &&
+            it.substring(1).all { c -> c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' }
+    }?.uppercase(Locale.ROOT)
+
+private fun tabAppearanceStoredSelection(
+    options: List<TabAppearanceColorOption>, id: String?, fallback: String
+): String = when {
+    options.any { it.id == id } -> id!!
+    tabAppearanceCustomHex(id) != null -> tabAppearanceCustomHex(id)!!
+    else -> fallback
 }
 
-private fun readSongTabTrialStatus(
-    context: Context,
-    email: String,
-    startIfMissing: Boolean
-): SongTabTrialStatus {
-    val normalizedEmail = email.trim().lowercase(Locale.ROOT)
-    val userKey = songTabTrialUserKey(normalizedEmail)
-    if (userKey.isBlank()) return SongTabTrialStatus()
+private fun tabAppearanceResolvedHex(
+    options: List<TabAppearanceColorOption>, id: String?, fallback: String, isDark: Boolean
+): String = tabAppearanceCustomHex(id)
+    ?: tabAppearanceOption(options, id, fallback).resolve(isDark)
 
-    val prefs = context.getSharedPreferences(SONG_TAB_TRIAL_PREFS_NAME, Context.MODE_PRIVATE)
-    val startKey = SONG_TAB_TRIAL_START_PREFIX + userKey
-    val maxSeenKey = SONG_TAB_TRIAL_MAX_SEEN_PREFIX + userKey
-    val deviceNow = System.currentTimeMillis().coerceAtLeast(1L)
-
-    var startedAt = prefs.getLong(startKey, 0L)
-    if (startedAt <= 0L && startIfMissing) {
-        startedAt = deviceNow
-        prefs.edit().putLong(startKey, startedAt).apply()
-    }
-
-    if (startedAt <= 0L) {
-        return SongTabTrialStatus(email = normalizedEmail, effectiveNow = deviceNow)
-    }
-
-    // Ghi lai moc thoi gian lon nhat da thay de viec lui dong ho may khong keo dai dung thu.
-    val previousMaxSeen = prefs.getLong(maxSeenKey, startedAt)
-    val effectiveNow = maxOf(deviceNow, previousMaxSeen, startedAt)
-    if (effectiveNow != previousMaxSeen) {
-        prefs.edit().putLong(maxSeenKey, effectiveNow).apply()
-    }
-
-    val expiresAt = if (startedAt > Long.MAX_VALUE - SONG_TAB_TRIAL_DURATION_MS) {
-        Long.MAX_VALUE
-    } else {
-        startedAt + SONG_TAB_TRIAL_DURATION_MS
-    }
-
-    return SongTabTrialStatus(
-        email = normalizedEmail,
-        startedAt = startedAt,
-        expiresAt = expiresAt,
-        effectiveNow = effectiveNow
+private fun tabAppearanceHexFromHsv(hue: Float, saturation: Float, brightness: Float): String {
+    val rgb = android.graphics.Color.HSVToColor(
+        floatArrayOf(hue.coerceIn(0f, 360f), saturation.coerceIn(0f, 100f) / 100f,
+            brightness.coerceIn(0f, 100f) / 100f)
     )
+    return String.format(Locale.ROOT, "#%06X", rgb and 0xFFFFFF)
 }
 
-private fun soundFontText(
+
+private fun tabAppearanceOption(
+    options: List<TabAppearanceColorOption>,
+    id: String?,
+    fallbackId: String
+): TabAppearanceColorOption = options.firstOrNull { it.id == id }
+    ?: options.first { it.id == fallbackId }
+
+private fun tabAppearanceComposeColor(hex: String): Color = runCatching {
+    Color(android.graphics.Color.parseColor(hex))
+}.getOrDefault(Color(0xFF7C3AED))
+
+private fun tabAppearanceUsesDarkText(hex: String): Boolean {
+    val color = android.graphics.Color.parseColor(hex)
+    val red = android.graphics.Color.red(color) / 255.0
+    val green = android.graphics.Color.green(color) / 255.0
+    val blue = android.graphics.Color.blue(color) / 255.0
+    fun channel(value: Double): Double =
+        if (value <= 0.03928) value / 12.92 else Math.pow((value + 0.055) / 1.055, 2.4)
+    val luminance = 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+    // WCAG black/white crossover: prefer the text with stronger contrast.
+    return luminance > 0.179
+}
+
+// Chuc nang Ban nhac duoc su dung mien phi khong gioi han thoi gian.
+// Van giu buoc dang nhap Google de su dung tai khoan hien co.
+
+internal fun soundFontText(
     key: String,
     currentLang: String,
     vietnameseFallback: String,
@@ -338,55 +474,115 @@ private fun soundFontFormat(
     }
 }
 
+private enum class TabDisplayInstrument { NONE, GUITAR, PIANO }
+
+// A display mode is the applied combination of two independent notation layers
+// and one optional instrument. Exactly one of score/TAB must be enabled.
 private enum class TabDisplayMode(
     val jsValue: String,
-    val buttonLabel: String
+    val buttonLabel: String,
+    val showScore: Boolean,
+    val showTab: Boolean,
+    val instrument: TabDisplayInstrument
 ) {
-    SCORE_TAB(jsValue = "scoretab", buttonLabel = "S+T"),
-    TAB_ONLY(jsValue = "tab", buttonLabel = "TAB"),
-    PARTITION_ONLY(jsValue = "score", buttonLabel = "P");
+    SCORE_TAB("scoretab", "S+T", true, true, TabDisplayInstrument.NONE),
+    SCORE_TAB_FRETBOARD("scoretab_fretboard", "S+T+G", true, true, TabDisplayInstrument.GUITAR),
+    PIANO("piano", "S+P", true, false, TabDisplayInstrument.PIANO),
+    TAB_ONLY("tab", "TAB", false, true, TabDisplayInstrument.NONE),
+    PARTITION_ONLY("score", "S", true, false, TabDisplayInstrument.NONE),
+    SCORE_FRETBOARD("score_fretboard", "S+G", true, false, TabDisplayInstrument.GUITAR),
+    TAB_FRETBOARD("tab_fretboard", "T+G", false, true, TabDisplayInstrument.GUITAR),
+    PIANO_TAB("piano_tab", "S+T+P", true, true, TabDisplayInstrument.PIANO),
+    TAB_PIANO("tab_piano", "T+P", false, true, TabDisplayInstrument.PIANO);
 
-    fun menuTitle(currentLang: String): String = when (this) {
-        SCORE_TAB -> soundFontText(
-            "tab_display_score_tab_title",
-            currentLang,
-            "Khuông + TAB",
-            "Notation + TAB"
-        )
-        TAB_ONLY -> soundFontText(
-            "tab_display_tab_title",
-            currentLang,
-            "TAB",
-            "TAB"
-        )
-        PARTITION_ONLY -> soundFontText(
-            "tab_display_partition_title",
-            currentLang,
-            "Khuông nhạc",
-            "Notation"
-        )
+    val hasInstrumentPanel: Boolean get() = instrument != TabDisplayInstrument.NONE
+
+    fun menuTitle(currentLang: String): String {
+        val vi = currentLang.lowercase(Locale.ROOT).startsWith("vi")
+        val notation = when {
+            showScore && showTab -> if (vi) "Khuông nhạc + TAB" else "Notation + TAB"
+            showScore -> if (vi) "Khuông nhạc" else "Notation"
+            else -> "TAB"
+        }
+        val tail = when (instrument) {
+            TabDisplayInstrument.NONE -> ""
+            TabDisplayInstrument.GUITAR -> if (vi) " + Guitar" else " + Guitar fretboard"
+            TabDisplayInstrument.PIANO -> if (vi) " + Piano" else " + Piano keyboard"
+        }
+        return notation + tail
     }
 
-    fun menuDescription(currentLang: String): String = when (this) {
-        SCORE_TAB -> soundFontText(
-            "tab_display_score_tab_desc",
-            currentLang,
-            "Hiển thị khuông nhạc và TAB cùng lúc",
-            "Show notation and TAB together"
-        )
-        TAB_ONLY -> soundFontText(
-            "tab_display_tab_desc",
-            currentLang,
-            "Chỉ hiển thị TAB",
-            "Show TAB only"
-        )
-        PARTITION_ONLY -> soundFontText(
-            "tab_display_partition_desc",
-            currentLang,
-            "Chỉ hiển thị khuông nhạc",
-            "Show standard notation only"
-        )
+    companion object {
+        fun fromSelection(score: Boolean, tab: Boolean, instrument: TabDisplayInstrument): TabDisplayMode {
+            require(score || tab) { "Select notation or TAB" }
+            return when (instrument) {
+                TabDisplayInstrument.NONE -> when {
+                    score && tab -> SCORE_TAB
+                    score -> PARTITION_ONLY
+                    else -> TAB_ONLY
+                }
+                TabDisplayInstrument.GUITAR -> when {
+                    score && tab -> SCORE_TAB_FRETBOARD
+                    score -> SCORE_FRETBOARD
+                    else -> TAB_FRETBOARD
+                }
+                TabDisplayInstrument.PIANO -> when {
+                    score && tab -> PIANO_TAB
+                    score -> PIANO
+                    else -> TAB_PIANO
+                }
+            }
+        }
+        fun fromStored(value: String?): TabDisplayMode =
+            values().firstOrNull { it.jsValue == value } ?: SCORE_TAB_FRETBOARD
     }
+}
+
+/**
+ * Default profile for the Tab reader, including existing installations.
+ * Only legacy default values are migrated. Colors/modes/zoom already changed
+ * by the listener are preserved; the version is written once.
+ */
+private fun applyTabAppearanceDefaultsIfNeeded(prefs: android.content.SharedPreferences) {
+    if (prefs.getInt(TAB_APPEARANCE_PREF_DEFAULTS_VERSION, 0) >=
+        TAB_APPEARANCE_DEFAULTS_VERSION) return
+
+    val edit = prefs.edit()
+    val savedMode = prefs.getString(TAB_DISPLAY_PREF_MODE, null)
+    if (savedMode == null || savedMode == TabDisplayMode.SCORE_TAB.jsValue) {
+        edit.putString(TAB_DISPLAY_PREF_MODE, TabDisplayMode.SCORE_TAB_FRETBOARD.jsValue)
+    }
+
+    val savedTheme = prefs.getString(TAB_APPEARANCE_PREF_THEME_MODE, null)
+    if (savedTheme == null || savedTheme == TabAppearanceThemeMode.FOLLOW_APP.storedValue) {
+        edit.putString(TAB_APPEARANCE_PREF_THEME_MODE, TabAppearanceThemeMode.LIGHT.storedValue)
+    }
+
+    val savedBoard = prefs.getString(TAB_APPEARANCE_PREF_FRETBOARD_COLOR, null)
+    if (savedBoard == null || savedBoard == "auto") {
+        edit.putString(TAB_APPEARANCE_PREF_FRETBOARD_COLOR, "black")
+    }
+
+    val savedPanel = prefs.getString(TAB_APPEARANCE_PREF_PANEL_COLOR, null)
+    if (savedPanel == null || savedPanel == "auto") {
+        edit.putString(TAB_APPEARANCE_PREF_PANEL_COLOR, "white")
+    }
+
+    if (!prefs.contains(TAB_APPEARANCE_PREF_CURSOR_COLOR)) {
+        edit.putString(TAB_APPEARANCE_PREF_CURSOR_COLOR, "purple")
+    }
+    if (!prefs.contains(TAB_APPEARANCE_PREF_CURSOR_WIDTH) ||
+        prefs.getFloat(TAB_APPEARANCE_PREF_CURSOR_WIDTH, 6f) == 6f) {
+        edit.putFloat(TAB_APPEARANCE_PREF_CURSOR_WIDTH, 3f)
+    }
+    // Keep the score white instead of covering the current measure in lavender.
+    if (!prefs.contains(TAB_APPEARANCE_PREF_REGION_OPACITY) ||
+        prefs.getFloat(TAB_APPEARANCE_PREF_REGION_OPACITY, .28f) == .28f) {
+        edit.putFloat(TAB_APPEARANCE_PREF_REGION_OPACITY, 0f)
+    }
+
+    edit.putInt(TAB_APPEARANCE_PREF_DEFAULTS_VERSION,
+        TAB_APPEARANCE_DEFAULTS_VERSION).apply()
 }
 
 private enum class TabSoundFontMode(
@@ -792,10 +988,249 @@ private data class TuneToolsSong(
         get() = itemType == TuneToolsItemType.FOLDER
 }
 
+// -----------------------------------------------------------------------------
+// GP server failover: alwaysdata (Google Drive) -> IIS (Windows local GP archive).
+// Keep this in SongTabPlay.kt: no extra PHP is required on alwaysdata.
+// Only a *verified* tab-relative path can be used to request a matching IIS file.
+// Never infer a backup file from a similar song title or arbitrary URL.
+// -----------------------------------------------------------------------------
+private data class GpFailoverRoute(
+    val primaryUrl: String,
+    val backupUrl: String
+)
+
+private data class GpFailoverPayload(val bytes: ByteArray, val usedIis: Boolean)
+
+private class GpDownloadHttpFailure(
+    val statusCode: Int,
+    val endpointMissing: Boolean = false
+) : java.io.IOException("GP HTTP $statusCode")
+
+private class GpDownloadInvalidContent(message: String) : java.io.IOException(message)
+
+private object TuneToolsGpFailover {
+    private const val PRIMARY_HOST = "tuner.alwaysdata.net"
+    private const val BACKUP_DOWNLOAD_ENDPOINT =
+        "https://tunertools.top/api_gp_search.php?action=download_gp&file="
+
+    private const val PRIMARY_CONNECT_TIMEOUT_MS = 3500
+    private const val PRIMARY_READ_TIMEOUT_MS = 12000
+    private const val BACKUP_CONNECT_TIMEOUT_MS = 3500
+    private const val BACKUP_READ_TIMEOUT_MS = 12000
+
+    // Accept ONLY the known, public GP download endpoint on alwaysdata.
+    // This prevents intercepting other application requests or following a
+    // malformed/third-party download URL from an untrusted API response.
+    private fun isTrustedDriveGpUrl(value: String): Boolean = try {
+        val uri = java.net.URI(value)
+        uri.scheme.equals("https", true) &&
+                uri.host.equals(PRIMARY_HOST, true) &&
+                (uri.port == -1 || uri.port == 443) &&
+                uri.rawUserInfo == null &&
+                uri.rawFragment == null &&
+                uri.rawPath == "/api_gp_drive.php" &&
+                uri.rawQuery.orEmpty().split('&').any { part ->
+                    part.equals("action=file", true) ||
+                            part.equals("action=section_file", true)
+                }
+    } catch (_: Exception) {
+        false
+    }
+
+    // PHP on IIS resolves file relative to C:\\inetpub\\wwwroot\\tab.
+    // A bulk DB sometimes stores a leading "tab/"; the manifest does not.
+    // Reject absolute paths, traversal, and non-GP extensions before generating
+    // a backup URL. The IIS PHP independently checks the resolved file path.
+    private fun buildIisBackupUrl(relativePath: String): String? {
+        val normalized = relativePath.trim().replace('\\', '/')
+        if (normalized.isBlank() || normalized.startsWith('/') ||
+            normalized.indexOf('\u0000') >= 0 ||
+            Regex("^[A-Za-z]:").containsMatchIn(normalized)
+        ) return null
+        val segments = normalized.split('/')
+        if (segments.any { it.isBlank() || it == "." || it == ".." || ':' in it }) return null
+        val adjusted = if (segments.first().equals("tab", true)) segments.drop(1) else segments
+        if (adjusted.isEmpty()) return null
+        val suffix = adjusted.last().substringAfterLast('.', "").lowercase(Locale.ROOT)
+        if (suffix !in SUPPORTED_GP_EXTENSIONS) return null
+        return BACKUP_DOWNLOAD_ENDPOINT + URLEncoder.encode(
+            adjusted.joinToString("/"), StandardCharsets.UTF_8.name()
+        )
+    }
+
+    fun routeFor(song: TuneToolsSong): GpFailoverRoute? {
+        if (song.isFolder || !isTrustedDriveGpUrl(song.fileUrl)) return null
+        val backup = buildIisBackupUrl(song.relativePath) ?: return null
+        return GpFailoverRoute(primaryUrl = song.fileUrl, backupUrl = backup)
+    }
+
+    // A missing PRIMARY PHP script returns HTTP 404 with an HTML/plain-text page.
+    // It is a server availability problem, so use IIS. A JSON 404 (missing GP)
+    // is NOT automatically bypassed. Never bypass primary 401 or 403.
+    private fun canFailOver(error: Exception): Boolean = when (error) {
+        is GpDownloadHttpFailure ->
+            (error.statusCode == 404 && error.endpointMissing) ||
+                    error.statusCode == 408 || error.statusCode == 429 ||
+                    error.statusCode in 500..599
+        is javax.net.ssl.SSLException -> false
+        is java.io.IOException -> true  // DNS, timeout, reset, truncated/invalid upstream file
+        else -> false
+    }
+
+    fun fetch(route: GpFailoverRoute): GpFailoverPayload {
+        try {
+            return GpFailoverPayload(downloadBytes(route.primaryUrl, true), usedIis = false)
+        } catch (primaryError: Exception) {
+            if (!canFailOver(primaryError)) throw primaryError
+            android.util.Log.w(
+                "TuneToolsGpFailover", "Primary GP download failed; using IIS", primaryError
+            )
+            try {
+                return GpFailoverPayload(downloadBytes(route.backupUrl, false), usedIis = true)
+            } catch (backupError: Exception) {
+                val bothFailed = java.io.IOException(
+                    "Cả alwaysdata và máy chủ IIS đều không tải được file Guitar Pro.",
+                    backupError
+                )
+                bothFailed.addSuppressed(primaryError)
+                throw bothFailed
+            }
+        }
+    }
+
+    private fun downloadBytes(url: String, primary: Boolean): ByteArray {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.instanceFollowRedirects = false
+            conn.requestMethod = "GET"
+            conn.connectTimeout = if (primary) PRIMARY_CONNECT_TIMEOUT_MS else BACKUP_CONNECT_TIMEOUT_MS
+            conn.readTimeout = if (primary) PRIMARY_READ_TIMEOUT_MS else BACKUP_READ_TIMEOUT_MS
+            conn.useCaches = false
+            conn.setRequestProperty("Accept", "application/octet-stream")
+            conn.setRequestProperty("Accept-Encoding", "identity")
+            conn.setRequestProperty("User-Agent", "TunerTools-Android-GP-Failover")
+            val status = conn.responseCode
+            // This request does not send a Range header: partial data must not be
+            // passed to alphaTab, even if the upstream reports HTTP 206.
+            if (status != 200) {
+                // When api_gp_drive.php is deleted or its route is not deployed,
+                // the hosting layer normally returns HTML, not an API JSON error.
+                // A trusted GP route with an exact relative_path can then use IIS.
+                val responseType = conn.contentType.orEmpty().lowercase(Locale.ROOT)
+                val phpEndpointMissing = status == 404 && (
+                        responseType.isBlank() ||
+                                responseType.startsWith("text/html") ||
+                                responseType.startsWith("text/plain") ||
+                                responseType.startsWith("application/xhtml+xml")
+                        )
+                throw GpDownloadHttpFailure(status, endpointMissing = phpEndpointMissing)
+            }
+            val size = conn.contentLengthLong
+            if (size > LOCAL_SCORE_MAX_BYTES) {
+                throw IllegalArgumentException("File GP vượt giới hạn 50 MB")
+            }
+            val mime = conn.contentType.orEmpty().lowercase(Locale.ROOT)
+            if (mime.startsWith("text/html") || mime.startsWith("application/json")) {
+                throw GpDownloadInvalidContent("Máy chủ trả HTML/JSON thay vì file GP")
+            }
+            val output = ByteArrayOutputStream()
+            conn.inputStream.use { stream ->
+                val buffer = ByteArray(32 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = stream.read(buffer)
+                    if (n == -1) break
+                    total += n
+                    if (total > LOCAL_SCORE_MAX_BYTES) {
+                        throw IllegalArgumentException("File GP vượt giới hạn 50 MB")
+                    }
+                    output.write(buffer, 0, n)
+                }
+            }
+            val bytes = output.toByteArray()
+            if (bytes.isEmpty() || (size >= 0 && bytes.size.toLong() != size)) {
+                throw GpDownloadInvalidContent("Dữ liệu GP trống hoặc tải chưa đủ")
+            }
+            val prefix = bytes.take(64).toByteArray()
+                .toString(StandardCharsets.UTF_8).trimStart().lowercase(Locale.ROOT)
+            if (prefix.startsWith("<!doctype") || prefix.startsWith("<html") ||
+                prefix.startsWith("{") || prefix.startsWith("[")) {
+                throw GpDownloadInvalidContent("Nội dung trả về không phải file GP")
+            }
+            return bytes
+        } finally {
+            conn.disconnect()
+        }
+    }
+}
+
 data class AlphaTrack(
     val index: Int,
     val name: String
 )
+
+
+// The legend only shows items actually found in the selected Guitar Pro track.
+private data class SongTechniqueDefinition(
+    val symbol: String,
+    val nameVi: String,
+    val nameEn: String,
+    val descriptionVi: String,
+    val descriptionEn: String,
+    val notation: Boolean = false
+)
+
+private val SONG_TECHNIQUE_LEGEND = linkedMapOf(
+    "hammer" to SongTechniqueDefinition("H", "Hammer-on", "Hammer-on", "Gõ ngón lên ngăn cao hơn mà không gảy dây lần nữa.", "Hammer on a higher fret without picking again."),
+    "pull" to SongTechniqueDefinition("P", "Pull-off", "Pull-off", "Nhấc ngón để phát nốt thấp hơn trên cùng dây.", "Release a fretting finger to sound a lower note."),
+    "legato" to SongTechniqueDefinition("⌒", "Legato / Slur", "Legato / slur", "Nối các nốt liền mạch; hạn chế gảy lại khi phù hợp.", "Connect notes smoothly, often with fewer pick attacks."),
+    "tie" to SongTechniqueDefinition("⌒", "Nối trường độ", "Tie", "Kéo dài cùng một cao độ qua nhiều nốt, không đánh lại nốt nối.", "Sustain the same pitch across tied notes without a new attack."),
+    "slide" to SongTechniqueDefinition("/ \\", "Slide", "Slide", "Trượt ngón từ ngăn này đến ngăn khác trên cùng dây.", "Move a fretting finger between frets on the same string."),
+    "pick_slide" to SongTechniqueDefinition("P.S.", "Pick slide", "Pick slide", "Vuốt miếng gảy dọc theo dây để tạo tiếng cào.", "Scrape the pick along the string."),
+    "bend" to SongTechniqueDefinition("↗", "Bend / Release", "Bend / release", "Đẩy dây để thay đổi cao độ; release là trả dây về.", "Push a string to raise pitch and release it back."),
+    "vibrato" to SongTechniqueDefinition("~~~~", "Vibrato", "Vibrato", "Rung cao độ nhẹ và liên tục ở nốt đang giữ.", "Gently oscillate the pitch of a held note."),
+    "wide_vibrato" to SongTechniqueDefinition("~~~~", "Wide vibrato", "Wide vibrato", "Rung dây với biên độ rộng hơn vibrato thông thường.", "Oscillate the pitch with wider movement."),
+    "trill" to SongTechniqueDefinition("tr", "Trill", "Trill", "Luân phiên nhanh hai cao độ liền kề.", "Rapid alternation between two pitches."),
+    "tremolo" to SongTechniqueDefinition("TR ///", "Tremolo picking", "Tremolo picking", "Gảy lặp một nốt rất nhanh; số vạch thể hiện độ chia nhịp.", "Rapid repeated picking; slashes indicate rhythmic subdivision."),
+    "buzz" to SongTechniqueDefinition("Buzz", "Buzz roll", "Buzz roll", "Đánh lặp/nhấn tạo âm rung liên tục theo ký hiệu file nhạc.", "A sustained buzzing roll indicated by the score."),
+    "whammy" to SongTechniqueDefinition("↘↗", "Tremolo bar / Whammy", "Tremolo / whammy bar", "Dùng cần rung để hạ, nâng hoặc trả cao độ.", "Use the whammy bar to dip or restore pitch."),
+    "harmonic" to SongTechniqueDefinition("◇", "Harmonic", "Harmonic", "Âm bồi tự nhiên, nhân tạo, pinch hoặc các dạng harmonic khác.", "Natural, artificial, pinch, tap and other harmonics."),
+    "palm_mute" to SongTechniqueDefinition("P.M.", "Palm mute", "Palm mute", "Đặt nhẹ cạnh bàn tay lên dây gần ngựa đàn để làm tiếng ngắn/đục.", "Lightly mute near the bridge with the picking hand."),
+    "let_ring" to SongTechniqueDefinition("Let ring", "Let ring", "Let ring", "Để dây ngân tự nhiên, không chặn ngay sau khi gảy.", "Allow the note to ring instead of damping it."),
+    "dead" to SongTechniqueDefinition("×", "Dead note", "Dead note", "Chặn dây để tạo âm gõ không có cao độ rõ ràng.", "Muted percussive note without a clear pitch."),
+    "ghost" to SongTechniqueDefinition("( )", "Ghost note", "Ghost note", "Nốt nhẹ, thường nằm trong ngoặc.", "A softer, parenthesized note."),
+    "staccato" to SongTechniqueDefinition("·", "Staccato", "Staccato", "Ngắt nốt ngắn hơn trường độ ghi trên khuông.", "Play the note shorter than its written value."),
+    "accent" to SongTechniqueDefinition(">", "Accent", "Accent", "Nhấn mạnh nốt hơn các nốt xung quanh.", "Stress a note more strongly than surrounding notes."),
+    "heavy_accent" to SongTechniqueDefinition(">>", "Heavy accent", "Heavy accent", "Nhấn nốt rất mạnh.", "Give the note a strong accent."),
+    "tenuto" to SongTechniqueDefinition("—", "Tenuto", "Tenuto", "Giữ nốt đầy đủ trường độ và nhấn nhẹ.", "Hold the note to its full value with slight emphasis."),
+    "tapping" to SongTechniqueDefinition("T", "Tapping", "Tapping", "Gõ lên cần đàn bằng tay phải hoặc tay trái.", "Sound a note by tapping the fretboard."),
+    "grace" to SongTechniqueDefinition("♪", "Grace note", "Grace note", "Nốt trang trí ngắn trước hoặc đúng vào phách.", "A short ornamental note before or on the beat."),
+    "turn" to SongTechniqueDefinition("↷", "Turn / Inverted turn", "Turn / inverted turn", "Luyến nhanh quanh nốt chính bằng các nốt kề.", "An ornament circling the main note."),
+    "mordent" to SongTechniqueDefinition("M", "Mordent", "Mordent", "Chèn một nốt kề rất nhanh rồi về nốt chính.", "Quickly alternate with a neighboring pitch."),
+    "strum" to SongTechniqueDefinition("↑ ↓", "Strum", "Strum", "Quạt qua nhiều dây theo hướng lên hoặc xuống.", "Brush multiple strings upward or downward."),
+    "arpeggio" to SongTechniqueDefinition("Arp.", "Arpeggio", "Arpeggio", "Rải các nốt của hợp âm theo thứ tự thay vì cùng một lúc.", "Play chord notes in sequence instead of simultaneously."),
+    "pick_stroke" to SongTechniqueDefinition("↑ ↓", "Hướng gảy pick", "Pick stroke", "Ký hiệu hướng gảy lên hoặc xuống của miếng gảy.", "Pick upstroke or downstroke indication."),
+    "barre" to SongTechniqueDefinition("B / ½B", "Barre / Half barre", "Barre / half barre", "Dùng một ngón chặn nhiều dây cùng một ngăn.", "Use one finger to fret multiple strings at the same fret."),
+    "slap" to SongTechniqueDefinition("S", "Slap", "Slap", "Đập ngón cái vào dây, thường gặp ở bass.", "Strike the string with the thumb, often on bass."),
+    "pop" to SongTechniqueDefinition("P", "Pop", "Pop", "Móc rồi bật dây tạo âm sắc mạnh, thường trên bass.", "Pull and release a string for a snappy bass tone."),
+    "dead_slap" to SongTechniqueDefinition("×S", "Dead slap", "Dead slap", "Đập dây đã chặn để tạo âm gõ.", "Percussive slap on a muted string."),
+    "rasgueado" to SongTechniqueDefinition("Rasg.", "Rasgueado", "Rasgueado", "Quạt nhiều ngón liên tiếp theo phong cách guitar cổ điển/flamenco.", "Rapid multi-finger strumming, often flamenco."),
+    "golpe" to SongTechniqueDefinition("G", "Golpe", "Golpe", "Gõ vào mặt đàn bằng ngón tay hoặc ngón cái.", "Tap the guitar top with a finger or thumb."),
+    "wah" to SongTechniqueDefinition("Wah", "Wah pedal", "Wah pedal", "Ký hiệu pedal wah ở vị trí mở hoặc đóng.", "Wah pedal open/closed indication."),
+    "fade" to SongTechniqueDefinition("Fade", "Fade / Swell", "Fade / swell", "Hiệu ứng tăng, giảm hoặc phồng âm lượng.", "Fade in, fade out or swell the volume."),
+    "crescendo" to SongTechniqueDefinition("< >", "Crescendo / Diminuendo", "Crescendo / diminuendo", "Tăng hoặc giảm âm lượng dần theo đoạn.", "Gradually increase or decrease volume."),
+    "fermata" to SongTechniqueDefinition("𝄐", "Fermata", "Fermata", "Ngân nốt hoặc dấu nghỉ lâu hơn trường độ viết.", "Hold a note or rest beyond its written duration."),
+    "fingering" to SongTechniqueDefinition("1–4", "Số ngón bấm/gảy", "Fingering", "Số ngón tay trái hoặc ký hiệu ngón gảy tay phải.", "Left-hand finger numbers or right-hand finger marks."),
+    "key_signature" to SongTechniqueDefinition("♯ ♭", "Hóa biểu", "Key signature", "Dấu thăng/giáng ở đầu khuông quy định các nốt thay đổi cao độ.", "Sharps/flats at the start of the staff define the key.", true),
+    "time_signature" to SongTechniqueDefinition("4/4", "Số chỉ nhịp", "Time signature", "Số trên là phách mỗi ô nhịp, số dưới là loại nốt tính một phách.", "Top number counts beats per bar; bottom defines the beat note.", true),
+    "tempo" to SongTechniqueDefinition("♩=", "Tốc độ (BPM)", "Tempo (BPM)", "Chỉ tốc độ bài nhạc, có thể thay đổi giữa các ô nhịp.", "Tempo indication; may change during the score.", true),
+    "dynamics" to SongTechniqueDefinition("p mf f", "Cường độ", "Dynamics", "p: nhẹ; mf: vừa mạnh; f/ff: mạnh/rất mạnh.", "p is soft, mf moderately loud, f/ff loud/very loud.", true),
+    "tuplet" to SongTechniqueDefinition("3", "Liên ba / Tuplet", "Tuplet", "Chia nhóm nốt theo tỷ lệ khác cách chia nhịp thông thường.", "A rhythmic subdivision such as triplets.", true),
+    "repeat" to SongTechniqueDefinition("𝄆 𝄇", "Lặp đoạn", "Repeat signs", "Quay lại và chơi lặp đoạn nhạc theo dấu lặp.", "Repeat the marked score section.", true),
+    "chord_symbol" to SongTechniqueDefinition("Am7", "Tên hợp âm", "Chord symbol", "Tên hợp âm được khai báo trong bản Guitar Pro.", "Chord name supplied by the Guitar Pro score.", true),
+    "rest" to SongTechniqueDefinition("𝄽", "Dấu nghỉ", "Rest", "Khoảng im lặng theo giá trị trường độ tương ứng.", "Silence for the notated duration.", true)
+)
+
 
 /**
  * Ba nhóm nội dung ở màn hình Bản nhạc.
@@ -870,6 +1305,56 @@ private enum class MusicLibrarySection {
             "Các điệu Bolero, Ballad, Rumba, Disco... sẽ hiển thị tại đây.",
             "Bolero, Ballad, Rumba, Disco and other rhythms will appear here."
         )
+    }
+}
+
+@Composable
+private fun SongTechniqueGuideRow(
+    detail: SongTechniqueDefinition,
+    vietnamese: Boolean,
+    dark: Boolean,
+    textColor: Color,
+    mutedColor: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(if (dark) Color(0xFF222838) else Color(0xFFF5F6FB))
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .width(59.dp)
+                .heightIn(min = 34.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(if (dark) Color(0xFF3C285A) else Color(0xFFEDE9FE)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = detail.symbol,
+                color = if (dark) Color(0xFFE9D5FF) else Color(0xFF6D28D9),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (vietnamese) detail.nameVi else detail.nameEn,
+                color = textColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = if (vietnamese) detail.descriptionVi else detail.descriptionEn,
+                color = mutedColor,
+                fontSize = 11.5.sp,
+                lineHeight = 15.sp
+            )
+        }
     }
 }
 
@@ -987,6 +1472,85 @@ private fun SongTabGoogleGIcon(modifier: Modifier = Modifier) {
             drawPath(yellowPath, Color(0xFFFBBC05))
             drawPath(greenPath, Color(0xFF34A853))
             drawPath(bluePath, Color(0xFF4285F4))
+        }
+    }
+}
+
+/**
+ * C-major open chord diagram (x32010), drawn directly by Compose.
+ * Order, left to right: E6(x), A5(3), D4(2), G3(0), B2(1), E1(0).
+ * No PNG, drawable resource, network request or external icon library.
+ */
+@Composable
+private fun SongTabCChordIcon(
+    modifier: Modifier = Modifier,
+    isDark: Boolean = false,
+    selected: Boolean = false,
+    accentColor: Color = Color(0xFF6D28D9)
+) {
+    Canvas(modifier = modifier) {
+        val side = size.minDimension
+        if (side <= 0f) return@Canvas
+        val scaleFactor = side / 100f
+        val left = (size.width - side) / 2f
+        val top = (size.height - side) / 2f
+        val lineColor = if (isDark) Color(0xFFE0E7F0) else Color(0xFF475569)
+        val fingerColor = if (selected) accentColor
+        else if (isDark) Color(0xFFA78BFA) else Color(0xFF6D28D9)
+
+        withTransform({
+            translate(left = left, top = top)
+            scale(scaleX = scaleFactor, scaleY = scaleFactor, pivot = Offset.Zero)
+        }) {
+            // Strings are vertical (low E on the left, high E on the right).
+            val x0 = 19f
+            val stepX = 14.4f
+            val nutY = 29f
+            val fretStep = 16f
+            for (stringIndex in 0..5) {
+                val x = x0 + stringIndex * stepX
+                drawLine(lineColor.copy(alpha = 0.86f), Offset(x, nutY), Offset(x, nutY + 4 * fretStep), 1.7f)
+            }
+            for (fretLine in 0..4) {
+                val y = nutY + fretLine * fretStep
+                drawLine(lineColor, Offset(x0, y), Offset(x0 + 5 * stepX, y),
+                    if (fretLine == 0) 4.4f else 1.7f)
+            }
+
+            // Muted low E (x); open G and high E (o).
+            val markerY = 19f
+            val mutedX = x0
+            drawLine(lineColor, Offset(mutedX - 3.8f, markerY - 3.8f),
+                Offset(mutedX + 3.8f, markerY + 3.8f), 2.4f, StrokeCap.Round)
+            drawLine(lineColor, Offset(mutedX - 3.8f, markerY + 3.8f),
+                Offset(mutedX + 3.8f, markerY - 3.8f), 2.4f, StrokeCap.Round)
+            listOf(3, 5).forEach { openString ->
+                drawCircle(color = fingerColor, radius = 4.8f,
+                    center = Offset(x0 + openString * stepX, markerY),
+                    style = Stroke(width = 2.5f))
+            }
+
+            fun finger(stringIndex: Int, fret: Int) {
+                val center = Offset(
+                    x0 + stringIndex * stepX,
+                    nutY + (fret - 0.5f) * fretStep
+                )
+                drawCircle(color = fingerColor, radius = 6.5f, center = center)
+                drawCircle(color = if (isDark) Color(0xFF151827) else Color.White,
+                    radius = 1.6f, center = center)
+            }
+            finger(stringIndex = 1, fret = 3) // A string, C3
+            finger(stringIndex = 2, fret = 2) // D string, E3
+            finger(stringIndex = 4, fret = 1) // B string, C4
+
+            // Chord name within the icon, without another image or font resource.
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = fingerColor.toArgb()
+                textSize = 16f
+                isFakeBoldText = true
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            drawContext.canvas.nativeCanvas.drawText("C", 43f, 15f, paint)
         }
     }
 }
@@ -1169,6 +1733,41 @@ private fun SongTabContactActionRow(
 }
 
 @Composable
+private fun SongTabMetronomeIcon(
+    modifier: Modifier = Modifier,
+    color: Color = Color.White
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val lineWidth = size.minDimension * 0.085f
+        val frame = Path().apply {
+            moveTo(w * 0.28f, h * 0.80f)
+            lineTo(w * 0.44f, h * 0.25f)
+            lineTo(w * 0.56f, h * 0.25f)
+            lineTo(w * 0.72f, h * 0.80f)
+            close()
+        }
+        drawPath(frame, color, style = Stroke(width = lineWidth))
+        drawLine(
+            color = color,
+            start = Offset(w * 0.50f, h * 0.66f),
+            end = Offset(w * 0.76f, h * 0.13f),
+            strokeWidth = lineWidth,
+            cap = StrokeCap.Round
+        )
+        drawCircle(color, radius = lineWidth * 1.05f, center = Offset(w * 0.76f, h * 0.13f))
+        drawLine(
+            color = color,
+            start = Offset(w * 0.21f, h * 0.86f),
+            end = Offset(w * 0.79f, h * 0.86f),
+            strokeWidth = lineWidth,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
 private fun SongTabLoadingWave(
     modifier: Modifier = Modifier,
     color: Color = Color(0xFF15B27D)
@@ -1207,6 +1806,56 @@ private fun SongTabLoadingWave(
     }
 }
 
+// Hien thi song am khi dang lay file GP tu may chu/Drive hoac doc file cuc bo.
+// Khong chen anh vao APK: su dung lai SongTabLoadingWave co san trong Compose.
+// Lớp phủ chỉ nằm trong vùng bản nhạc, nên Back và thanh điều hướng vẫn sử dụng được.
+@Composable
+private fun SongTabScoreLoadingOverlay(
+    songTitle: String,
+    isDark: Boolean,
+    currentLang: String,
+    modifier: Modifier = Modifier
+) {
+    val backgroundColor = if (isDark) Color.Black else Color.White
+    val textColor = if (isDark) Color.White else Color(0xFF202124)
+    val waveColor = Color(0xFF15B27D)
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(backgroundColor)
+            .padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        SongTabLoadingWave(color = waveColor)
+        Spacer(modifier = Modifier.height(18.dp))
+        Text(
+            text = soundFontText(
+                "tab_song_loading",
+                currentLang,
+                "Đang tải dữ liệu bài hát...",
+                "Loading song data..."
+            ),
+            color = textColor,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp,
+            textAlign = TextAlign.Center
+        )
+        if (songTitle.isNotBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = songTitle,
+                color = if (isDark) Color(0xFFB1B8C2) else Color(0xFF697481),
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
 @Composable
 private fun SongTabAccessLoadingScreen(
     isDark: Boolean
@@ -1234,7 +1883,6 @@ private fun SongTabAccessGateScreen(
     isDark: Boolean,
     state: DocumentAccessState,
     currentLang: String,
-    gateReason: SongTabGateReason = SongTabGateReason.DEFAULT,
     onClose: () -> Unit,
     onLogin: () -> Unit,
     onRetry: () -> Unit
@@ -1246,7 +1894,6 @@ private fun SongTabAccessGateScreen(
     val context = LocalContext.current
     val supportEmail = "tunertools.top@gmail.com"
     val supportZaloPhone = "0971832146"
-    val isTrialExpired = gateReason == SongTabGateReason.TRIAL_EXPIRED
 
     fun accessText(
         key: String,
@@ -1289,34 +1936,18 @@ private fun SongTabAccessGateScreen(
 
     fun openSupportEmail() {
         val accountEmail = requestingEmail()
-        val subject = if (isTrialExpired) {
-            accessText(
-                "tab_trial_contact_subject",
-                "Yêu cầu gia hạn chức năng Bản nhạc TunerTools",
-                "Request to extend TunerTools Sheet Music access"
-            )
-        } else {
-            accessText(
-                "tab_access_contact_subject",
-                "Yêu cầu cấp quyền Bản nhạc TunerTools",
-                "Request TunerTools Sheet Music access"
-            )
-        }
+        val subject = accessText(
+            "tab_access_contact_subject",
+            "Liên hệ hỗ trợ chức năng Bản nhạc TunerTools",
+            "Contact TunerTools Sheet Music support"
+        )
         val body = buildString {
             append(
-                if (isTrialExpired) {
-                    accessText(
-                        "tab_trial_contact_body",
-                        "Xin chào TunerTools, thời gian dùng thử 30 ngày của tôi đã hết. Vui lòng hỗ trợ gia hạn hoặc cấp quyền sử dụng chức năng Bản nhạc",
-                        "Hello TunerTools, my 30-day trial has expired. Please help extend or grant access to the Sheet Music feature"
-                    )
-                } else {
-                    accessText(
-                        "tab_access_contact_body",
-                        "Xin chào TunerTools, vui lòng hỗ trợ cấp quyền sử dụng chức năng Bản nhạc",
-                        "Hello TunerTools, please help grant access to the Sheet Music feature"
-                    )
-                }
+                accessText(
+                    "tab_access_contact_body",
+                    "Xin chào TunerTools, vui lòng hỗ trợ tôi sử dụng chức năng Bản nhạc miễn phí",
+                    "Hello TunerTools, please help me use the free Sheet Music feature"
+                )
             )
             if (accountEmail.isNotBlank()) {
                 append(
@@ -1345,89 +1976,48 @@ private fun SongTabAccessGateScreen(
         launchContactIntent(zalo, fallback)
     }
 
-    val title = if (isTrialExpired) {
-        accessText(
-            "tab_trial_expired_title",
-            "Thời gian dùng thử đã hết",
-            "Your trial has expired"
+    val title = when (state) {
+        DocumentAccessState.Checking -> accessText(
+            "tab_access_checking_title", "Đang kiểm tra tài khoản...", "Checking account..."
         )
-    } else {
-        when (state) {
-            DocumentAccessState.Checking -> accessText(
-                "tab_access_checking_title",
-                "Đang kiểm tra quyền...",
-                "Checking access..."
-            )
-            is DocumentAccessState.LoginRequired -> accessText(
-                "tab_access_login_title",
-                "Cần đăng nhập Google",
-                "Google sign-in required"
-            )
-            is DocumentAccessState.Denied -> accessText(
-                "tab_access_denied_title",
-                "Tài khoản chưa được cấp quyền",
-                "Account has not been granted access"
-            )
-            is DocumentAccessState.Error -> accessText(
-                "tab_access_error_title",
-                "Không thể tải dữ liệu",
-                "Unable to load data"
-            )
-            is DocumentAccessState.Granted -> ""
-        }
+        is DocumentAccessState.LoginRequired -> accessText(
+            "tab_access_login_title", "Cần đăng nhập Google", "Google sign-in required"
+        )
+        is DocumentAccessState.Denied -> accessText(
+            "tab_access_error_title", "Không thể truy cập", "Unable to access"
+        )
+        is DocumentAccessState.Error -> accessText(
+            "tab_access_error_title", "Không thể tải dữ liệu", "Unable to load data"
+        )
+        is DocumentAccessState.Granted -> ""
     }
 
-    val message = if (isTrialExpired) {
-        buildString {
-            val email = requestingEmail()
-            if (email.isNotBlank()) {
-                append(email)
-                append("\n")
-            }
-            append(
-                accessText(
-                    "tab_trial_expired_message",
-                    "Bạn đã sử dụng đủ 30 ngày miễn phí của chức năng Bản nhạc. Vui lòng liên hệ qua Gmail hoặc Zalo để được hỗ trợ gia hạn hoặc cấp quyền.",
-                    "You have completed the 30-day free Sheet Music trial. Contact us by Gmail or Zalo to extend or request access."
-                )
+    val message = when (state) {
+        DocumentAccessState.Checking -> accessText(
+            "tab_access_checking_message", "Vui lòng chờ trong giây lát.", "Please wait a moment."
+        )
+        is DocumentAccessState.LoginRequired -> state.message.ifBlank {
+            accessText(
+                "tab_free_login_message",
+                "Đăng nhập Google để sử dụng chức năng Bản nhạc miễn phí, không giới hạn thời gian.",
+                "Sign in with Google to use Sheet Music for free, with no time limit."
             )
         }
-    } else {
-        when (state) {
-            DocumentAccessState.Checking -> accessText(
-                "tab_access_checking_message",
-                "Vui lòng chờ trong giây lát.",
-                "Please wait a moment."
+        is DocumentAccessState.Denied -> state.message.ifBlank {
+            accessText(
+                "tab_access_error_message",
+                "Không thể tải dữ liệu Bản nhạc. Hãy thử lại.",
+                "Unable to load Sheet Music. Please retry."
             )
-            is DocumentAccessState.LoginRequired -> state.message.ifBlank {
-                accessText(
-                    "tab_trial_login_message",
-                    "Đăng nhập Google để bắt đầu 30 ngày sử dụng miễn phí chức năng Bản nhạc.",
-                    "Sign in with Google to start a 30-day free Sheet Music trial."
-                )
-            }
-            is DocumentAccessState.Denied -> buildString {
-                if (state.email.isNotBlank()) append(state.email)
-                if (state.email.isNotBlank() && state.message.isNotBlank()) append("\n")
-                append(
-                    state.message.ifBlank {
-                        accessText(
-                            "tab_access_denied_message",
-                            "Gmail này chưa được cấp quyền sử dụng chức năng Bản nhạc.",
-                            "This Gmail account has not been granted access to Sheet Music."
-                        )
-                    }
-                )
-            }
-            is DocumentAccessState.Error -> state.message.ifBlank {
-                accessText(
-                    "tab_access_error_message",
-                    "Không thể kết nối máy chủ hoặc tải dữ liệu.",
-                    "Unable to connect to the server or load data."
-                )
-            }
-            is DocumentAccessState.Granted -> ""
         }
+        is DocumentAccessState.Error -> state.message.ifBlank {
+            accessText(
+                "tab_access_error_message",
+                "Không thể kết nối máy chủ hoặc tải dữ liệu.",
+                "Unable to connect to the server or load data."
+            )
+        }
+        is DocumentAccessState.Granted -> ""
     }
 
     Surface(
@@ -1482,7 +2072,6 @@ private fun SongTabAccessGateScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     val icon = when {
-                        isTrialExpired -> Icons.Default.Lock
                         state == DocumentAccessState.Checking -> Icons.Default.Refresh
                         state is DocumentAccessState.LoginRequired -> Icons.Default.Login
                         state is DocumentAccessState.Denied -> Icons.Default.Lock
@@ -1493,7 +2082,7 @@ private fun SongTabAccessGateScreen(
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = if (state is DocumentAccessState.Error && !isTrialExpired) {
+                        tint = if (state is DocumentAccessState.Error) {
                             Color(0xFFEF5350)
                         } else {
                             textColor.copy(alpha = 0.82f)
@@ -1517,7 +2106,7 @@ private fun SongTabAccessGateScreen(
                         textAlign = TextAlign.Center
                     )
 
-                    if (state is DocumentAccessState.Denied || isTrialExpired) {
+                    if (state is DocumentAccessState.Denied) {
                         Spacer(modifier = Modifier.height(14.dp))
                         SongTabContactActionRow(
                             textColor = textColor,
@@ -1541,57 +2130,6 @@ private fun SongTabAccessGateScreen(
                     Spacer(modifier = Modifier.height(18.dp))
 
                     when {
-                        isTrialExpired -> {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Button(
-                                    onClick = onLogin,
-                                    modifier = Modifier.weight(1f).height(44.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color.White,
-                                        contentColor = Color(0xFF202124)
-                                    ),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        Color(0xFFDADCE0)
-                                    )
-                                ) {
-                                    SongTabGoogleGIcon(modifier = Modifier.size(17.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        accessText(
-                                            "tab_access_switch_account",
-                                            "Đổi tài khoản",
-                                            "Switch account"
-                                        ),
-                                        color = Color(0xFF202124),
-                                        maxLines = 1,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                Button(
-                                    onClick = onRetry,
-                                    modifier = Modifier.weight(1f).height(44.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = accentColor)
-                                ) {
-                                    Text(
-                                        accessText(
-                                            "tab_access_retry",
-                                            "Thử lại",
-                                            "Retry"
-                                        ),
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-
                         state == DocumentAccessState.Checking -> {
                             CircularProgressIndicator(
                                 color = accentColor,
@@ -1737,16 +2275,6 @@ fun BangNhacScreen(
                 .lowercase(Locale.ROOT)
         )
     }
-    var trialStatus by remember(signedInEmail) {
-        mutableStateOf(
-            readSongTabTrialStatus(
-                context = context,
-                email = signedInEmail,
-                startIfMissing = signedInEmail.isNotBlank()
-            )
-        )
-    }
-
     // Danh sách Nhạc Việt ban đầu được tải tại lớp ngoài. Nhờ vậy cùng một
     // SongTabAccessLoadingScreen được giữ nguyên vị trí từ lúc kiểm tra quyền
     // cho tới khi dữ liệu đầu tiên thật sự sẵn sàng.
@@ -1767,19 +2295,6 @@ fun BangNhacScreen(
         initialSearchSource = SheetMusicServerSource.PRIMARY
     }
 
-    fun refreshAccountTrial(
-        email: String,
-        startIfMissing: Boolean
-    ) {
-        val normalized = email.trim().lowercase(Locale.ROOT)
-        signedInEmail = normalized
-        trialStatus = readSongTabTrialStatus(
-            context = context,
-            email = normalized,
-            startIfMissing = startIfMissing && normalized.isNotBlank()
-        )
-    }
-
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -1796,23 +2311,22 @@ fun BangNhacScreen(
 
                 val email = account?.email.orEmpty()
                 if (account == null || email.isBlank()) {
-                    refreshAccountTrial("", startIfMissing = false)
+                    signedInEmail = ""
                     accessState = DocumentAccessState.LoginRequired(
                         message = soundFontText(
-                            "tab_trial_login_message",
+                            "tab_free_login_message",
                             currentLang,
-                            "Đăng nhập Google để bắt đầu 30 ngày sử dụng miễn phí chức năng Bản nhạc.",
-                            "Sign in with Google to start a 30-day free Sheet Music trial."
+                            "Đăng nhập Google để sử dụng chức năng Bản nhạc miễn phí, không giới hạn thời gian.",
+                            "Sign in with Google to use Sheet Music for free, with no time limit."
                         )
                     )
                 } else {
-                    // Moc 30 ngay chi duoc tao sau khi Google tra ve dang nhap thanh cong.
-                    refreshAccountTrial(email, startIfMissing = true)
+                    // Mọi tài khoản Google đăng nhập thành công đều được sử dụng miễn phí lâu dài.
+                    signedInEmail = email.trim().lowercase(Locale.ROOT)
                     accessState = try {
                         DocumentAccessApi.loginWithAccount(context, account, DocumentAccessScope.SONG_TAB)
                     } catch (error: Exception) {
-                        // Quyen may chu co the tam thoi khong doc duoc, nhung tai khoan van
-                        // duoc dung thu theo moc thoi gian da luu tren thiet bi.
+                        // Lỗi kiểm tra phiên máy chủ không làm mất quyền dùng miễn phí.
                         DocumentAccessState.Error(
                             error.message ?: soundFontText(
                                 "tab_access_error_message",
@@ -1826,13 +2340,13 @@ fun BangNhacScreen(
             }
         } else {
             resetInitialLoad()
-            refreshAccountTrial("", startIfMissing = false)
+            signedInEmail = ""
             accessState = DocumentAccessState.LoginRequired(
                 message = soundFontText(
-                    "tab_trial_login_message",
+                    "tab_free_login_message",
                     currentLang,
-                    "Đăng nhập Google để bắt đầu 30 ngày sử dụng miễn phí chức năng Bản nhạc.",
-                    "Sign in with Google to start a 30-day free Sheet Music trial."
+                    "Đăng nhập Google để sử dụng chức năng Bản nhạc miễn phí, không giới hạn thời gian.",
+                    "Sign in with Google to use Sheet Music for free, with no time limit."
                 )
             )
         }
@@ -1842,9 +2356,9 @@ fun BangNhacScreen(
         resetInitialLoad()
         accessState = DocumentAccessState.Checking
         DocumentAccessStore.clear(context)
-        // Đăng xuất trước để Google không tự động dùng lại Gmail vừa bị từ chối hoặc đã hết hạn.
+        // Đăng xuất trước để người dùng chủ động chọn tài khoản Google khác.
         googleSignInClient.signOut().addOnCompleteListener {
-            refreshAccountTrial("", startIfMissing = false)
+            signedInEmail = ""
             signInLauncher.launch(googleSignInClient.signInIntent)
         }
     }
@@ -1854,13 +2368,7 @@ fun BangNhacScreen(
         accessState = DocumentAccessState.Checking
 
         val account = GoogleSignIn.getLastSignedInAccount(context)
-        val email = account?.email.orEmpty()
-        if (email.isNotBlank()) {
-            // Tai khoan da dang nhap tu phien ban truoc se bat dau 30 ngay khi mo Ban nhac lan dau.
-            refreshAccountTrial(email, startIfMissing = true)
-        } else {
-            refreshAccountTrial("", startIfMissing = false)
-        }
+        signedInEmail = account?.email.orEmpty().trim().lowercase(Locale.ROOT)
 
         accessState = try {
             DocumentAccessApi.ensureSession(context, DocumentAccessScope.SONG_TAB)
@@ -1876,37 +2384,18 @@ fun BangNhacScreen(
         }
     }
 
-    // Làm mới mốc thời gian trong lúc người dùng đang đứng tại màn hình này để
-    // trạng thái hết hạn có hiệu lực mà không cần đóng/mở lại ứng dụng.
-    LaunchedEffect(signedInEmail, trialStatus.startedAt) {
-        while (signedInEmail.isNotBlank() && trialStatus.startedAt > 0L) {
-            delay(60_000L)
-            trialStatus = readSongTabTrialStatus(
-                context = context,
-                email = signedInEmail,
-                startIfMissing = false
-            )
-        }
-    }
-
     val grantedState = accessState as? DocumentAccessState.Granted
-    val hasPermanentViewPermission = grantedState?.info?.permissions?.let {
-        it.canView || it.canManage
-    } == true
-
     val effectiveEmail = grantedState?.info?.email
         ?.trim()
         ?.lowercase(Locale.ROOT)
         ?.takeIf { it.isNotBlank() }
         ?: signedInEmail
     val isSignedIn = effectiveEmail.isNotBlank()
-    val trialBelongsToCurrentAccount = trialStatus.email.equals(effectiveEmail, ignoreCase = true)
-    val hasActiveTrial = isSignedIn && trialBelongsToCurrentAccount && trialStatus.isActive
-    val hasExpiredTrial = isSignedIn && trialBelongsToCurrentAccount && trialStatus.isExpired
-    val canUseSheetMusic = hasPermanentViewPermission || hasActiveTrial
-    val showTrialExpired = hasExpiredTrial && !hasPermanentViewPermission
+    // Khong ap dung gioi han 30 ngay hoac quyen canView/canManage de mo Ban nhac.
+    // Dang nhap Google la dieu kien duy nhat o phia giao dien; loi phien server
+    // khong duoc phep khoa tinh nang mien phi.
+    val canUseSheetMusic = isSignedIn
 
-    // Dùng thử và quyền vĩnh viễn cùng dùng chung luồng tải dữ liệu.
     LaunchedEffect(
         effectiveEmail,
         canUseSheetMusic,
@@ -1933,33 +2422,39 @@ fun BangNhacScreen(
             }
             initialSongs = initialOutcome.songs
             initialSearchSource = initialOutcome.source
+        } catch (cancelled: CancellationException) {
+            // LaunchedEffect was cancelled when this screen left composition.
+            // This is a normal lifecycle event, not a server or search error.
+            throw cancelled
         } catch (error: Exception) {
-            initialLoadError = "Lỗi tải dữ liệu: ${error.message ?: "Không xác định"}"
+            android.util.Log.e("TuneToolsSheetMusicApi", "Initial sheet list failed", error)
+            // Show the meaningful HTTP/JSON failure instead of hiding every
+            // server problem behind one generic error. Keep the full trace in Logcat.
+            val details = mutableListOf<String>()
+            error.suppressed.firstOrNull()?.message?.takeIf { it.isNotBlank() }
+                ?.let { details += "Google Drive: $it" }
+            error.cause?.message?.takeIf { it.isNotBlank() }
+                ?.let { details += "Dự phòng: $it" }
+            if (details.isEmpty()) {
+                error.message?.takeIf { it.isNotBlank() }?.let { details += it }
+            }
+            val detailText = if (details.isEmpty()) {
+                "Vui lòng thử lại."
+            } else {
+                "Chi tiết: " + details.joinToString(" | ").take(240)
+            }
+            initialLoadError = "Không thể tải danh sách bản nhạc. " + detailText
         }
     }
 
     val showUnifiedLoading =
-        accessState is DocumentAccessState.Checking ||
-                (isSignedIn && !trialStatus.isStarted && !hasPermanentViewPermission) ||
+        (isSignedIn && accessState is DocumentAccessState.Checking) ||
                 (canUseSheetMusic && initialSongs == null && initialLoadError == null)
 
     when {
         // Cùng một nhánh Composable được giữ trong cả hai giai đoạn nên sóng âm
         // không đổi vị trí, không chớp tiêu đề và không xuất hiện loader thứ hai.
         showUnifiedLoading -> SongTabAccessLoadingScreen(isDark = isDark)
-
-        showTrialExpired -> SongTabAccessGateScreen(
-            isDark = isDark,
-            state = DocumentAccessState.Denied(
-                email = effectiveEmail,
-                message = ""
-            ),
-            currentLang = currentLang,
-            gateReason = SongTabGateReason.TRIAL_EXPIRED,
-            onClose = onClose,
-            onLogin = { switchGoogleAccount() },
-            onRetry = { accessRefresh++ }
-        )
 
         canUseSheetMusic && initialLoadError != null -> SongTabAccessGateScreen(
             isDark = isDark,
@@ -1988,18 +2483,14 @@ fun BangNhacScreen(
 
         !isSignedIn -> SongTabAccessGateScreen(
             isDark = isDark,
-            state = if (accessState is DocumentAccessState.LoginRequired) {
-                accessState
-            } else {
-                DocumentAccessState.LoginRequired(
-                    message = soundFontText(
-                        "tab_trial_login_message",
-                        currentLang,
-                        "Đăng nhập Google để bắt đầu 30 ngày sử dụng miễn phí chức năng Bản nhạc.",
-                        "Sign in with Google to start a 30-day free Sheet Music trial."
-                    )
+            state = DocumentAccessState.LoginRequired(
+                message = soundFontText(
+                    "tab_free_login_message",
+                    currentLang,
+                    "Đăng nhập Google để sử dụng chức năng Bản nhạc miễn phí, không giới hạn thời gian.",
+                    "Sign in with Google to use Sheet Music for free, with no time limit."
                 )
-            },
+            ),
             currentLang = currentLang,
             onClose = onClose,
             onLogin = { switchGoogleAccount() },
@@ -2008,13 +2499,12 @@ fun BangNhacScreen(
 
         else -> SongTabAccessGateScreen(
             isDark = isDark,
-            state = DocumentAccessState.Denied(
-                email = effectiveEmail,
-                message = soundFontText(
-                    "tab_access_denied_message",
+            state = DocumentAccessState.Error(
+                soundFontText(
+                    "tab_access_error_message",
                     currentLang,
-                    "Tài khoản này chưa có quyền xem nội dung.",
-                    "This account does not have permission to view this content."
+                    "Không thể tải Bản nhạc. Hãy thử lại.",
+                    "Could not load Sheet Music. Please retry."
                 )
             ),
             currentLang = currentLang,
@@ -2022,6 +2512,676 @@ fun BangNhacScreen(
             onLogin = { switchGoogleAccount() },
             onRetry = { accessRefresh++ }
         )
+    }
+}
+
+@Composable
+private fun TabAppearanceColorPicker(
+    title: String,
+    currentLang: String,
+    options: List<TabAppearanceColorOption>,
+    selectedId: String,
+    isDarkPreview: Boolean,
+    accentColor: Color,
+    textColor: Color,
+    secondaryTextColor: Color,
+    onSelected: (String) -> Unit
+) {
+    val isVietnamese = currentLang.lowercase(Locale.ROOT)
+        .substringBefore('-').substringBefore('_') == "vi"
+    val selectedOption = options.firstOrNull { it.id == selectedId }
+    val selectedHex = tabAppearanceCustomHex(selectedId)
+        ?: selectedOption?.resolve(isDarkPreview)
+        ?: options.first().resolve(isDarkPreview)
+    val selectedName = selectedOption?.title(currentLang)
+        ?: if (isVietnamese) "T\u1ef1 ch\u1ecdn" else "Custom"
+    var mixerExpanded by remember(title) { mutableStateOf(false) }
+    var hue by remember(title) { mutableFloatStateOf(260f) }
+    var saturation by remember(title) { mutableFloatStateOf(80f) }
+    var brightness by remember(title) { mutableFloatStateOf(85f) }
+
+    fun openMixer() {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(android.graphics.Color.parseColor(selectedHex), hsv)
+        hue = hsv[0]
+        saturation = hsv[1] * 100f
+        brightness = hsv[2] * 100f
+        mixerExpanded = !mixerExpanded
+    }
+    fun applyMixer(h: Float, sat: Float, value: Float) {
+        onSelected(tabAppearanceHexFromHsv(h, sat, value))
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                color = textColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "$selectedName  $selectedHex",
+                color = secondaryTextColor,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        // Many accessible presets without shrinking the color circles or the dialog.
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            options.forEach { option ->
+                val selected = option.id == selectedId
+                val resolvedHex = option.resolve(isDarkPreview)
+                val outlineColor = if (selected) textColor
+                else secondaryTextColor.copy(alpha = 0.35f)
+                Box(
+                    modifier = Modifier
+                        .size(35.dp)
+                        .clip(CircleShape)
+                        .border(if (selected) 2.5.dp else 1.dp, outlineColor, CircleShape)
+                        .clickable {
+                            mixerExpanded = false
+                            onSelected(option.id)
+                        }
+                        .padding(4.dp)
+                        .clip(CircleShape)
+                        .background(tabAppearanceComposeColor(resolvedHex)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (selected) {
+                        Box(
+                            modifier = Modifier.size(8.dp)
+                                .background(
+                                    if (tabAppearanceUsesDarkText(resolvedHex))
+                                        Color(0xFF111827) else Color.White,
+                                    CircleShape
+                                )
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(7.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = if (isVietnamese) "Vu\u1ed1t ngang \u0111\u1ec3 xem th\u00eam m\u00e0u" else "Swipe to see more colors",
+                color = secondaryTextColor,
+                fontSize = 10.sp
+            )
+            Text(
+                text = if (isVietnamese) {
+                    if (mixerExpanded) "\u1ea8n b\u1ed9 tr\u1ed9n m\u00e0u" else "T\u1ef1 pha m\u00e0u  HSV"
+                } else if (mixerExpanded) "Hide color mixer" else "Mix color  HSV",
+                color = accentColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(9.dp))
+                    .clickable { openMixer() }
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
+            )
+        }
+        if (mixerExpanded) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = tabAppearanceComposeColor(selectedHex).copy(alpha = 0.11f),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, secondaryTextColor.copy(alpha = 0.22f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(22.dp).clip(CircleShape)
+                            .background(tabAppearanceComposeColor(selectedHex))
+                            .border(1.dp, secondaryTextColor.copy(alpha = .4f), CircleShape))
+                        Spacer(modifier = Modifier.width(9.dp))
+                        Text(
+                            text = if (isVietnamese) "M\u00e0u t\u00f9y ch\u1ec9nh" else "Custom color",
+                            color = textColor, fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(text = selectedHex, color = textColor, fontSize = 11.sp)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(9.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(
+                                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                    listOf(
+                                        Color.Red, Color.Yellow, Color.Green, Color.Cyan,
+                                        Color.Blue, Color.Magenta, Color.Red
+                                    )
+                                )
+                            )
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (isVietnamese) "S\u1eafc" else "Hue",
+                            color = textColor, fontSize = 11.sp,
+                            modifier = Modifier.width(55.dp)
+                        )
+                        Slider(
+                            value = hue, valueRange = 0f..360f,
+                            onValueChange = {
+                                hue = it
+                                applyMixer(hue, saturation, brightness)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("${hue.roundToInt()}\u00b0", color = secondaryTextColor,
+                            fontSize = 10.sp, modifier = Modifier.width(37.dp))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (isVietnamese) "B\u00e3o h\u00f2a" else "Saturation",
+                            color = textColor, fontSize = 11.sp,
+                            modifier = Modifier.width(55.dp)
+                        )
+                        Slider(
+                            value = saturation, valueRange = 0f..100f,
+                            onValueChange = {
+                                saturation = it
+                                applyMixer(hue, saturation, brightness)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("${saturation.roundToInt()}%", color = secondaryTextColor,
+                            fontSize = 10.sp, modifier = Modifier.width(37.dp))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (isVietnamese) "\u0110\u1ed9 s\u00e1ng" else "Brightness",
+                            color = textColor, fontSize = 11.sp,
+                            modifier = Modifier.width(55.dp)
+                        )
+                        Slider(
+                            value = brightness, valueRange = 0f..100f,
+                            onValueChange = {
+                                brightness = it
+                                applyMixer(hue, saturation, brightness)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("${brightness.roundToInt()}%", color = secondaryTextColor,
+                            fontSize = 10.sp, modifier = Modifier.width(37.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabAppearancePreview(
+    isDarkPreview: Boolean,
+    cursorHex: String,
+    activeRegionHex: String,
+    tabHex: String,
+    noteHex: String,
+    fretboardHex: String,
+    panelHex: String,
+    cursorWidth: Float,
+    regionOpacity: Float
+) {
+    val previewSurface = if (isDarkPreview) Color(0xFF0B0F1A) else Color.White
+    val cursorColor = tabAppearanceComposeColor(cursorHex)
+    val regionColor = tabAppearanceComposeColor(activeRegionHex)
+    val tabColor = tabAppearanceComposeColor(tabHex)
+    val noteColor = tabAppearanceComposeColor(noteHex)
+    val boardColor = tabAppearanceComposeColor(fretboardHex)
+    val boardTextColor = if (tabAppearanceUsesDarkText(fretboardHex))
+        Color(0xFF1F2937) else Color.White
+    val panelColor = tabAppearanceComposeColor(panelHex)
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(165.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = previewSurface,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, if (isDarkPreview) Color.White.copy(alpha = .16f)
+            else Color.Black.copy(alpha = .12f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(73.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (isDarkPreview) Color(0xFF111827) else Color(0xFFF8FAFC))
+            ) {
+                Box(
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                        .fillMaxWidth(.50f).fillMaxHeight()
+                        .background(regionColor.copy(alpha = regionOpacity))
+                        .then(
+                            if (regionOpacity > 0f) Modifier.border(
+                                1.dp,
+                                if (isDarkPreview) Color.White.copy(alpha = .25f)
+                                else Color.Black.copy(alpha = .15f)
+                            ) else Modifier
+                        )
+                )
+                repeat(5) { index ->
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(1.dp)
+                            .align(Alignment.TopCenter)
+                            .offset(y = (15 + index * 9).dp)
+                            .background(tabColor.copy(alpha = if (index == 2) .9f else .48f))
+                    )
+                }
+                listOf(.20f, .36f, .58f, .78f).forEachIndexed { index, fraction ->
+                    Box(
+                        modifier = Modifier.align(Alignment.TopStart)
+                            .offset(x = (fraction * 290).dp, y = (25 + index % 2 * 12).dp)
+                            .size(9.dp).background(tabColor, CircleShape)
+                    )
+                }
+                // 0 px means the playhead is fully hidden, including the preview dot.
+                if (cursorWidth >= 1f) {
+                    Box(
+                        modifier = Modifier.align(Alignment.Center)
+                            .width(cursorWidth.coerceIn(1f, 24f).dp).fillMaxHeight()
+                            .background(cursorColor)
+                            .border(1.dp,
+                                if (isDarkPreview) Color.White.copy(alpha = .6f)
+                                else Color.Black.copy(alpha = .55f))
+                    )
+                    Box(
+                        modifier = Modifier.align(Alignment.TopCenter)
+                            .offset(y = 2.dp).size(9.dp)
+                            .background(cursorColor, CircleShape)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(7.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth().weight(1f)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(panelColor).padding(4.dp)
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxSize()
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(boardColor)
+                        .border(1.dp, boardTextColor.copy(alpha = .35f), RoundedCornerShape(7.dp))
+                ) {
+                    repeat(4) { index ->
+                        Box(
+                            modifier = Modifier.fillMaxWidth().height(1.dp)
+                                .align(Alignment.TopCenter)
+                                .offset(y = (9 + index * 12).dp)
+                                .background(boardTextColor.copy(alpha = .58f))
+                        )
+                    }
+                    Box(
+                        modifier = Modifier.align(Alignment.Center)
+                            .offset(x = 30.dp, y = (-5).dp)
+                            .size(24.dp).background(noteColor, CircleShape)
+                            .border(2.dp, boardTextColor, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "A",
+                            color = if (tabAppearanceUsesDarkText(noteHex))
+                                Color(0xFF111827) else Color.White,
+                            fontSize = 10.sp, fontWeight = FontWeight.Black
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabAppearanceSettingsDialog(
+    currentLang: String,
+    appIsDark: Boolean,
+    themeMode: TabAppearanceThemeMode,
+    cursorColorId: String,
+    activeRegionColorId: String,
+    tabColorId: String,
+    noteColorId: String,
+    fretboardColorId: String,
+    panelColorId: String,
+    cursorWidth: Float,
+    regionOpacity: Float,
+    onThemeModeChange: (TabAppearanceThemeMode) -> Unit,
+    onCursorColorChange: (String) -> Unit,
+    onActiveRegionColorChange: (String) -> Unit,
+    onTabColorChange: (String) -> Unit,
+    onNoteColorChange: (String) -> Unit,
+    onFretboardColorChange: (String) -> Unit,
+    onPanelColorChange: (String) -> Unit,
+    onCursorWidthChange: (Float) -> Unit,
+    onRegionOpacityChange: (Float) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isVietnamese = currentLang
+        .lowercase(Locale.ROOT)
+        .substringBefore('-')
+        .substringBefore('_') == "vi"
+    val previewIsDark = themeMode.resolve(appIsDark)
+    val cursorHex = tabAppearanceResolvedHex(
+        TAB_CURSOR_COLOR_OPTIONS, cursorColorId, "purple", previewIsDark)
+    val regionHex = tabAppearanceResolvedHex(
+        TAB_ACTIVE_REGION_COLOR_OPTIONS, activeRegionColorId, "lavender", previewIsDark)
+    val tabHex = tabAppearanceResolvedHex(
+        TAB_GLYPH_COLOR_OPTIONS, tabColorId, "auto", previewIsDark)
+    val noteHex = tabAppearanceResolvedHex(
+        TAB_NOTE_COLOR_OPTIONS, noteColorId, "yellow", previewIsDark)
+    val boardHex = tabAppearanceResolvedHex(
+        TAB_FRETBOARD_COLOR_OPTIONS, fretboardColorId, "black", previewIsDark)
+    val panelHex = tabAppearanceResolvedHex(
+        TAB_FRETBOARD_PANEL_OPTIONS, panelColorId, "white", previewIsDark)
+    val dialogBackground = if (previewIsDark) Color(0xFF11151F) else Color(0xFFF8FAFC)
+    val cardBackground = if (previewIsDark) Color(0xFF1A202C) else Color.White
+    val textColor = if (previewIsDark) Color.White else Color(0xFF101828)
+    val secondaryTextColor = if (previewIsDark) Color(0xFFB8C0CC) else Color(0xFF667085)
+    val dividerColor = if (previewIsDark) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.08f)
+    // Controls still contrast when white/black are chosen for the actual cursor.
+    val useChosenAccent = if (previewIsDark) tabAppearanceUsesDarkText(cursorHex)
+    else !tabAppearanceUsesDarkText(cursorHex)
+    val actionAccentHex = if (useChosenAccent) cursorHex
+    else if (previewIsDark) "#A78BFA" else "#6D28D9"
+    val accentColor = tabAppearanceComposeColor(actionAccentHex)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.94f)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = dialogBackground,
+            shadowElevation = 12.dp
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 18.dp, end = 8.dp, top = 10.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Palette,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(25.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isVietnamese) "Tùy chỉnh hiển thị" else "Display customization",
+                            color = textColor,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (isVietnamese) {
+                                "Thay đổi được áp dụng ngay và tự động lưu"
+                            } else {
+                                "Changes apply instantly and are saved automatically"
+                            },
+                            color = secondaryTextColor,
+                            fontSize = 10.5.sp
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = if (isVietnamese) "Đóng" else "Close",
+                            tint = textColor
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = dividerColor)
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    TabAppearancePreview(
+                        isDarkPreview = previewIsDark,
+                        cursorHex = cursorHex,
+                        activeRegionHex = regionHex,
+                        tabHex = tabHex,
+                        noteHex = noteHex,
+                        fretboardHex = boardHex,
+                        panelHex = panelHex,
+                        cursorWidth = cursorWidth,
+                        regionOpacity = regionOpacity
+                    )
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = cardBackground,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, dividerColor)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = if (isVietnamese) "Chế độ hiển thị" else "Display mode",
+                                color = textColor,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                TabAppearanceThemeMode.values().forEach { mode ->
+                                    val selected = mode == themeMode
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(11.dp))
+                                            .background(
+                                                if (selected) accentColor else dialogBackground
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (selected) accentColor else dividerColor,
+                                                RoundedCornerShape(11.dp)
+                                            )
+                                            .clickable { onThemeModeChange(mode) }
+                                            .padding(horizontal = 4.dp, vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = mode.title(currentLang),
+                                            color = if (selected) {
+                                                if (tabAppearanceUsesDarkText(actionAccentHex)) {
+                                                    Color(0xFF111827)
+                                                } else {
+                                                    Color.White
+                                                }
+                                            } else {
+                                                textColor
+                                            },
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = cardBackground,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, dividerColor)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            TabAppearanceColorPicker(
+                                title = if (isVietnamese) "Màu con trỏ" else "Playhead color",
+                                currentLang = currentLang,
+                                options = TAB_CURSOR_COLOR_OPTIONS,
+                                selectedId = cursorColorId,
+                                isDarkPreview = previewIsDark,
+                                accentColor = accentColor,
+                                textColor = textColor,
+                                secondaryTextColor = secondaryTextColor,
+                                onSelected = onCursorColorChange
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (isVietnamese) "Độ dày vạch chạy (0 = ẩn)" else "Playhead thickness (0 = hide)",
+                                    color = textColor, fontSize = 11.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text("${cursorWidth.roundToInt()} px", color = secondaryTextColor,
+                                    fontSize = 11.sp)
+                            }
+                            Slider(
+                                value = cursorWidth,
+                                valueRange = 0f..24f,
+                                steps = 23,
+                                onValueChange = onCursorWidthChange
+                            )
+                            HorizontalDivider(color = dividerColor)
+                            TabAppearanceColorPicker(
+                                title = if (isVietnamese) "Nền vùng đang chạy" else "Active region background",
+                                currentLang = currentLang,
+                                options = TAB_ACTIVE_REGION_COLOR_OPTIONS,
+                                selectedId = activeRegionColorId,
+                                isDarkPreview = previewIsDark,
+                                accentColor = accentColor,
+                                textColor = textColor,
+                                secondaryTextColor = secondaryTextColor,
+                                onSelected = onActiveRegionColorChange
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (isVietnamese) "\u0110\u1ed9 ph\u1ee7 n\u1ec1n ch\u1ea1y" else "Region opacity",
+                                    color = textColor, fontSize = 11.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text("${(regionOpacity * 100).roundToInt()}%",
+                                    color = secondaryTextColor, fontSize = 11.sp)
+                            }
+                            Slider(
+                                value = regionOpacity,
+                                valueRange = 0f.. .85f,
+                                onValueChange = onRegionOpacityChange
+                            )
+                            HorizontalDivider(color = dividerColor)
+                            TabAppearanceColorPicker(
+                                title = if (isVietnamese) "Khuông nhạc và TAB" else "Notation and TAB",
+                                currentLang = currentLang,
+                                options = TAB_GLYPH_COLOR_OPTIONS,
+                                selectedId = tabColorId,
+                                isDarkPreview = previewIsDark,
+                                accentColor = accentColor,
+                                textColor = textColor,
+                                secondaryTextColor = secondaryTextColor,
+                                onSelected = onTabColorChange
+                            )
+                            HorizontalDivider(color = dividerColor)
+                            TabAppearanceColorPicker(
+                                title = if (isVietnamese) "Nốt trên cần đàn" else "Fretboard notes",
+                                currentLang = currentLang,
+                                options = TAB_NOTE_COLOR_OPTIONS,
+                                selectedId = noteColorId,
+                                isDarkPreview = previewIsDark,
+                                accentColor = accentColor,
+                                textColor = textColor,
+                                secondaryTextColor = secondaryTextColor,
+                                onSelected = onNoteColorChange
+                            )
+                            HorizontalDivider(color = dividerColor)
+                            TabAppearanceColorPicker(
+                                title = if (isVietnamese) "Màu mặt cần đàn" else "Fretboard surface",
+                                currentLang = currentLang,
+                                options = TAB_FRETBOARD_COLOR_OPTIONS,
+                                selectedId = fretboardColorId,
+                                isDarkPreview = previewIsDark,
+                                accentColor = accentColor,
+                                textColor = textColor,
+                                secondaryTextColor = secondaryTextColor,
+                                onSelected = onFretboardColorChange
+                            )
+                            HorizontalDivider(color = dividerColor)
+                            TabAppearanceColorPicker(
+                                title = if (isVietnamese) "M\u00e0u n\u1ec1n ngo\u00e0i c\u1ea7n \u0111\u00e0n"
+                                else "Fretboard panel background",
+                                currentLang = currentLang,
+                                options = TAB_FRETBOARD_PANEL_OPTIONS,
+                                selectedId = panelColorId,
+                                isDarkPreview = previewIsDark,
+                                accentColor = accentColor,
+                                textColor = textColor,
+                                secondaryTextColor = secondaryTextColor,
+                                onSelected = onPanelColorChange
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = dividerColor)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onReset,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(13.dp)
+                    ) {
+                        Text(
+                            text = if (isVietnamese) "Mặc định" else "Reset",
+                            color = textColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(13.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = accentColor)
+                    ) {
+                        Text(
+                            text = if (isVietnamese) "Hoàn tất" else "Done",
+                            color = if (tabAppearanceUsesDarkText(actionAccentHex)) {
+                                Color(0xFF111827)
+                            } else {
+                                Color.White
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2046,6 +3206,10 @@ private fun BangNhacScreenContent(
     val localScorePayload = remember {
         AtomicReference<LocalScorePayload?>(null)
     }
+    // Visible to WebView's background network thread; updated on each song open.
+    val activeGpFailoverRoute = remember {
+        AtomicReference<GpFailoverRoute?>(null)
+    }
     val pdfPrintStarted = remember { AtomicBoolean(false) }
     val pdfJobName = remember { AtomicReference("Ban_nhac_A4.pdf") }
 
@@ -2058,6 +3222,13 @@ private fun BangNhacScreenContent(
     }
     val tabDisplayPrefs = remember(context) {
         context.getSharedPreferences(TAB_DISPLAY_PREFS_NAME, Context.MODE_PRIVATE)
+            .also(::applyTabAppearanceDefaultsIfNeeded)
+    }
+    val metronomePrefs = remember(context) {
+        context.getSharedPreferences(TAB_METRONOME_PREFS_NAME, Context.MODE_PRIVATE)
+    }
+    var metronomeEnabled by remember(context) {
+        mutableStateOf(metronomePrefs.getBoolean(TAB_METRONOME_PREF_ENABLED, false))
     }
     val downloadableSoundFontModes = remember {
         // Thứ tự hiển thị: SF3 trung bình trước, SF2 cao nhất sau.
@@ -2078,7 +3249,14 @@ private fun BangNhacScreenContent(
                     (savedSize <= 0L || file.length() == savedSize)
         }
     }
-    val startupSoundFontMode = remember(context) {
+    // Preserve the Guitar choice independently from Piano. In particular, a stored
+    // FluidR3 SF2 selection must never become the initial playback font for Piano.
+    val startupDisplayIsPiano = remember(tabDisplayPrefs) {
+        TabDisplayMode.fromStored(
+            tabDisplayPrefs.getString(TAB_DISPLAY_PREF_MODE, null)
+        ).instrument == TabDisplayInstrument.PIANO
+    }
+    val startupGuitarSoundFontMode = remember(context) {
         val savedMode = TabSoundFontMode.fromStoredValue(
             soundFontPrefs.getString(SOUNDFONT_PREF_MODE, TabSoundFontMode.STANDARD.storedValue)
         )
@@ -2087,6 +3265,28 @@ private fun BangNhacScreenContent(
         } else {
             TabSoundFontMode.STANDARD
         }
+    }
+    val startupPianoSoundFontMode = remember(context) {
+        val savedPianoMode = soundFontPrefs.getString(SOUNDFONT_PREF_PIANO_MODE, null)
+        val preferred = if (savedPianoMode == null) {
+            if (TabSoundFontMode.MUSESCORE in startupReadySoundFonts) {
+                TabSoundFontMode.MUSESCORE
+            } else {
+                TabSoundFontMode.STANDARD
+            }
+        } else {
+            TabSoundFontMode.fromStoredValue(savedPianoMode)
+        }
+        when {
+            preferred == TabSoundFontMode.FLUIDR3 -> TabSoundFontMode.STANDARD
+            preferred.isDownloadable && preferred !in startupReadySoundFonts -> TabSoundFontMode.STANDARD
+            else -> preferred
+        }
+    }
+    val startupSoundFontMode = if (startupDisplayIsPiano) {
+        startupPianoSoundFontMode
+    } else {
+        startupGuitarSoundFontMode
     }
     val localSoundFontFileRefs = remember {
         downloadableSoundFontModes.associateWith { mode ->
@@ -2127,7 +3327,8 @@ private fun BangNhacScreenContent(
         }
     }
 
-    var selectedSoundFontMode by remember { mutableStateOf(startupSoundFontMode) }
+    var selectedSoundFontMode by remember { mutableStateOf(startupGuitarSoundFontMode) }
+    var selectedPianoSoundFontMode by remember { mutableStateOf(startupPianoSoundFontMode) }
     var activeSoundFontMode by remember { mutableStateOf(startupSoundFontMode) }
     var soundFontMenuExpanded by remember { mutableStateOf(false) }
     var downloadingSoundFontMode by remember { mutableStateOf<TabSoundFontMode?>(null) }
@@ -2142,24 +3343,188 @@ private fun BangNhacScreenContent(
 
     val startupSoundFontUrl = startupSoundFontMode.playbackUrl
 
-    // Quản lý trạng thái Sáng/Tối cục bộ
-    var localIsDark by remember(isDark) { mutableStateOf(isDark) }
+    // TAB mặc định dùng giao diện sáng độc lập với giao diện chung của ứng dụng.
+    // Người dùng vẫn có thể chọn "Theo ứng dụng" trong Tùy chỉnh hiển thị.
+    val initialAppearanceThemeMode = remember(tabDisplayPrefs) {
+        TabAppearanceThemeMode.fromStoredValue(
+            tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_THEME_MODE, null)
+        )
+    }
+    var appearanceThemeMode by remember { mutableStateOf(initialAppearanceThemeMode) }
+    var appearanceCursorColorId by remember(tabDisplayPrefs) {
+        mutableStateOf(
+            tabAppearanceStoredSelection(
+                TAB_CURSOR_COLOR_OPTIONS,
+                tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_CURSOR_COLOR, null),
+                "purple"
+            )
+        )
+    }
+    var appearanceActiveRegionColorId by remember(tabDisplayPrefs) {
+        mutableStateOf(
+            tabAppearanceStoredSelection(
+                TAB_ACTIVE_REGION_COLOR_OPTIONS,
+                tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_ACTIVE_REGION_COLOR, null),
+                "lavender"
+            )
+        )
+    }
+    var appearanceTabColorId by remember(tabDisplayPrefs) {
+        mutableStateOf(
+            tabAppearanceStoredSelection(
+                TAB_GLYPH_COLOR_OPTIONS,
+                tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_TAB_COLOR, null),
+                "auto"
+            )
+        )
+    }
+    var appearanceNoteColorId by remember(tabDisplayPrefs) {
+        mutableStateOf(
+            tabAppearanceStoredSelection(
+                TAB_NOTE_COLOR_OPTIONS,
+                tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_NOTE_COLOR, null),
+                "yellow"
+            )
+        )
+    }
+    var appearanceFretboardColorId by remember(tabDisplayPrefs) {
+        mutableStateOf(
+            tabAppearanceStoredSelection(
+                TAB_FRETBOARD_COLOR_OPTIONS,
+                tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_FRETBOARD_COLOR, null),
+                "black"
+            )
+        )
+    }
+    var appearancePanelColorId by remember(tabDisplayPrefs) {
+        mutableStateOf(tabAppearanceStoredSelection(
+            TAB_FRETBOARD_PANEL_OPTIONS,
+            tabDisplayPrefs.getString(TAB_APPEARANCE_PREF_PANEL_COLOR, null),
+            "white"
+        ))
+    }
+    var appearanceCursorWidth by remember(tabDisplayPrefs) {
+        mutableFloatStateOf(
+            tabDisplayPrefs.getFloat(TAB_APPEARANCE_PREF_CURSOR_WIDTH, 3f).coerceIn(0f, 24f)
+        )
+    }
+    var appearanceRegionOpacity by remember(tabDisplayPrefs) {
+        mutableFloatStateOf(
+            tabDisplayPrefs.getFloat(TAB_APPEARANCE_PREF_REGION_OPACITY, 0f)
+                .coerceIn(0f, .85f)
+        )
+    }
+    var showAppearanceSettings by remember { mutableStateOf(false) }
+    var localIsDark by remember {
+        mutableStateOf(initialAppearanceThemeMode.resolve(isDark))
+    }
+
+    val appearanceCursorHex = tabAppearanceResolvedHex(
+        TAB_CURSOR_COLOR_OPTIONS, appearanceCursorColorId, "purple", localIsDark)
+    val appearanceActiveRegionHex = tabAppearanceResolvedHex(
+        TAB_ACTIVE_REGION_COLOR_OPTIONS, appearanceActiveRegionColorId, "lavender", localIsDark)
+    val appearanceTabHex = tabAppearanceResolvedHex(
+        TAB_GLYPH_COLOR_OPTIONS, appearanceTabColorId, "auto", localIsDark)
+    val appearanceNoteHex = tabAppearanceResolvedHex(
+        TAB_NOTE_COLOR_OPTIONS, appearanceNoteColorId, "yellow", localIsDark)
+    val appearanceFretboardHex = tabAppearanceResolvedHex(
+        TAB_FRETBOARD_COLOR_OPTIONS, appearanceFretboardColorId, "black", localIsDark)
+    val appearancePanelHex = tabAppearanceResolvedHex(
+        TAB_FRETBOARD_PANEL_OPTIONS, appearancePanelColorId, "white", localIsDark)
 
     // Quản lý trạng thái Xoay màn hình
     var isLandscape by remember {
         mutableStateOf(activity?.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
     }
 
-    val bgColor = if (localIsDark) Color.Black else Color(0xFFF5F6FA)
+    val bgColor = if (localIsDark) Color.Black else Color.White
     val surfaceColor = if (localIsDark) Color.Black else Color.White
     val textColor = if (localIsDark) Color.White else Color(0xFF2D3436)
     val accentColor = if (localIsDark) Color(0xFF9FA8DA) else Color(0xFF5E35B1)
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
-    // Queue song requests until alphaTab's JS API is initialized in the WebView.
-    // Calling evaluateJavascript before the inline script exists loses the request silently.
     val isTabJsReady = remember { AtomicBoolean(false) }
     val pendingTabSongScript = remember { AtomicReference<String?>(null) }
+
+    LaunchedEffect(isDark, appearanceThemeMode) {
+        val resolvedDark = appearanceThemeMode.resolve(isDark)
+        if (localIsDark != resolvedDark) localIsDark = resolvedDark
+    }
+
+    fun setAppearanceThemeMode(mode: TabAppearanceThemeMode) {
+        appearanceThemeMode = mode
+        localIsDark = mode.resolve(isDark)
+        tabDisplayPrefs.edit()
+            .putString(TAB_APPEARANCE_PREF_THEME_MODE, mode.storedValue)
+            .apply()
+    }
+
+    fun setAppearanceColor(
+        preferenceKey: String,
+        value: String,
+        onStateChanged: (String) -> Unit
+    ) {
+        onStateChanged(value)
+        tabDisplayPrefs.edit().putString(preferenceKey, value).apply()
+    }
+
+    fun resetAppearanceSettings() {
+        appearanceThemeMode = TabAppearanceThemeMode.LIGHT
+        appearanceCursorColorId = "purple"
+        appearanceActiveRegionColorId = "lavender"
+        appearanceTabColorId = "auto"
+        appearanceNoteColorId = "yellow"
+        appearanceFretboardColorId = "black"
+        appearancePanelColorId = "white"
+        appearanceCursorWidth = 3f
+        appearanceRegionOpacity = 0f
+        localIsDark = false
+        tabDisplayPrefs.edit()
+            .putString(
+                TAB_APPEARANCE_PREF_THEME_MODE,
+                TabAppearanceThemeMode.LIGHT.storedValue
+            )
+            .putString(TAB_APPEARANCE_PREF_CURSOR_COLOR, "purple")
+            .putString(TAB_APPEARANCE_PREF_ACTIVE_REGION_COLOR, "lavender")
+            .putString(TAB_APPEARANCE_PREF_TAB_COLOR, "auto")
+            .putString(TAB_APPEARANCE_PREF_NOTE_COLOR, "yellow")
+            .putString(TAB_APPEARANCE_PREF_FRETBOARD_COLOR, "black")
+            .putString(TAB_APPEARANCE_PREF_PANEL_COLOR, "white")
+            .putFloat(TAB_APPEARANCE_PREF_CURSOR_WIDTH, 3f)
+            .putFloat(TAB_APPEARANCE_PREF_REGION_OPACITY, 0f)
+            .apply()
+    }
+
+    // Gõ nhịp dùng chính bộ phát alphaTab: không dùng Timer/MediaPlayer riêng
+    // để nhịp không lệch khi Pause/Play hoặc thay BPM.
+    fun setMetronomeEnabled(enabled: Boolean) {
+        metronomeEnabled = enabled
+        metronomePrefs.edit().putBoolean(TAB_METRONOME_PREF_ENABLED, enabled).apply()
+        webViewInstance?.evaluateJavascript(
+            "javascript:if (typeof setMetronomeEnabled === 'function') setMetronomeEnabled($enabled);",
+            null
+        )
+    }
+
+    fun dispatchPendingTabSong(target: WebView) {
+        pendingTabSongScript.getAndSet(null)?.let { command ->
+            target.evaluateJavascript(command, null)
+        }
+    }
+
+    fun syncTabViewport(target: WebView) {
+        target.post {
+            val viewportWidth = target.width
+            val viewportHeight = target.height
+            if (viewportWidth > 0 && viewportHeight > 0) {
+                target.evaluateJavascript(
+                    "javascript:if(typeof onAndroidViewportChanged==='function'){" +
+                            "onAndroidViewportChanged($viewportWidth,$viewportHeight);}",
+                    null
+                )
+            }
+        }
+    }
 
     var selectedMusicSection by remember {
         mutableStateOf(MusicLibrarySection.NHAC_VIET)
@@ -2189,11 +3554,18 @@ private fun BangNhacScreenContent(
     var tracks by remember { mutableStateOf<List<AlphaTrack>>(emptyList()) }
     var selectedTrackIndex by remember { mutableIntStateOf(0) }
 
+    var songTechniqueDialogOpen by remember { mutableStateOf(false) }
+    var songTechniqueScanning by remember { mutableStateOf(false) }
+    var songTechniqueIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var songTechniqueTrackIndex by remember { mutableIntStateOf(-1) }
+
     var isSearching by remember { mutableStateOf(false) }
     var isLoadingSong by remember { mutableStateOf(false) }
     var isPlayerReady by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var hasScore by remember { mutableStateOf(false) }
+    // Banner TAB chi duoc hien thi khi nguoi dung cuon qua phan cuoi ban nhac.
+    var showTabBottomBanner by remember { mutableStateOf(false) }
 
     // BPM đang hiển thị trong ô nhập và BPM đã áp dụng vào bản nhạc.
     var bpmText by remember { mutableStateOf("") }
@@ -2201,8 +3573,48 @@ private fun BangNhacScreenContent(
 
     // Mặc định giữ nguyên bố cục hiện tại: khuông nhạc + TAB.
     // Người dùng có thể chuyển nhanh sang TAB hoặc Partition (chỉ khuông nhạc).
-    var selectedDisplayMode by remember { mutableStateOf(TabDisplayMode.SCORE_TAB) }
+    var selectedDisplayMode by remember(tabDisplayPrefs) {
+        mutableStateOf(TabDisplayMode.fromStored(tabDisplayPrefs.getString(TAB_DISPLAY_PREF_MODE, null)))
+    }
     var displayModeMenuExpanded by remember { mutableStateOf(false) }
+    var draftShowScore by remember { mutableStateOf(selectedDisplayMode.showScore) }
+    var draftShowTab by remember { mutableStateOf(selectedDisplayMode.showTab) }
+    var draftInstrument by remember { mutableStateOf(selectedDisplayMode.instrument) }
+    var draftShowNoteNames by remember { mutableStateOf(false) }
+    var displayConfigurationApplying by remember { mutableStateOf(false) }
+    // -1: dung kich thuoc goc cua tung che do. Co the thu khuong nhac de xem nhieu o nhip.
+    var customScoreZoomPercent by remember(tabDisplayPrefs) {
+        mutableIntStateOf(
+            tabDisplayPrefs.getInt(TAB_DISPLAY_PREF_SCORE_ZOOM, -1).let { value ->
+                if (value < 0) -1 else value.coerceIn(TAB_SCORE_ZOOM_MIN, TAB_SCORE_ZOOM_MAX)
+            }
+        )
+    }
+    var scoreZoomMenuExpanded by remember { mutableStateOf(false) }
+    var scoreZoomSliderDraft by remember { mutableFloatStateOf(100f) }
+    // Chi hien cac nut zoom khi moi mo TAB, cham nut zoom hoac pinch 2 ngon.
+    var scoreZoomControlVisible by remember { mutableStateOf(false) }
+    var scoreZoomPinchActive by remember { mutableStateOf(false) }
+    var scoreZoomPinchPreviewPercent by remember { mutableIntStateOf(-1) }
+    var scoreZoomActivityToken by remember { mutableIntStateOf(0) }
+
+    var isExportingPdf by remember { mutableStateOf(false) }
+
+    fun showScoreZoomControl() {
+        scoreZoomControlVisible = true
+        scoreZoomActivityToken += 1
+    }
+
+    fun setScoreZoomPercent(value: Int) {
+        if (isExportingPdf || !hasScore) return
+        showScoreZoomControl()
+        val normalized = if (value < 0) -1
+        else value.coerceIn(TAB_SCORE_ZOOM_MIN, TAB_SCORE_ZOOM_MAX)
+        if (customScoreZoomPercent == normalized) return
+        customScoreZoomPercent = normalized
+        tabDisplayPrefs.edit().putInt(TAB_DISPLAY_PREF_SCORE_ZOOM, normalized).apply()
+        // LaunchedEffect ben duoi dong bo voi WebView va khong tai lai bai hat.
+    }
     var showNoteNames by remember(context) {
         mutableStateOf(
             tabDisplayPrefs.getBoolean(TAB_DISPLAY_PREF_NOTE_NAMES, false)
@@ -2216,7 +3628,6 @@ private fun BangNhacScreenContent(
 
     var hideExtraButtons by remember { mutableStateOf(false) }
     var isImportingLocalFile by remember { mutableStateOf(false) }
-    var isExportingPdf by remember { mutableStateOf(false) }
 
     fun finishPdfExport(message: String? = null, isError: Boolean = false) {
         webViewInstance?.evaluateJavascript(
@@ -2307,80 +3718,20 @@ private fun BangNhacScreenContent(
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            // Zoom chi qua AlphaTab display.scale; khong de WebView phong to ca can dan.
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
+            settings.displayZoomControls = false
             settings.allowFileAccessFromFileURLs = true
             settings.allowUniversalAccessFromFileURLs = true
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
 
-            // Diagnostic: WebView JavaScript console/errors (Android Studio Logcat: TTAlphaTab).
-            webChromeClient = object : WebChromeClient() {
-                override fun onConsoleMessage(message: android.webkit.ConsoleMessage?): Boolean {
-                    if (message != null) {
-                        val details = message.message().orEmpty()
-                        if (
-                            message.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR ||
-                            details.contains("TTAlphaTab")
-                        ) {
-                            val line = "JS ${message.messageLevel()} " +
-                                    details.take(850) +
-                                    " (${message.sourceId()?.substringAfterLast('/')}:${message.lineNumber()})"
-                            android.util.Log.w("TTAlphaTab", line)
-                        }
-                    }
-                    return true
-                }
-            }
+            webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
-                    val target = view ?: return
-                    android.util.Log.i(
-                        "TTAlphaTab", "PAGE_FINISHED view=${target.width}x${target.height}"
-                    )
-                    target.post {
-                        val viewportWidth = target.width.coerceAtLeast(0)
-                        val viewportHeight = target.height.coerceAtLeast(0)
-                        target.evaluateJavascript(
-                            """javascript:(function syncViewport(attempt) {
-                                if (typeof onAndroidViewportChanged === 'function') {
-                                    onAndroidViewportChanged($viewportWidth, $viewportHeight);
-                                    return;
-                                }
-                                if (attempt < 40) {
-                                    setTimeout(function() { syncViewport(attempt + 1); }, 50);
-                                }
-                            })(0);""".trimIndent(),
-                            null
-                        )
-                    }
-                }
-
-                override fun onReceivedError(
-                    view: WebView?,
-                    request: WebResourceRequest?,
-                    error: android.webkit.WebResourceError?
-                ) {
-                    super.onReceivedError(view, request, error)
-                    val resource = request?.url?.lastPathSegment.orEmpty()
-                    if (resource.contains("alphaTab", true) || resource.endsWith(".woff2")) {
-                        android.util.Log.e(
-                            "TTAlphaTab", "WEB_RESOURCE_ERROR file=$resource code=${error?.errorCode}"
-                        )
-                    }
-                }
-
-                override fun onReceivedHttpError(
-                    view: WebView?,
-                    request: WebResourceRequest?,
-                    errorResponse: WebResourceResponse?
-                ) {
-                    super.onReceivedHttpError(view, request, errorResponse)
-                    val resource = request?.url?.lastPathSegment.orEmpty()
-                    if (resource.contains("alphaTab", true) || resource.endsWith(".woff2")) {
-                        android.util.Log.e(
-                            "TTAlphaTab", "WEB_HTTP_ERROR file=$resource status=${errorResponse?.statusCode}"
-                        )
-                    }
+                    view?.let(::syncTabViewport)
                 }
 
                 override fun shouldInterceptRequest(
@@ -2407,6 +3758,62 @@ private fun BangNhacScreenContent(
                         )
                     }
 
+                    // Intercept ONLY a selected GP file from the trusted alwaysdata
+                    // endpoint. Load it fully before returning so an interrupted
+                    // Google Drive stream cannot corrupt alphaTab's input. If primary
+                    // is temporarily down, request the exact relative file on IIS.
+                    val gpRoute = activeGpFailoverRoute.get()
+                    if (request?.method.equals("GET", true) &&
+                        gpRoute != null && url == gpRoute.primaryUrl
+                    ) {
+                        return try {
+                            val payload = TuneToolsGpFailover.fetch(gpRoute)
+                            if (payload.usedIis) {
+                                mainHandler.post {
+                                    if (activeGpFailoverRoute.get() === gpRoute) {
+                                        Toast.makeText(
+                                            context,
+                                            "Google Drive tạm gián đoạn, đã dùng máy chủ dự phòng.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            }
+                            WebResourceResponse(
+                                "application/octet-stream",
+                                null,
+                                200,
+                                "OK",
+                                mapOf(
+                                    "Access-Control-Allow-Origin" to "*",
+                                    "Cache-Control" to "no-store",
+                                    "Content-Length" to payload.bytes.size.toString()
+                                ),
+                                ByteArrayInputStream(payload.bytes)
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.e(
+                                "TuneToolsGpFailover", "Cannot download GP from available servers", e
+                            )
+                            // Preserve primary 401/403 and a JSON 404 for a missing GP.
+                            // A missing primary PHP route (HTML 404) is tried on IIS.
+                            val status = (e as? GpDownloadHttpFailure)?.statusCode
+                                ?.takeIf { it in 400..599 && it != 407 }
+                                ?: 503
+                            WebResourceResponse(
+                                "text/plain",
+                                "UTF-8",
+                                status,
+                                if (status == 503) "Service Unavailable" else "GP Request Failed",
+                                mapOf(
+                                    "Access-Control-Allow-Origin" to "*",
+                                    "Cache-Control" to "no-store"
+                                ),
+                                ByteArrayInputStream("Không thể tải GP từ máy chủ.".toByteArray(StandardCharsets.UTF_8))
+                            )
+                        }
+                    }
+
                     // Hai SoundFont tải thêm được phục vụ qua URL ảo. Dữ liệu thật nằm
                     // trong filesDir/soundfonts nên không làm tăng kích thước APK/AAB.
                     val localSoundFontMode = when (url) {
@@ -2418,7 +3825,26 @@ private fun BangNhacScreenContent(
                         val localSoundFont = localSoundFontFileRefs[localSoundFontMode]?.get()
                         if (localSoundFont != null && localSoundFont.isFile && localSoundFont.length() > 0L) {
                             return try {
-                                WebResourceResponse(
+                                // SF2/SF3 are RIFF sfbk. Read only 12 bytes, not the full ~38 MB.
+                                val header = ByteArray(12)
+                                val headerCount = localSoundFont.inputStream().buffered().use {
+                                    it.read(header)
+                                }
+                                val validHeader = headerCount == 12 &&
+                                        String(header, 0, 4, StandardCharsets.US_ASCII) == "RIFF" &&
+                                        String(header, 8, 4, StandardCharsets.US_ASCII) == "sfbk"
+                                android.util.Log.i(
+                                    "TunerToolsPianoAudio",
+                                    "soundfont_local mode=${localSoundFontMode.jsValue} " +
+                                            "bytes=${localSoundFont.length()} riffSfbk=$validHeader"
+                                )
+                                if (!validHeader) {
+                                    WebResourceResponse(
+                                        "text/plain", "UTF-8", 422, "Invalid SoundFont",
+                                        mapOf("Access-Control-Allow-Origin" to "*"),
+                                        ByteArrayInputStream("Invalid SoundFont RIFF header".toByteArray())
+                                    )
+                                } else WebResourceResponse(
                                     "application/octet-stream",
                                     null,
                                     200,
@@ -2455,28 +3881,11 @@ private fun BangNhacScreenContent(
                 }
             }
 
-            // alphaTab có thể được khởi tạo khi WebView chưa gắn vào Compose và kích thước
-            // vẫn bằng 0. Đồng bộ lại viewport mỗi khi WebView được gắn, đổi chiều hoặc đổi cỡ.
-            addOnLayoutChangeListener { target, left, top, right, bottom,
+            addOnLayoutChangeListener { view, left, top, right, bottom,
                                         oldLeft, oldTop, oldRight, oldBottom ->
-                val viewportWidth = right - left
-                val viewportHeight = bottom - top
-                val oldViewportWidth = oldRight - oldLeft
-                val oldViewportHeight = oldBottom - oldTop
-                if (
-                    viewportWidth > 0 &&
-                    viewportHeight > 0 &&
-                    (viewportWidth != oldViewportWidth || viewportHeight != oldViewportHeight)
-                ) {
-                    target.post {
-                        (target as? WebView)?.evaluateJavascript(
-                            "javascript:if(typeof onAndroidViewportChanged==='function'){" +
-                                    "onAndroidViewportChanged($viewportWidth,$viewportHeight);" +
-                                    "}",
-                            null
-                        )
-                    }
-                }
+                val changed = right - left != oldRight - oldLeft ||
+                        bottom - top != oldBottom - oldTop
+                if (changed) (view as? WebView)?.let(::syncTabViewport)
             }
 
             addJavascriptInterface(object {
@@ -2484,28 +3893,7 @@ private fun BangNhacScreenContent(
                 fun onTabReady() {
                     mainHandler.post {
                         isTabJsReady.set(true)
-                        android.util.Log.i("TTAlphaTab", "ANDROID_API_READY queue=${pendingTabSongScript.get() != null}")
-                        if (currentSong != null && isLoadingSong) {
-                            webViewInstance?.let { readyWebView ->
-                                pendingTabSongScript.getAndSet(null)?.let { command ->
-                                    android.util.Log.i("TTAlphaTab", "DISPATCH_QUEUED_SCORE")
-                                    readyWebView.evaluateJavascript(command, null)
-                                }
-                            }
-                        } else {
-                            pendingTabSongScript.set(null)
-                        }
-                    }
-                }
-
-                @JavascriptInterface
-                fun onTabLog(level: String, details: String) {
-                    // Log only sizes/phases/error messages; never include token or complete GP URL.
-                    val safeDetails = details.replace('\n', ' ').take(1100)
-                    when (level) {
-                        "E" -> android.util.Log.e("TTAlphaTab", safeDetails)
-                        "W" -> android.util.Log.w("TTAlphaTab", safeDetails)
-                        else -> android.util.Log.i("TTAlphaTab", safeDetails)
+                        webViewInstance?.let(::dispatchPendingTabSong)
                     }
                 }
 
@@ -2516,6 +3904,12 @@ private fun BangNhacScreenContent(
                         isSwitchingSoundFont = false
                         isCheckingSoundFontCompatibility = false
                     }
+                }
+
+                @JavascriptInterface
+                fun onPianoAudioDiagnostic(json: String) {
+                    // Keep logs concise and free of GP file contents/audio bytes.
+                    android.util.Log.i("TunerToolsPianoAudio", json.take(2500))
                 }
 
                 @JavascriptInterface
@@ -2538,15 +3932,25 @@ private fun BangNhacScreenContent(
                         soundFontDecodeProgress = 1f
 
                         if (!temporaryFallback) {
-                            // Lựa chọn thủ công là cấu hình người dùng muốn dùng cho các bài sau.
-                            selectedSoundFontMode = loadedMode
+                            // Keep a separate user preference for Piano vs. Guitar.
+                            // Auto switches deliberately use temporaryFallback=true.
+                            if (selectedDisplayMode.instrument == TabDisplayInstrument.PIANO) {
+                                if (loadedMode != TabSoundFontMode.FLUIDR3) {
+                                    selectedPianoSoundFontMode = loadedMode
+                                    soundFontPrefs.edit()
+                                        .putString(SOUNDFONT_PREF_PIANO_MODE, loadedMode.storedValue)
+                                        .apply()
+                                }
+                            } else {
+                                selectedSoundFontMode = loadedMode
+                                soundFontPrefs.edit()
+                                    .putString(SOUNDFONT_PREF_MODE, loadedMode.storedValue)
+                                    .apply()
+                            }
                             temporarySoundFontFallbackFrom = null
-                            soundFontPrefs.edit()
-                                .putString(SOUNDFONT_PREF_MODE, loadedMode.storedValue)
-                                .apply()
                         }
-                        // Với fallback tạm thời, chỉ activeSoundFontMode đổi sang STANDARD.
-                        // selectedSoundFontMode và SharedPreferences vẫn giữ SF2/SF3 đã chọn.
+                        // Temporary auto switching changes only the active SoundFont.
+                        // Guitar/Piano preferences and stored files stay untouched.
                     }
                 }
 
@@ -2573,8 +3977,8 @@ private fun BangNhacScreenContent(
                             context,
                             soundFontFormat(
                                 "tab_sound_auto_fallback", currentLang,
-                                "Bộ âm thanh %1\$s không tạo được âm thanh cho bản nhạc này. Ứng dụng sẽ tự chuyển sang %2\$s.",
-                                "The %1\$s audio pack produced no sound for this score. The app will switch to %2\$s automatically.",
+                                "Kiểm tra âm thanh %1\$s không có tín hiệu. Đang thử phát bằng %2\$s.",
+                                "Audio check for %1\$s was silent. Trying %2\$s instead.",
                                 incompatibleMode.menuTitle(currentLang),
                                 TabSoundFontMode.STANDARD.menuTitle(currentLang)
                             ),
@@ -2593,14 +3997,18 @@ private fun BangNhacScreenContent(
                         soundFontDecodeProgress = 0f
 
                         if (failedMode.isDownloadable) {
-                            selectedSoundFontMode = TabSoundFontMode.STANDARD
+                            if (selectedDisplayMode.instrument == TabDisplayInstrument.PIANO) {
+                                selectedPianoSoundFontMode = TabSoundFontMode.STANDARD
+                                soundFontPrefs.edit()
+                                    .putString(SOUNDFONT_PREF_PIANO_MODE, TabSoundFontMode.STANDARD.storedValue)
+                                    .apply()
+                            } else {
+                                selectedSoundFontMode = TabSoundFontMode.STANDARD
+                                soundFontPrefs.edit()
+                                    .putString(SOUNDFONT_PREF_MODE, TabSoundFontMode.STANDARD.storedValue)
+                                    .apply()
+                            }
                             activeSoundFontMode = TabSoundFontMode.STANDARD
-                            soundFontPrefs.edit()
-                                .putString(
-                                    SOUNDFONT_PREF_MODE,
-                                    TabSoundFontMode.STANDARD.storedValue
-                                )
-                                .apply()
                             soundFontFallbackRequest++
                         }
 
@@ -2676,21 +4084,126 @@ private fun BangNhacScreenContent(
                 }
 
                 @JavascriptInterface
+                fun onTabBottomBannerVisibilityChanged(visible: Boolean) {
+                    // JavaScriptInterface co the duoc goi tren background thread.
+                    mainHandler.post {
+                        val shouldShow = visible && hasScore && !isLoadingSong && currentSong != null
+                        if (showTabBottomBanner != shouldShow) {
+                            showTabBottomBanner = shouldShow
+                        }
+                    }
+                }
+
+                @JavascriptInterface
+                fun onSongTechniqueInfoRequested() {
+                    mainHandler.post {
+                        if (!hasScore) return@post
+                        songTechniqueDialogOpen = true
+                        songTechniqueScanning = songTechniqueTrackIndex != selectedTrackIndex
+                        webViewInstance?.evaluateJavascript(
+                            "javascript:if(typeof reportSongTechniqueCatalog==='function'){reportSongTechniqueCatalog();}",
+                            null
+                        )
+                    }
+                }
+
+                @JavascriptInterface
+                fun onSongTechniqueCatalog(trackIndex: Int, itemsJson: String) {
+                    mainHandler.post {
+                        // Ignore callbacks that belong to an older/another track.
+                        if (!hasScore || trackIndex != selectedTrackIndex) return@post
+                        val found = mutableListOf<String>()
+                        try {
+                            val arr = JSONArray(itemsJson)
+                            for (i in 0 until arr.length()) {
+                                val key = arr.optString(i)
+                                if (SONG_TECHNIQUE_LEGEND.containsKey(key) && !found.contains(key)) {
+                                    found.add(key)
+                                }
+                            }
+                        } catch (_: Exception) { /* Show empty state for invalid score data. */ }
+                        songTechniqueIds = found
+                        songTechniqueTrackIndex = trackIndex
+                        songTechniqueScanning = false
+                    }
+                }
+
+                @JavascriptInterface
+                fun onSongTechniqueCatalogFailed() {
+                    mainHandler.post { songTechniqueScanning = false }
+                }
+
+                @JavascriptInterface
+                fun onDisplayModeRestoreFailed() {
+                    mainHandler.post {
+                        selectedDisplayMode = TabDisplayMode.SCORE_TAB
+                        tabDisplayPrefs.edit().putString(
+                            TAB_DISPLAY_PREF_MODE, TabDisplayMode.SCORE_TAB.jsValue
+                        ).apply()
+                        Toast.makeText(context, soundFontText(
+                            "tab_display_restore_failed", currentLang,
+                            "Track này không hỗ trợ cấu hình đã lưu; đã chuyển về Khuông + TAB.",
+                            "This track cannot use the saved layout. Switched to Notation + TAB."
+                        ), Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                @JavascriptInterface
+                fun onFretboardClosed() {
+                    mainHandler.post {
+                        selectedDisplayMode = TabDisplayMode.SCORE_TAB
+                        tabDisplayPrefs.edit().putString(TAB_DISPLAY_PREF_MODE, TabDisplayMode.SCORE_TAB.jsValue).apply()
+                        displayModeMenuExpanded = false
+                    }
+                }
+
+                // JS chuyen pinch tren khuong/TAB sang Compose. Khong cap nhat
+                // render AlphaTab giua cac frame de tranh mat su kien touch.
+                @JavascriptInterface
+                fun onScoreZoomGesture(phase: String, percent: Int) {
+                    mainHandler.post {
+                        if (!hasScore || isExportingPdf) return@post
+                        val bounded = percent.coerceIn(TAB_SCORE_ZOOM_MIN, TAB_SCORE_ZOOM_MAX)
+                        when (phase) {
+                            "begin" -> {
+                                scoreZoomMenuExpanded = false
+                                scoreZoomPinchActive = true
+                                scoreZoomPinchPreviewPercent = bounded
+                                showScoreZoomControl()
+                            }
+                            "change" -> {
+                                if (scoreZoomPinchActive) {
+                                    scoreZoomPinchPreviewPercent = bounded
+                                }
+                            }
+                            "end" -> {
+                                scoreZoomPinchActive = false
+                                scoreZoomPinchPreviewPercent = -1
+                                setScoreZoomPercent(bounded)
+                            }
+                        }
+                    }
+                }
+
+                @JavascriptInterface
                 fun onScoreLoaded(tracksJson: String, title: String) {
-                    // alphaTab đã đọc dữ liệu; chờ kết quả SVG để mở khu vực playback.
-                    android.util.Log.i(
-                        "TTAlphaTab", "ANDROID_SCORE_LOADED error=${title.startsWith("Lỗi")} tracksJsonLen=${tracksJson.length}"
-                    )
+                    // AlphaTab đã đọc xong dữ liệu nên có thể giải phóng bản sao byte local.
                     localScorePayload.set(null)
                     mainHandler.post {
+                        songTechniqueIds = emptyList()
+                        songTechniqueTrackIndex = -1
+                        songTechniqueScanning = false
                         if (title.startsWith("Lỗi")) {
                             isLoadingSong = false
                             hasScore = false
+                            showTabBottomBanner = false
                             isPlayerReady = false
                             currentBpm = 0
                             bpmText = ""
                             Toast.makeText(context, title, Toast.LENGTH_SHORT).show()
                         } else {
+                            hasScore = true
+                            isLoadingSong = false
                             val parsedTracks = mutableListOf<AlphaTrack>()
                             try {
                                 val arr = JSONArray(tracksJson)
@@ -2707,29 +4220,20 @@ private fun BangNhacScreenContent(
 
                                 // Nếu bài trước phải tạm dùng Sonivox, bài mới sẽ thử lại đúng
                                 // cấu hình SF2/SF3 mà người dùng đã chọn và đã tải.
+                                val wantedForThisView = if (
+                                    selectedDisplayMode.instrument == TabDisplayInstrument.PIANO
+                                ) selectedPianoSoundFontMode else selectedSoundFontMode
                                 if (
                                     temporarySoundFontFallbackFrom != null &&
-                                    activeSoundFontMode != selectedSoundFontMode &&
-                                    selectedSoundFontMode.isDownloadable &&
-                                    downloadedSoundFontModes[selectedSoundFontMode] == true
+                                    activeSoundFontMode != wantedForThisView &&
+                                    wantedForThisView.isDownloadable &&
+                                    downloadedSoundFontModes[wantedForThisView] == true
                                 ) {
                                     soundFontRestoreRequest++
                                 }
                             } catch (_: Exception) {
                                 tracks = emptyList()
                             }
-                        }
-                    }
-                }
-
-                @JavascriptInterface
-                fun onScoreRendered() {
-                    android.util.Log.i("TTAlphaTab", "ANDROID_SCORE_RENDERED")
-                    mainHandler.post {
-                        // Bỏ qua callback trễ của bài cũ sau khi người dùng đã quay lại danh sách.
-                        if (currentSong != null && isLoadingSong) {
-                            hasScore = true
-                            isLoadingSong = false
                         }
                     }
                 }
@@ -2741,27 +4245,92 @@ private fun BangNhacScreenContent(
                 initialSoundFontMode = startupSoundFontMode.jsValue,
                 initialSoundFontUrl = startupSoundFontUrl,
                 currentLang = currentLang,
-                initialShowNoteNames = showNoteNames
+                initialShowNoteNames = showNoteNames,
+                initialMetronomeEnabled = metronomeEnabled,
+                initialCursorColor = appearanceCursorHex,
+                initialActiveRegionColor = appearanceActiveRegionHex,
+                initialTabColor = appearanceTabHex,
+                initialNoteColor = appearanceNoteHex,
+                initialFretboardColor = appearanceFretboardHex,
+                initialPanelColor = appearancePanelHex,
+                initialCursorWidth = appearanceCursorWidth,
+                initialRegionOpacity = appearanceRegionOpacity,
+                initialScoreZoomPercent = customScoreZoomPercent,
+                initialDisplayMode = selectedDisplayMode.jsValue
             ), "text/html", "UTF-8", null)
         }
     }
 
     LaunchedEffect(webView) {
         webViewInstance = webView
-        if (isTabJsReady.get() && currentSong != null && isLoadingSong) {
-            pendingTabSongScript.getAndSet(null)?.let { command ->
-                android.util.Log.i("TTAlphaTab", "DISPATCH_SCORE_ON_ATTACH")
-                webView.evaluateJavascript(command, null)
-            }
+        syncTabViewport(webView)
+        if (isTabJsReady.get()) dispatchPendingTabSong(webView)
+    }
+
+    // Nhin thay nut zoom 2 giay khi mo bai / chuyen che do; an de nhin duoc nhieu not.
+    LaunchedEffect(hasScore, selectedDisplayMode, isExportingPdf, songs.isEmpty()) {
+        if (hasScore && songs.isEmpty() && !isExportingPdf) {
+            showScoreZoomControl()
+        } else {
+            scoreZoomControlVisible = false
+            scoreZoomPinchActive = false
+            scoreZoomPinchPreviewPercent = -1
+            scoreZoomMenuExpanded = false
         }
     }
 
-    // Gọi JS thay đổi giao diện mượt mà không tải lại nhạc
-    LaunchedEffect(localIsDark) {
-        webViewInstance?.evaluateJavascript("javascript:if(typeof toggleTheme === 'function') toggleTheme($localIsDark);", null)
+    // Dem lai 2 giay sau lan Zoom cuoi; khong an khi dang pinch/mo popup.
+    LaunchedEffect(
+        scoreZoomControlVisible, scoreZoomActivityToken,
+        scoreZoomPinchActive, scoreZoomMenuExpanded
+    ) {
+        if (scoreZoomControlVisible && !scoreZoomPinchActive && !scoreZoomMenuExpanded) {
+            delay(2000L)
+            scoreZoomControlVisible = false
+        }
     }
 
-    fun switchSoundFontMode(mode: TabSoundFontMode) {
+    // Chi thay doi alphaTab.display.scale. SVG can dan khong dung scale nay.
+    LaunchedEffect(webViewInstance, customScoreZoomPercent) {
+        webViewInstance?.evaluateJavascript(
+            "javascript:if(typeof setScoreZoomPercent === 'function') {" +
+                    "setScoreZoomPercent($customScoreZoomPercent);}",
+            null
+        )
+    }
+
+    // Đồng bộ toàn bộ bảng màu ngay khi người dùng đổi lựa chọn, không tải lại bài.
+    LaunchedEffect(
+        webViewInstance,
+        localIsDark,
+        appearanceCursorColorId,
+        appearanceActiveRegionColorId,
+        appearanceTabColorId,
+        appearanceNoteColorId,
+        appearanceFretboardColorId,
+        appearancePanelColorId,
+        appearanceCursorWidth,
+        appearanceRegionOpacity
+    ) {
+        val script = "javascript:if(typeof applyVisualPreferences === 'function'){" +
+                "applyVisualPreferences(" +
+                localIsDark + "," +
+                JSONObject.quote(appearanceCursorHex) + "," +
+                JSONObject.quote(appearanceActiveRegionHex) + "," +
+                JSONObject.quote(appearanceTabHex) + "," +
+                JSONObject.quote(appearanceNoteHex) + "," +
+                JSONObject.quote(appearanceFretboardHex) + "," +
+                JSONObject.quote(appearancePanelHex) + "," +
+                appearanceCursorWidth + "," +
+                appearanceRegionOpacity +
+                ");}"
+        webViewInstance?.evaluateJavascript(script, null)
+    }
+
+    fun switchSoundFontMode(mode: TabSoundFontMode, rememberChoice: Boolean = true) {
+        val pianoView = selectedDisplayMode.instrument == TabDisplayInstrument.PIANO
+        // This is a playback limitation of the current Piano path, not an SF2 download error.
+        if (pianoView && mode == TabSoundFontMode.FLUIDR3) return
         if (mode.isDownloadable && downloadedSoundFontModes[mode] != true) {
             Toast.makeText(
                 context,
@@ -2791,22 +4360,33 @@ private fun BangNhacScreenContent(
         }
 
         soundFontMenuExpanded = false
-        selectedSoundFontMode = mode
-        temporarySoundFontFallbackFrom = null
+        if (rememberChoice) {
+            if (pianoView) {
+                selectedPianoSoundFontMode = mode
+                soundFontPrefs.edit()
+                    .putString(SOUNDFONT_PREF_PIANO_MODE, mode.storedValue)
+                    .apply()
+            } else {
+                selectedSoundFontMode = mode
+                soundFontPrefs.edit()
+                    .putString(SOUNDFONT_PREF_MODE, mode.storedValue)
+                    .apply()
+            }
+            temporarySoundFontFallbackFrom = null
+        }
         isCheckingSoundFontCompatibility = false
-        soundFontPrefs.edit()
-            .putString(SOUNDFONT_PREF_MODE, mode.storedValue)
-            .apply()
         isSwitchingSoundFont = true
         isPlayerReady = false
         soundFontDecodeProgress = 0f
 
         val jsMode = JSONObject.quote(mode.jsValue)
         val jsUrl = JSONObject.quote(mode.playbackUrl)
+        // Auto switches must not overwrite either saved preference in the JS callback.
+        val isTemporary = !rememberChoice
         targetWebView.evaluateJavascript(
             "javascript:(function(){" +
                     "if(typeof switchSoundFontMode !== 'function') return false;" +
-                    "return switchSoundFontMode($jsMode, $jsUrl);" +
+                    "return switchSoundFontMode($jsMode, $jsUrl, $isTemporary);" +
                     "})();"
         ) { result ->
             if (result != "true") {
@@ -2834,7 +4414,11 @@ private fun BangNhacScreenContent(
     }
 
     LaunchedEffect(soundFontRestoreRequest, webViewInstance) {
-        val preferredMode = selectedSoundFontMode
+        val preferredMode = if (selectedDisplayMode.instrument == TabDisplayInstrument.PIANO) {
+            selectedPianoSoundFontMode
+        } else {
+            selectedSoundFontMode
+        }
         if (
             soundFontRestoreRequest > 0 &&
             webViewInstance != null &&
@@ -2843,7 +4427,37 @@ private fun BangNhacScreenContent(
             activeSoundFontMode != preferredMode
         ) {
             temporarySoundFontFallbackFrom = null
-            switchSoundFontMode(preferredMode)
+            switchSoundFontMode(preferredMode, rememberChoice = false)
+        }
+    }
+
+    // Layout changes dynamically swap to the compatible SoundFont for each instrument.
+    // Never modify Guitar's saved SF2 preference while the Piano screen is open.
+    LaunchedEffect(
+        selectedDisplayMode.instrument,
+        selectedSoundFontMode,
+        selectedPianoSoundFontMode,
+        activeSoundFontMode,
+        downloadedSoundFontModes[TabSoundFontMode.MUSESCORE],
+        isPlayerReady,
+        isSwitchingSoundFont,
+        hasScore
+    ) {
+        if (!hasScore || !isPlayerReady || isSwitchingSoundFont || webViewInstance == null) {
+            return@LaunchedEffect
+        }
+        val pianoView = selectedDisplayMode.instrument == TabDisplayInstrument.PIANO
+        val preferred = if (pianoView) selectedPianoSoundFontMode else selectedSoundFontMode
+        val wanted = when {
+            pianoView && preferred == TabSoundFontMode.FLUIDR3 -> TabSoundFontMode.STANDARD
+            preferred.isDownloadable && downloadedSoundFontModes[preferred] != true -> TabSoundFontMode.STANDARD
+            // A SoundFont that failed on this score must not be retried in a loop,
+            // regardless of whether the current view is Guitar or Piano.
+            temporarySoundFontFallbackFrom == preferred -> TabSoundFontMode.STANDARD
+            else -> preferred
+        }
+        if (wanted != activeSoundFontMode && downloadingSoundFontMode == null) {
+            switchSoundFontMode(wanted, rememberChoice = false)
         }
     }
 
@@ -3244,8 +4858,16 @@ private fun BangNhacScreenContent(
     fun selectTrack(index: Int) {
         if (index !in tracks.indices) return
         selectedTrackIndex = index
+        songTechniqueIds = emptyList()
+        songTechniqueTrackIndex = -1
+        songTechniqueScanning = songTechniqueDialogOpen
         isCheckingSoundFontCompatibility = false
         webViewInstance?.evaluateJavascript("javascript:selectTrackSolo($index);", null)
+        if (songTechniqueDialogOpen) {
+            webViewInstance?.evaluateJavascript(
+                "javascript:if(typeof reportSongTechniqueCatalog==='function'){reportSongTechniqueCatalog();}", null
+            )
+        }
     }
 
     fun applyBpm() {
@@ -3272,47 +4894,53 @@ private fun BangNhacScreenContent(
         )
     }
 
-    fun switchDisplayMode(mode: TabDisplayMode) {
-        displayModeMenuExpanded = false
-        if (mode == selectedDisplayMode || isExportingPdf) return
-
-        val targetWebView = webViewInstance
-        if (targetWebView == null || !hasScore) {
-            Toast.makeText(
-                context,
-                soundFontText(
-                    "tab_display_not_ready",
-                    currentLang,
-                    "Bản nhạc chưa sẵn sàng để đổi chế độ hiển thị.",
-                    "The score is not ready for changing the display mode."
-                ),
-                Toast.LENGTH_SHORT
-            ).show()
+    // One Apply action -> one native-to-WebView update -> one re-engrave.
+    // Do not call setNoteNamesVisible separately: that would render the score twice.
+    fun applyDisplaySelection() {
+        if (displayConfigurationApplying || isExportingPdf) return
+        val mode = TabDisplayMode.fromSelection(draftShowScore, draftShowTab, draftInstrument)
+        val names = draftShowNoteNames
+        if (mode == selectedDisplayMode && names == showNoteNames) {
+            displayModeMenuExpanded = false
             return
         }
-
-        val previousMode = selectedDisplayMode
-        selectedDisplayMode = mode
-        val quotedMode = JSONObject.quote(mode.jsValue)
+        val targetWebView = webViewInstance
+        if (targetWebView == null || !hasScore) {
+            Toast.makeText(context, soundFontText(
+                "tab_display_not_ready", currentLang,
+                "Bản nhạc chưa sẵn sàng để đổi chế độ hiển thị.",
+                "The score is not ready for changing the display mode."
+            ), Toast.LENGTH_SHORT).show()
+            return
+        }
+        displayConfigurationApplying = true
         targetWebView.evaluateJavascript(
             "javascript:(function(){" +
-                    "if(typeof setStaveDisplayMode !== 'function') return false;" +
-                    "return setStaveDisplayMode($quotedMode);" +
+                    "if(typeof setStaveDisplayMode!=='function')return false;" +
+                    "return setStaveDisplayMode(${JSONObject.quote(mode.jsValue)}, $names);" +
                     "})();"
         ) { result ->
-            if (result != "true") {
-                mainHandler.post {
-                    selectedDisplayMode = previousMode
-                    Toast.makeText(
-                        context,
-                        soundFontText(
-                            "tab_display_switch_failed",
-                            currentLang,
-                            "Không thể đổi chế độ hiển thị.",
-                            "Could not change the display mode."
-                        ),
-                        Toast.LENGTH_SHORT
-                    ).show()
+            mainHandler.post {
+                displayConfigurationApplying = false
+                if (result == "true") {
+                    selectedDisplayMode = mode
+                    showNoteNames = names
+                    tabDisplayPrefs.edit()
+                        .putString(TAB_DISPLAY_PREF_MODE, mode.jsValue)
+                        .putBoolean(TAB_DISPLAY_PREF_NOTE_NAMES, names)
+                        .apply()
+                    if (mode.hasInstrumentPanel) {
+                        offsetX = 0f
+                        offsetY = 0f
+                        showTabBottomBanner = false
+                    }
+                    displayModeMenuExpanded = false
+                } else {
+                    Toast.makeText(context, soundFontText(
+                        "tab_display_switch_failed", currentLang,
+                        "Không thể đổi chế độ hiển thị cho track này.",
+                        "Could not apply this display combination to the selected track."
+                    ), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -3416,8 +5044,8 @@ private fun BangNhacScreenContent(
 
         scope.launch {
             try {
-                val outcome = withContext(Dispatchers.IO) {
-                    TuneToolsSheetMusicApi.search(
+                val (outcome, usedInternationalSearch) = withContext(Dispatchers.IO) {
+                    val first = TuneToolsSheetMusicApi.search(
                         apiBaseUrl = apiBaseUrl,
                         searchPath = searchPath,
                         keyword = q,
@@ -3426,6 +5054,21 @@ private fun BangNhacScreenContent(
                         rhythm = requestedRhythm,
                         folder = requestedVietnamFolder.takeIf { it.isNotEmpty() }
                     )
+                    // Only an explicit Vietnamese keyword search with zero results falls
+                    // through to international. Empty folder/category listings are preserved.
+                    if (section == MusicLibrarySection.NHAC_VIET && q.isNotBlank() && first.songs.isEmpty()) {
+                        val international = runCatching {
+                            TuneToolsSheetMusicApi.search(
+                                apiBaseUrl = apiBaseUrl,
+                                searchPath = searchPath,
+                                keyword = q,
+                                apiToken = apiToken,
+                                section = MusicLibrarySection.QUOC_TE
+                            )
+                        }.getOrNull()
+                        if (international != null) Pair(international, true)
+                        else Pair(first, false) // Keep a valid VN response on network error.
+                    } else Pair(first, false)
                 }
                 val result = outcome.songs
 
@@ -3444,9 +5087,26 @@ private fun BangNhacScreenContent(
                     isStillSameVietnamFolder
                 ) {
                     activeSearchSource = outcome.source
+                    if (usedInternationalSearch) {
+                        // Display the actual source and preserve the user's query.
+                        searchQueries[MusicLibrarySection.QUOC_TE] = q
+                        selectedMusicSection = MusicLibrarySection.QUOC_TE
+                        selectedVietnamFolder = ""
+                        selectedRhythm = null
+                        if (result.isNotEmpty()) {
+                            Toast.makeText(
+                                context,
+                                "Không tìm thấy ở Nhạc Việt. Đang hiển thị kết quả Quốc tế.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
                     songs.addAll(result)
                     if (result.isEmpty() && showNoResultsToast) {
                         val message = when {
+                            usedInternationalSearch ->
+                                "Không tìm thấy bài phù hợp trong cả Nhạc Việt và Quốc tế."
+
                             section == MusicLibrarySection.DIEU_NHAC &&
                                     requestedRhythm != null ->
                                 "Không tìm thấy bản Tab trong điệu $requestedRhythm."
@@ -3466,7 +5126,16 @@ private fun BangNhacScreenContent(
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                // "rememberCoroutineScope left the composition" means this UI
+                // coroutine was cancelled. Do not display it as a network error.
+                throw cancelled
             } catch (e: Exception) {
+                android.util.Log.e(
+                    "TuneToolsSheetMusicApi",
+                    "Sheet search failed; section=$section",
+                    e
+                )
                 val isStillSameRhythm =
                     section != MusicLibrarySection.DIEU_NHAC ||
                             selectedRhythm == requestedRhythm
@@ -3482,8 +5151,8 @@ private fun BangNhacScreenContent(
                 ) {
                     Toast.makeText(
                         context,
-                        "Lỗi tải dữ liệu: ${e.message}",
-                        Toast.LENGTH_SHORT
+                        "Không thể tìm kiếm bản nhạc. Hãy kiểm tra kết nối rồi thử lại.",
+                        Toast.LENGTH_LONG
                     ).show()
                 }
             } finally {
@@ -3494,86 +5163,10 @@ private fun BangNhacScreenContent(
         }
     }
 
-    // Khi một request phải dùng máy chủ dự phòng, ứng dụng sẽ không "kẹt" ở đó.
-    // Cứ mỗi 20 giây, máy chủ chính được kiểm tra lại bằng đúng truy vấn đang mở.
-    // Chỉ cần máy chủ chính trả về JSON hợp lệ (kể cả danh sách rỗng), nguồn dữ liệu
-    // được chuyển về PRIMARY và danh sách hiện tại được làm mới tự động.
-    LaunchedEffect(activeSearchSource) {
-        if (activeSearchSource != SheetMusicServerSource.FALLBACK) {
-            return@LaunchedEffect
-        }
-
-        while (activeSearchSource == SheetMusicServerSource.FALLBACK) {
-            delay(TuneToolsSheetMusicApi.PRIMARY_RECOVERY_CHECK_INTERVAL_MS)
-
-            if (isSearching) continue
-
-            val sectionSnapshot = selectedMusicSection
-            val querySnapshot = searchQueries[sectionSnapshot].orEmpty().trim()
-            val rhythmSnapshot = if (sectionSnapshot == MusicLibrarySection.DIEU_NHAC) {
-                selectedRhythm
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            } else {
-                null
-            }
-            val folderSnapshot = if (sectionSnapshot == MusicLibrarySection.NHAC_VIET) {
-                selectedVietnamFolder
-                    .trim()
-                    .trim('/')
-                    .takeIf { it.isNotEmpty() }
-            } else {
-                null
-            }
-
-            val primarySongs = runCatching {
-                withContext(Dispatchers.IO) {
-                    TuneToolsSheetMusicApi.searchPrimaryOnly(
-                        apiBaseUrl = apiBaseUrl,
-                        searchPath = searchPath,
-                        keyword = querySnapshot,
-                        apiToken = apiToken,
-                        section = sectionSnapshot,
-                        rhythm = rhythmSnapshot,
-                        folder = folderSnapshot
-                    )
-                }
-            }.getOrNull() ?: continue
-
-            // Máy chủ chính đã phục hồi. Đổi trạng thái ngay để mọi request sau
-            // tiếp tục ưu tiên máy chủ chính. Bản nhạc đang phát không bị gián đoạn.
-            activeSearchSource = SheetMusicServerSource.PRIMARY
-
-            val sameSection = selectedMusicSection == sectionSnapshot
-            val sameQuery = searchQueries[sectionSnapshot].orEmpty().trim() == querySnapshot
-            val sameRhythm = sectionSnapshot != MusicLibrarySection.DIEU_NHAC ||
-                    selectedRhythm == rhythmSnapshot
-            val sameFolder = sectionSnapshot != MusicLibrarySection.NHAC_VIET ||
-                    selectedVietnamFolder.trim().trim('/') == folderSnapshot.orEmpty()
-
-            if (
-                currentSong == null &&
-                !isLoadingSong &&
-                sameSection &&
-                sameQuery &&
-                sameRhythm &&
-                sameFolder
-            ) {
-                // Vô hiệu hóa request cũ nếu có rồi thay danh sách dự phòng bằng dữ liệu chính.
-                searchRequestId += 1
-                songs.clear()
-                songs.addAll(primarySongs)
-                isSearching = false
-            }
-
-            runCatching {
-                android.util.Log.i(
-                    "TuneToolsSheetMusicApi",
-                    "Primary GP server recovered. Returned to primary source."
-                )
-            }
-        }
-    }
+    // alwaysdata is the authoritative catalogue for ALL three tabs.
+    // Do not poll or overwrite its list with the legacy IIS source after 20 seconds.
+    // If alwaysdata is temporarily unreachable, search() falls back to IIS only
+    // for that request; the next user search tries alwaysdata again.
 
     fun openRhythmFolder(item: TuneToolsSong) {
         if (!item.isFolder || isLoadingSong) return
@@ -3671,42 +5264,51 @@ private fun BangNhacScreenContent(
         )
     }
 
-    fun resolveScoreFallbackTitle(song: TuneToolsSong): String {
-        val providedTitle = song.title
-            .replace(Regex("\\s+"), " ")
-            .trim()
+    // Một số file GP3/GP4/GP5 cũ chứa tên tiếng Việt ở bảng mã ANSI, khiến
+    // API hoặc alphaTab giải mã thành "V?ng Tr?ng Kh c". Không dùng tên đã lỗi
+    // làm fallback cho khuông nhạc; ưu tiên tên sạch lấy từ danh sách/đường dẫn.
+    fun isUsableSongTitle(raw: String): Boolean {
+        val title = raw.replace(Regex("\\s+"), " ").trim()
+        if (title.isBlank() || title.contains('\uFFFD')) return false
+        if (title.all { it == '?' || it.isWhitespace() }) return false
+        if (Regex("""[\p{L}\p{N}]\?[\p{L}\p{N}]""").containsMatchIn(title)) return false
+        if (Regex("""(?:Ã[\u0080-\u00BF]|Â[\u0080-\u00BF]|á[º»])""").containsMatchIn(title)) return false
+        if (title.lowercase(Locale.ROOT) in setOf("không tên", "bài nhạc", "bản nhạc", "untitled", "n/a")) return false
+        return true
+    }
 
-        if (
-            providedTitle.isNotBlank() &&
-            !providedTitle.equals("Không tên", ignoreCase = true) &&
-            !providedTitle.equals("Bài nhạc", ignoreCase = true) &&
-            !providedTitle.equals("Untitled", ignoreCase = true)
-        ) {
-            return providedTitle
+    fun resolveScoreFallbackTitle(song: TuneToolsSong): String {
+        val providedTitle = song.title.replace(Regex("\\s+"), " ").trim()
+        if (isUsableSongTitle(providedTitle)) return providedTitle
+
+        // Tên API bị lỗi thì thử relativePath trước; nếu thiếu, lấy tên file
+        // từ URL (hỗ trợ cả tên có dấu đã percent-encode, không suy đoán dấu).
+        fun titleFromPath(rawPath: String): String? {
+            if (rawPath.isBlank()) return null
+            val path = Uri.decode(rawPath.substringBefore('?').substringBefore('#'))
+            val fileName = path.trim('/').substringAfterLast('/').trim()
+            val extension = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (extension !in SUPPORTED_GP_EXTENSIONS) return null
+
+            val stem = fileName.substringBeforeLast('.')
+                .replace('_', ' ')
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            val title = stem.substringAfter(" - ", stem).trim()
+            return title.takeIf { isUsableSongTitle(it) && it.any(Char::isLetter) }
         }
 
-        // Kết quả fallback từ SQLite luôn có relative_path. Khi cột title rỗng,
-        // lấy tên file làm tiêu đề để bản nhạc vẫn có tên ở phần đầu khuông.
-        val fileStem = song.relativePath
-            .trim()
-            .trim('/')
-            .substringAfterLast('/')
-            .substringBeforeLast('.', missingDelimiterValue = "")
-            .replace('_', ' ')
-            .replace(Regex("\\s+"), " ")
-            .trim()
-
-        val titleFromFileName = fileStem
-            .substringAfter(" - ", fileStem)
-            .trim()
-
-        return titleFromFileName
-            .ifBlank { providedTitle }
-            .ifBlank { "Bài nhạc" }
+        return titleFromPath(song.relativePath)
+            ?: titleFromPath(song.fileUrl)
+            ?: "Bản nhạc"
     }
 
     fun openSong(song: TuneToolsSong) {
         if (isLoadingSong) return
+
+        // Activate a backup route only for a trusted Drive GP URL with an exact,
+        // validated relative path on the IIS archive. Local GP remains unchanged.
+        activeGpFailoverRoute.set(TuneToolsGpFailover.routeFor(song))
 
         // Không để kết quả tìm kiếm đang chạy quay về phủ lên bản nhạc vừa mở.
         searchRequestId += 1
@@ -3720,7 +5322,7 @@ private fun BangNhacScreenContent(
         focusManager.clearFocus()
 
         currentSong = song
-        android.util.Log.i("TTAlphaTab", "ANDROID_OPEN_SONG type=${song.fileUrl.substringAfterLast('.', "").take(5)}")
+        showTabBottomBanner = false
         isLoadingSong = true
         isPlaying = false
         isPlayerReady = false
@@ -3741,14 +5343,7 @@ private fun BangNhacScreenContent(
                     "loadScoreFromUrl($quotedFileUrl, $quotedSongTitle);"
         )
         if (isTabJsReady.get()) {
-            webViewInstance?.let { readyWebView ->
-                pendingTabSongScript.getAndSet(null)?.let { command ->
-                    android.util.Log.i("TTAlphaTab", "DISPATCH_SCORE_NOW")
-                    readyWebView.evaluateJavascript(command, null)
-                }
-            }
-        } else {
-            android.util.Log.i("TTAlphaTab", "QUEUED_SCORE_WAITING_FOR_JS")
+            webViewInstance?.let(::dispatchPendingTabSong)
         }
     }
 
@@ -3927,19 +5522,21 @@ private fun BangNhacScreenContent(
                                         // Dọn bản nhạc rồi quay lại đúng danh sách trước đó.
                                         currentSong = null
                                         hasScore = false
+                                        showTabBottomBanner = false
                                         isLoadingSong = false
                                         isPlaying = false
                                         isPlayerReady = false
                                         currentBpm = 0
                                         bpmText = ""
                                         tracks = emptyList()
+                                        songTechniqueDialogOpen = false
+                                        songTechniqueIds = emptyList()
+                                        songTechniqueTrackIndex = -1
+                                        songTechniqueScanning = false
                                         localScorePayload.set(null)
-                                        webViewInstance?.evaluateJavascript(
-                                            "javascript:stopPlayer();" +
-                                                    "if(typeof cancelPendingScoreRender==='function'){" +
-                                                    "cancelPendingScoreRender();}",
-                                            null
-                                        )
+                                        activeGpFailoverRoute.set(null)
+                                        pendingTabSongScript.set(null)
+                                        webViewInstance?.evaluateJavascript("javascript:stopPlayer();", null)
 
                                         searchSongs(
                                             section = selectedMusicSection,
@@ -4101,6 +5698,10 @@ private fun BangNhacScreenContent(
                                             enabled = hasScore && !isExportingPdf
                                         ) {
                                             focusManager.clearFocus()
+                                            draftShowScore = selectedDisplayMode.showScore
+                                            draftShowTab = selectedDisplayMode.showTab
+                                            draftInstrument = selectedDisplayMode.instrument
+                                            draftShowNoteNames = showNoteNames
                                             displayModeMenuExpanded = true
                                         },
                                     contentAlignment = Alignment.Center
@@ -4134,137 +5735,290 @@ private fun BangNhacScreenContent(
                                     }
                                 }
 
-                                DropdownMenu(
-                                    expanded = displayModeMenuExpanded,
-                                    onDismissRequest = { displayModeMenuExpanded = false },
-                                    modifier = Modifier
-                                        .widthIn(min = 230.dp, max = 280.dp)
-                                        .background(surfaceColor)
-                                ) {
-                                    Text(
-                                        text = soundFontText(
-                                            "tab_display_menu_title",
-                                            currentLang,
-                                            "Chế độ hiển thị",
-                                            "Display mode"
-                                        ),
-                                        color = textColor,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(
-                                            start = 16.dp,
-                                            end = 16.dp,
-                                            top = 10.dp,
-                                            bottom = 6.dp
-                                        )
-                                    )
-                                    HorizontalDivider(
-                                        color = Color.Gray.copy(alpha = 0.18f),
-                                        modifier = Modifier.padding(horizontal = 12.dp)
-                                    )
-
-                                    TabDisplayMode.values().forEach { mode ->
-                                        val selected = mode == selectedDisplayMode
-                                        DropdownMenuItem(
-                                            text = {
+                                if (displayModeMenuExpanded) {
+                                    val vi = currentLang.lowercase(Locale.ROOT).startsWith("vi")
+                                    Dialog(
+                                        onDismissRequest = {
+                                            if (!displayConfigurationApplying) displayModeMenuExpanded = false
+                                        },
+                                        properties = DialogProperties(usePlatformDefaultWidth = false)
+                                    ) {
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth(0.92f)
+                                                .widthIn(max = 420.dp)
+                                                .heightIn(max = 600.dp),
+                                            shape = RoundedCornerShape(22.dp),
+                                            color = surfaceColor,
+                                            shadowElevation = 14.dp
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.verticalScroll(rememberScrollState())
+                                                    .padding(horizontal = 15.dp, vertical = 13.dp),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
                                                 Row(
-                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(9.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier.size(34.dp)
+                                                            .background(accentColor.copy(alpha = .12f), RoundedCornerShape(10.dp)),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(Icons.Default.Tune, null,
+                                                            tint = accentColor, modifier = Modifier.size(20.dp))
+                                                    }
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            if (vi) "T\u00f9y ch\u1ec9nh hi\u1ec3n th\u1ecb" else "Display layout",
+                                                            color = textColor, fontSize = 17.sp,
+                                                            fontWeight = FontWeight.Bold, lineHeight = 21.sp
+                                                        )
+                                                        Text(
+                                                            if (vi) "Ch\u1ea1m v\u00e0o th\u1ebb \u0111\u1ec3 ch\u1ecdn, sau \u0111\u00f3 nh\u1ea5n \u00c1p d\u1ee5ng" else "Tap an option, then press Apply",
+                                                            color = textColor.copy(alpha = .65f), fontSize = 10.sp
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { displayModeMenuExpanded = false },
+                                                        enabled = !displayConfigurationApplying,
+                                                        modifier = Modifier.size(32.dp)
+                                                            .background(textColor.copy(alpha = .06f), CircleShape)
+                                                    ) {
+                                                        Icon(Icons.Default.Close,
+                                                            if (vi) "\u0110\u00f3ng" else "Close",
+                                                            tint = textColor, modifier = Modifier.size(19.dp))
+                                                    }
+                                                }
+                                                HorizontalDivider(color = Color.Gray.copy(alpha = .18f))
+
+                                                Text(
+                                                    if (vi) "N\u1ed9i dung b\u1ea3n nh\u1ea1c" else "Score content",
+                                                    color = textColor, fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    listOf(true, false).forEach { isScore ->
+                                                        val checked = if (isScore) draftShowScore else draftShowTab
+                                                        Surface(
+                                                            modifier = Modifier.weight(1f).height(49.dp)
+                                                                .clickable {
+                                                                    if (isScore) {
+                                                                        draftShowScore = !draftShowScore
+                                                                        if (!draftShowScore && !draftShowTab) draftShowTab = true
+                                                                    } else {
+                                                                        draftShowTab = !draftShowTab
+                                                                        if (!draftShowTab && !draftShowScore) draftShowScore = true
+                                                                    }
+                                                                },
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = if (checked) accentColor.copy(alpha = .09f)
+                                                            else textColor.copy(alpha = .035f),
+                                                            border = androidx.compose.foundation.BorderStroke(
+                                                                if (checked) 1.5.dp else 1.dp,
+                                                                if (checked) accentColor else textColor.copy(alpha = .12f)
+                                                            )
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 7.dp),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                            ) {
+                                                                Checkbox(
+                                                                    checked = checked,
+                                                                    onCheckedChange = { value ->
+                                                                        if (isScore) {
+                                                                            draftShowScore = value
+                                                                            if (!value && !draftShowTab) draftShowTab = true
+                                                                        } else {
+                                                                            draftShowTab = value
+                                                                            if (!value && !draftShowScore) draftShowScore = true
+                                                                        }
+                                                                    },
+                                                                    modifier = Modifier.size(34.dp)
+                                                                )
+                                                                Text(
+                                                                    if (isScore) {
+                                                                        if (vi) "Khu\u00f4ng nh\u1ea1c" else "Notation"
+                                                                    } else "TAB",
+                                                                    color = textColor, fontSize = 12.sp,
+                                                                    fontWeight = FontWeight.SemiBold,
+                                                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                Text(
+                                                    if (vi) "Nh\u1ea1c c\u1ee5 hi\u1ec3n th\u1ecb" else "Instrument panel",
+                                                    color = textColor, fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    TabDisplayInstrument.values().forEach { instrument ->
+                                                        val selected = draftInstrument == instrument
+                                                        Surface(
+                                                            modifier = Modifier.weight(1f).height(76.dp)
+                                                                .clickable(
+                                                                    role = androidx.compose.ui.semantics.Role.RadioButton,
+                                                                    onClick = { draftInstrument = instrument }
+                                                                ),
+                                                            shape = RoundedCornerShape(13.dp),
+                                                            color = if (selected) accentColor.copy(alpha = .11f)
+                                                            else textColor.copy(alpha = .035f),
+                                                            border = androidx.compose.foundation.BorderStroke(
+                                                                if (selected) 1.7.dp else 1.dp,
+                                                                if (selected) accentColor else textColor.copy(alpha = .12f)
+                                                            )
+                                                        ) {
+                                                            Box(modifier = Modifier.fillMaxSize()) {
+                                                                Column(
+                                                                    modifier = Modifier.fillMaxSize().padding(5.dp),
+                                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                                    verticalArrangement = Arrangement.Center
+                                                                ) {
+                                                                    if (instrument == TabDisplayInstrument.GUITAR) {
+                                                                        SongTabCChordIcon(
+                                                                            modifier = Modifier.size(40.dp),
+                                                                            isDark = localIsDark,
+                                                                            selected = selected,
+                                                                            accentColor = accentColor
+                                                                        )
+                                                                    } else {
+                                                                        Text(
+                                                                            if (instrument == TabDisplayInstrument.PIANO) "\uD83C\uDFB9" else "\u2014",
+                                                                            color = if (selected) accentColor else textColor,
+                                                                            fontSize = 23.sp,
+                                                                            lineHeight = 27.sp
+                                                                        )
+                                                                    }
+                                                                    Text(
+                                                                        when (instrument) {
+                                                                            TabDisplayInstrument.NONE -> if (vi) "Kh\u00f4ng" else "None"
+                                                                            TabDisplayInstrument.GUITAR -> "Guitar"
+                                                                            TabDisplayInstrument.PIANO -> "Piano"
+                                                                        },
+                                                                        color = if (selected) accentColor else textColor,
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        maxLines = 1
+                                                                    )
+                                                                }
+                                                                if (selected) {
+                                                                    Box(
+                                                                        modifier = Modifier.align(Alignment.TopEnd)
+                                                                            .padding(top = 3.dp, end = 3.dp)
+                                                                            .size(17.dp)
+                                                                            .background(accentColor, CircleShape),
+                                                                        contentAlignment = Alignment.Center
+                                                                    ) {
+                                                                        Icon(
+                                                                            imageVector = Icons.Default.Check,
+                                                                            contentDescription = null,
+                                                                            tint = Color.White,
+                                                                            modifier = Modifier.size(12.dp)
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth()
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(
+                                                            if (draftShowNoteNames) accentColor.copy(alpha = .055f)
+                                                            else textColor.copy(alpha = .025f)
+                                                        )
+                                                        .border(
+                                                            1.dp,
+                                                            if (draftShowNoteNames) accentColor.copy(alpha = .35f)
+                                                            else textColor.copy(alpha = .13f),
+                                                            RoundedCornerShape(12.dp)
+                                                        )
+                                                        .clickable { draftShowNoteNames = !draftShowNoteNames }
+                                                        .padding(horizontal = 11.dp, vertical = 5.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Column(modifier = Modifier.weight(1f)) {
                                                         Text(
-                                                            text = mode.menuTitle(currentLang),
-                                                            color = if (selected) accentColor else textColor,
-                                                            fontSize = 13.sp,
-                                                            fontWeight = if (selected) {
-                                                                FontWeight.Bold
-                                                            } else {
-                                                                FontWeight.SemiBold
-                                                            }
+                                                            if (vi) "Hiện tên nốt" else "Show note names",
+                                                            color = textColor, fontSize = 12.sp,
+                                                            fontWeight = FontWeight.SemiBold
                                                         )
                                                         Text(
-                                                            text = mode.menuDescription(currentLang),
-                                                            color = Color.Gray,
-                                                            fontSize = 10.sp,
-                                                            lineHeight = 13.sp,
-                                                            maxLines = 2,
-                                                            overflow = TextOverflow.Ellipsis
+                                                            if (vi) "Tên nốt trên khuông nhạc / TAB"
+                                                            else "Note labels on notation / TAB",
+                                                            color = textColor.copy(alpha = .60f), fontSize = 10.sp,
+                                                            lineHeight = 13.sp
                                                         )
                                                     }
-                                                    if (selected) {
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Icon(
-                                                            imageVector = Icons.Default.Check,
-                                                            contentDescription = null,
-                                                            tint = accentColor,
-                                                            modifier = Modifier.size(19.dp)
-                                                        )
+                                                    Switch(
+                                                        checked = draftShowNoteNames,
+                                                        onCheckedChange = { draftShowNoteNames = it },
+                                                        modifier = Modifier.height(37.dp)
+                                                    )
+                                                }
+
+                                                val previewMode = TabDisplayMode.fromSelection(
+                                                    draftShowScore, draftShowTab, draftInstrument
+                                                )
+                                                Surface(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = accentColor.copy(alpha = .09f)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(11.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.Check, null, tint = accentColor,
+                                                            modifier = Modifier.size(20.dp))
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                if (vi) "Xem tr\u01b0\u1edbc" else "Preview",
+                                                                color = accentColor, fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Medium
+                                                            )
+                                                            Text(previewMode.menuTitle(currentLang),
+                                                                color = textColor, fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold, maxLines = 2,
+                                                                lineHeight = 16.sp)
+                                                            if (draftInstrument == TabDisplayInstrument.PIANO && draftShowTab) {
+                                                                Text(
+                                                                    if (vi) "TAB GP g\u1ed1c \u2022 Piano chia tay g\u1ee3i \u00fd"
+                                                                    else "Original GP TAB \u2022 suggested Piano hands",
+                                                                    color = textColor.copy(alpha = .67f),
+                                                                    fontSize = 10.sp, lineHeight = 13.sp
+                                                                )
+                                                            }
+                                                        }
                                                     }
                                                 }
-                                            },
-                                            onClick = { switchDisplayMode(mode) }
-                                        )
-                                    }
-
-                                    HorizontalDivider(
-                                        color = Color.Gray.copy(alpha = 0.18f),
-                                        modifier = Modifier.padding(horizontal = 12.dp)
-                                    )
-
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable(
-                                                enabled = hasScore && !isExportingPdf
-                                            ) {
-                                                setNoteNamesEnabled(!showNoteNames)
+                                                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                                    OutlinedButton(
+                                                        onClick = { displayModeMenuExpanded = false },
+                                                        enabled = !displayConfigurationApplying,
+                                                        modifier = Modifier.weight(1f).height(43.dp)
+                                                    ) { Text(if (vi) "H\u1ee7y" else "Cancel", fontSize = 13.sp) }
+                                                    Button(
+                                                        onClick = { applyDisplaySelection() },
+                                                        enabled = !displayConfigurationApplying && hasScore && !isExportingPdf,
+                                                        modifier = Modifier.weight(1f).height(43.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.Check, null, modifier = Modifier.size(17.dp))
+                                                        Spacer(Modifier.width(4.dp))
+                                                        Text(if (vi) "\u00c1p d\u1ee5ng" else "Apply", fontSize = 13.sp)
+                                                    }
+                                                }
                                             }
-                                            .padding(
-                                                start = 16.dp,
-                                                end = 12.dp,
-                                                top = 9.dp,
-                                                bottom = 9.dp
-                                            ),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = soundFontText(
-                                                    "tab_note_names_title",
-                                                    currentLang,
-                                                    "Hiển thị tên nốt",
-                                                    "Show note names"
-                                                ),
-                                                color = if (showNoteNames) accentColor else textColor,
-                                                fontSize = 13.sp,
-                                                fontWeight = if (showNoteNames) {
-                                                    FontWeight.Bold
-                                                } else {
-                                                    FontWeight.SemiBold
-                                                }
-                                            )
-                                            Text(
-                                                text = soundFontText(
-                                                    "tab_note_names_desc",
-                                                    currentLang,
-                                                    "C, D, E, F, G, A, B bên dưới mỗi khuông",
-                                                    "C, D, E, F, G, A, B below each staff"
-                                                ),
-                                                color = Color.Gray,
-                                                fontSize = 10.sp,
-                                                lineHeight = 13.sp,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
                                         }
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Switch(
-                                            checked = showNoteNames,
-                                            onCheckedChange = null,
-                                            enabled = hasScore && !isExportingPdf
-                                        )
                                     }
                                 }
+
                             }
 
                             // Xuất track đang hiển thị thành PDF A4.
@@ -4455,9 +6209,9 @@ private fun BangNhacScreenContent(
 
                         // CÁC NÚT BÊN PHẢI (Ẩn/Hiện khi Focus vào ô tìm kiếm và CẦN tab nhạc đã hiển thị)
                         if (!hideExtraButtons && hasScore) {
-                            // NÚT ĐỔI GIAO DIỆN SÁNG/TỐI
+                            // Mở bảng chọn theme và màu hiển thị chi tiết.
                             IconButton(
-                                onClick = { localIsDark = !localIsDark },
+                                onClick = { showAppearanceSettings = true },
                                 modifier = Modifier
                                     .size(46.dp)
                                     .background(
@@ -4471,9 +6225,18 @@ private fun BangNhacScreenContent(
                                     )
                             ) {
                                 Icon(
-                                    imageVector = if (localIsDark) Icons.Default.LightMode else Icons.Default.DarkMode,
-                                    contentDescription = "Giao diện",
-                                    tint = if (localIsDark) Color.White else textColor,
+                                    imageVector = if (localIsDark) {
+                                        Icons.Default.LightMode
+                                    } else {
+                                        Icons.Default.DarkMode
+                                    },
+                                    contentDescription = soundFontText(
+                                        "tab_appearance_settings",
+                                        currentLang,
+                                        "Tùy chỉnh hiển thị",
+                                        "Display customization"
+                                    ),
+                                    tint = tabAppearanceComposeColor(appearanceCursorHex),
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
@@ -4577,30 +6340,225 @@ private fun BangNhacScreenContent(
                 }
 
                 // --- KHUNG HIỂN THỊ CHÍNH ---
-                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                // Measure the actual score viewport; do not depend on
+                // BoxWithConstraintsScope (reported as unused by the IDE).
+                var scoreViewportSize by remember { mutableStateOf(IntSize.Zero) }
+                val scoreViewportDensity = LocalDensity.current
+                val zoomScoreRightInset = with(scoreViewportDensity) {
+                    val fretboardOnRight =
+                        selectedDisplayMode.hasInstrumentPanel &&
+                                scoreViewportSize.width > 0 && scoreViewportSize.height > 0 &&
+                                scoreViewportSize.width >= scoreViewportSize.height * 1.28f
+                    if (fretboardOnRight) {
+                        scoreViewportSize.width.toDp() * 0.47f + 8.dp
+                    } else {
+                        8.dp
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .onSizeChanged { newSize ->
+                            if (scoreViewportSize != newSize) scoreViewportSize = newSize
+                        }
+                ) {
                     // 1. LỚP DƯỚI CÙNG: WEBVIEW BẢN NHẠC
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = {
-                            // Tháo WebView khỏi parent cũ (nếu có) trước khi gắn vào View mới của Dialog.
+                            // Tháo WebView khỏi parent cũ (nếu có) trước khi gắn vào View mới của Dialog
                             (webView.parent as? android.view.ViewGroup)?.removeView(webView)
                             webView
                         },
-                        update = { target ->
-                            // update cũng chạy sau khi Compose đã đo được kích thước thật. Đây là
-                            // lớp dự phòng cho trường hợp WebView đã tải HTML trước khi được attach.
-                            target.post {
-                                if (target.width > 0 && target.height > 0) {
-                                    target.evaluateJavascript(
-                                        "javascript:if(typeof onAndroidViewportChanged==='function'){" +
-                                                "onAndroidViewportChanged(${target.width},${target.height});" +
-                                                "}",
-                                        null
+                        update = { target -> syncTabViewport(target) }
+                    )
+
+                    // Zoom khuong/TAB: mini control phia tren, khong thu nho SVG can dan.
+                    // 82% la scale goc cua S+T+F; khi chon thu cong thi giu chung
+                    // scale do giua cac che do. Ve score bang AlphaTab, khong CSS transform.
+                    if (hasScore && songs.isEmpty() && !isExportingPdf &&
+                        (scoreZoomControlVisible || scoreZoomMenuExpanded)) {
+                        val effectiveZoom = if (scoreZoomPinchActive &&
+                            scoreZoomPinchPreviewPercent >= 0) {
+                            scoreZoomPinchPreviewPercent
+                        } else if (customScoreZoomPercent >= 0) {
+                            customScoreZoomPercent
+                        } else if (selectedDisplayMode.instrument == TabDisplayInstrument.GUITAR) {
+                            75
+                        } else if (selectedDisplayMode.hasInstrumentPanel) {
+                            82
+                        } else {
+                            100
+                        }
+                        val zoomLabel = soundFontText(
+                            "tab_zoom_label", currentLang, "Thu/phóng TAB", "Notation zoom"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 4.dp, end = zoomScoreRightInset)
+                                .zIndex(8f)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (localIsDark) Color(0xF2212530) else Color(0xF9FFFFFF),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp, accentColor.copy(alpha = 0.35f)
+                                ),
+                                shadowElevation = 3.dp
+                            ) {
+                                Row(
+                                    modifier = Modifier.height(34.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 30.dp, height = 34.dp)
+                                            .clickable(enabled = effectiveZoom > TAB_SCORE_ZOOM_MIN) {
+                                                setScoreZoomPercent(effectiveZoom - 10)
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "−", fontSize = 20.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (effectiveZoom > TAB_SCORE_ZOOM_MIN)
+                                                textColor else Color.Gray
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .width(52.dp).height(34.dp)
+                                            .clickable {
+                                                scoreZoomSliderDraft = effectiveZoom.toFloat()
+                                                scoreZoomMenuExpanded = true
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "$effectiveZoom%",
+                                            color = accentColor,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 30.dp, height = 34.dp)
+                                            .clickable(enabled = effectiveZoom < TAB_SCORE_ZOOM_MAX) {
+                                                setScoreZoomPercent(effectiveZoom + 10)
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "+", fontSize = 19.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (effectiveZoom < TAB_SCORE_ZOOM_MAX)
+                                                textColor else Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = scoreZoomMenuExpanded,
+                                onDismissRequest = { scoreZoomMenuExpanded = false },
+                                modifier = Modifier
+                                    .width(270.dp)
+                                    .background(surfaceColor)
+                            ) {
+                                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                    Text(
+                                        text = zoomLabel,
+                                        color = textColor,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "${scoreZoomSliderDraft.roundToInt()}%",
+                                            color = accentColor,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp
+                                        )
+                                        Spacer(modifier = Modifier.weight(1f))
+                                        Text(
+                                            text = "50–150%",
+                                            color = Color.Gray,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    Slider(
+                                        value = scoreZoomSliderDraft,
+                                        onValueChange = { scoreZoomSliderDraft =
+                                            (it / 5f).roundToInt().times(5).toFloat()
+                                                .coerceIn(50f, 150f)
+                                        },
+                                        onValueChangeFinished = {
+                                            setScoreZoomPercent(scoreZoomSliderDraft.roundToInt())
+                                        },
+                                        valueRange = 50f..150f,
+                                        steps = 19,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        listOf(60, 80, 100, 120).forEach { preset ->
+                                            Text(
+                                                text = "$preset%",
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(7.dp))
+                                                    .clickable {
+                                                        scoreZoomSliderDraft = preset.toFloat()
+                                                        setScoreZoomPercent(preset)
+                                                    }
+                                                    .padding(horizontal = 7.dp, vertical = 6.dp),
+                                                color = if (effectiveZoom == preset) accentColor else textColor,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                    HorizontalDivider(color = Color.Gray.copy(alpha = 0.15f))
+                                    Text(
+                                        text = soundFontText(
+                                            "tab_zoom_reset", currentLang,
+                                            "Khôi phục mức mặc định", "Reset to default size"
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                setScoreZoomPercent(-1)
+                                                scoreZoomSliderDraft = if (
+                                                    selectedDisplayMode.hasInstrumentPanel
+                                                ) 82f else 100f
+                                            }
+                                            .padding(vertical = 10.dp),
+                                        color = accentColor,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Text(
+                                        text = soundFontText(
+                                            "tab_zoom_board_unchanged", currentLang,
+                                            "Chỉ thu/phóng khuông nhạc và TAB; cần đàn giữ nguyên.",
+                                            "Only notation and TAB zoom; fretboard stays the same size."
+                                        ),
+                                        color = Color.Gray,
+                                        fontSize = 10.sp,
+                                        lineHeight = 13.sp
                                     )
                                 }
                             }
                         }
-                    )
+                    }
 
                     // LỚP TRUNG GIAN 1: TRẠNG THÁI ĐANG TẢI / CHƯA CÓ DỮ LIỆU
                     val showCurrentSongList = songs.isNotEmpty()
@@ -4725,14 +6683,32 @@ private fun BangNhacScreenContent(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                                .padding(bottom = 40.dp)
+                                // Chế độ cần đàn chừa vùng dưới cùng cho bộ điều khiển,
+                                // không để thanh Play che các vị trí nốt trên dây.
+                                .padding(
+                                    bottom = if (selectedDisplayMode.hasInstrumentPanel) {
+                                        8.dp
+                                    } else {
+                                        40.dp
+                                    }
+                                )
                                 .zIndex(10f)
-                                .alpha(if (isPlaying) 0.15f else 1f)
-                                .pointerInput(Unit) {
-                                    detectDragGestures { change, dragAmount ->
-                                        change.consume()
-                                        offsetX += dragAmount.x
-                                        offsetY += dragAmount.y
+                                // Giữ thanh điều khiển đủ rõ để bật/tắt metronome lúc Play.
+                                .alpha(
+                                    if (
+                                        isPlaying &&
+                                        !selectedDisplayMode.hasInstrumentPanel
+                                    ) 0.75f else 1f
+                                )
+                                .pointerInput(selectedDisplayMode) {
+                                    // Ở S+T+F, khóa thanh điều khiển tại đáy để bố cục
+                                    // TAB → cần đàn → Play luôn ổn định, không bị kéo lệch.
+                                    if (!selectedDisplayMode.hasInstrumentPanel) {
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            offsetX += dragAmount.x
+                                            offsetY += dragAmount.y
+                                        }
                                     }
                                 },
                             shape = RoundedCornerShape(24.dp),
@@ -4848,10 +6824,13 @@ private fun BangNhacScreenContent(
                                             .background(surfaceColor)
                                     ) {
                                         Text(
-                                            text = soundFontText(
-                                                "tab_sound_menu_title", currentLang,
-                                                "Âm thanh TAB", "TAB audio"
-                                            ),
+                                            text = if (selectedDisplayMode.instrument == TabDisplayInstrument.PIANO) {
+                                                soundFontText("tab_sound_piano_title", currentLang,
+                                                    "Âm thanh Piano", "Piano sound")
+                                            } else {
+                                                soundFontText("tab_sound_menu_title", currentLang,
+                                                    "Âm thanh TAB", "TAB audio")
+                                            },
                                             color = textColor,
                                             fontSize = 15.sp,
                                             fontWeight = FontWeight.Bold,
@@ -4913,7 +6892,15 @@ private fun BangNhacScreenContent(
                                             modifier = Modifier.padding(horizontal = 12.dp)
                                         )
 
-                                        downloadableSoundFontModes.forEachIndexed { index, mode ->
+                                        // FluidR3 SF2 remains available for Guitar, but not for Piano.
+                                        val visibleSoundFontModes = if (
+                                            selectedDisplayMode.instrument == TabDisplayInstrument.PIANO
+                                        ) {
+                                            listOf(TabSoundFontMode.MUSESCORE)
+                                        } else {
+                                            downloadableSoundFontModes
+                                        }
+                                        visibleSoundFontModes.forEachIndexed { index, mode ->
                                             val info = soundFontInfos[mode]
                                             val completeFile = soundFontFiles.getValue(mode)
                                             val isDownloaded = downloadedSoundFontModes[mode] == true
@@ -5084,7 +7071,7 @@ private fun BangNhacScreenContent(
                                                     )
                                                 }
 
-                                            if (index < downloadableSoundFontModes.lastIndex) {
+                                            if (index < visibleSoundFontModes.lastIndex) {
                                                 HorizontalDivider(
                                                     color = Color.Gray.copy(alpha = 0.13f),
                                                     modifier = Modifier.padding(horizontal = 12.dp)
@@ -5114,6 +7101,39 @@ private fun BangNhacScreenContent(
                                             )
                                         }
                                     }
+                                }
+
+                                // Metronome bật/tắt trong lúc phát; nhịp gõ lấy từ MIDI của
+                                // alphaTab nên tự khớp với tempo và số chỉ nhịp của bản GP.
+                                val metronomeAction = soundFontText(
+                                    if (metronomeEnabled) "tab_metronome_turn_off" else "tab_metronome_turn_on",
+                                    currentLang,
+                                    if (metronomeEnabled) "Tắt máy đếm nhịp" else "Bật máy đếm nhịp",
+                                    if (metronomeEnabled) "Turn off metronome" else "Turn on metronome"
+                                )
+                                IconButton(
+                                    onClick = { setMetronomeEnabled(!metronomeEnabled) },
+                                    enabled = hasScore && !isExportingPdf,
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .background(
+                                            if (metronomeEnabled) accentColor.copy(alpha = 0.22f)
+                                            else if (localIsDark) Color.Black else Color.Transparent,
+                                            CircleShape
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (metronomeEnabled) accentColor
+                                            else Color.Gray.copy(alpha = 0.3f),
+                                            CircleShape
+                                        )
+                                        .semantics { contentDescription = metronomeAction }
+                                ) {
+                                    SongTabMetronomeIcon(
+                                        modifier = Modifier.size(21.dp),
+                                        color = if (metronomeEnabled) accentColor
+                                        else if (localIsDark) Color.White else textColor
+                                    )
                                 }
 
                                 Button(
@@ -5354,6 +7374,31 @@ private fun BangNhacScreenContent(
                             }
                         }
                     }
+
+                    // Không để WebView trống khi người dùng vừa chọn bài GP.
+                    // Hiện tức thì từ isLoadingSong, và tự tắt qua callback
+                    // onScoreLoaded khi AlphaTab nạp xong hoặc báo lỗi.
+                    // Cũng bao phủ thời gian đọc GP từ bộ nhớ Android.
+                    if (isLoadingSong || isImportingLocalFile) {
+                        SongTabScoreLoadingOverlay(
+                            songTitle = currentSong?.title.orEmpty(),
+                            isDark = localIsDark,
+                            currentLang = currentLang,
+                            modifier = Modifier.zIndex(20f)
+                        )
+                    }
+                }
+
+                // Khong chiem chieu cao man hinh khi dang doc / choi TAB.
+                // Chi hien banner khi JS xac nhan nguoi dung da cuon den SAU ban nhac.
+                // Van giu banner ngoai WebView de khong can thiep AlphaTab va AdMob.
+                if (hasScore && showTabBottomBanner) {
+                    SongDetailBottomBannerAd(
+                        currentLang = currentLang,
+                        surfaceColor = if (localIsDark) Color.Black else surfaceColor,
+                        textColor = if (localIsDark) Color.White else textColor,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp)
+                    )
                 }
             }
         }
@@ -5402,2468 +7447,156 @@ private fun BangNhacScreenContent(
     } else {
         screenContent()
     }
+
+    if (songTechniqueDialogOpen && hasScore) {
+        val vietnameseGuide = currentLang.lowercase(Locale.ROOT).startsWith("vi")
+        val themeSurface = if (localIsDark) Color(0xFF171B24) else Color.White
+        val themeText = if (localIsDark) Color.White else Color(0xFF101828)
+        val themeMuted = if (localIsDark) Color(0xFFB7C0D0) else Color(0xFF667085)
+        val availableTechniques = SONG_TECHNIQUE_LEGEND.entries.filter { it.key in songTechniqueIds }
+        Dialog(onDismissRequest = { songTechniqueDialogOpen = false }) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 660.dp),
+                shape = RoundedCornerShape(22.dp),
+                color = themeSurface,
+                tonalElevation = 8.dp
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (vietnameseGuide) "Kỹ thuật & ký hiệu trong bài" else "Techniques & symbols in this score",
+                            color = themeText,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = { songTechniqueDialogOpen = false },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = if (vietnameseGuide) "Đóng" else "Close", tint = themeText)
+                        }
+                    }
+                    Text(
+                        text = tracks.getOrNull(selectedTrackIndex)?.name.orEmpty().ifBlank { "Track ${selectedTrackIndex + 1}" },
+                        color = themeMuted,
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider(color = themeMuted.copy(alpha = .25f))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    when {
+                        songTechniqueScanning -> Box(
+                            modifier = Modifier.fillMaxWidth().height(120.dp),
+                            contentAlignment = Alignment.Center
+                        ) { CircularProgressIndicator(color = accentColor) }
+                        availableTechniques.isEmpty() -> Text(
+                            text = if (vietnameseGuide) "Không phát hiện ký hiệu đặc biệt ở track này." else "No special symbols detected in this track.",
+                            color = themeMuted,
+                            modifier = Modifier.padding(vertical = 24.dp)
+                        )
+                        else -> {
+                            val technicalItems = availableTechniques.filter { !it.value.notation }
+                            val notationItems = availableTechniques.filter { it.value.notation }
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                if (technicalItems.isNotEmpty()) {
+                                    item {
+                                        Text(
+                                            text = if (vietnameseGuide) "KỸ THUẬT CHƠI" else "PLAYING TECHNIQUES",
+                                            color = accentColor,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                        )
+                                    }
+                                    items(technicalItems) { technique ->
+                                        SongTechniqueGuideRow(technique.value, vietnameseGuide, localIsDark, themeText, themeMuted)
+                                    }
+                                }
+                                if (notationItems.isNotEmpty()) {
+                                    item {
+                                        Text(
+                                            text = if (vietnameseGuide) "KÝ HIỆU NHẠC LÝ" else "MUSICAL NOTATION",
+                                            color = accentColor,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+                                        )
+                                    }
+                                    items(notationItems) { technique ->
+                                        SongTechniqueGuideRow(technique.value, vietnameseGuide, localIsDark, themeText, themeMuted)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAppearanceSettings) {
+        TabAppearanceSettingsDialog(
+            currentLang = currentLang,
+            appIsDark = isDark,
+            themeMode = appearanceThemeMode,
+            cursorColorId = appearanceCursorColorId,
+            activeRegionColorId = appearanceActiveRegionColorId,
+            tabColorId = appearanceTabColorId,
+            noteColorId = appearanceNoteColorId,
+            fretboardColorId = appearanceFretboardColorId,
+            panelColorId = appearancePanelColorId,
+            cursorWidth = appearanceCursorWidth,
+            regionOpacity = appearanceRegionOpacity,
+            onThemeModeChange = ::setAppearanceThemeMode,
+            onCursorColorChange = { value ->
+                setAppearanceColor(TAB_APPEARANCE_PREF_CURSOR_COLOR, value) {
+                    appearanceCursorColorId = it
+                }
+            },
+            onActiveRegionColorChange = { value ->
+                setAppearanceColor(TAB_APPEARANCE_PREF_ACTIVE_REGION_COLOR, value) {
+                    appearanceActiveRegionColorId = it
+                }
+            },
+            onTabColorChange = { value ->
+                setAppearanceColor(TAB_APPEARANCE_PREF_TAB_COLOR, value) {
+                    appearanceTabColorId = it
+                }
+            },
+            onNoteColorChange = { value ->
+                setAppearanceColor(TAB_APPEARANCE_PREF_NOTE_COLOR, value) {
+                    appearanceNoteColorId = it
+                }
+            },
+            onFretboardColorChange = { value ->
+                setAppearanceColor(TAB_APPEARANCE_PREF_FRETBOARD_COLOR, value) {
+                    appearanceFretboardColorId = it
+                }
+            },
+            onPanelColorChange = { value ->
+                setAppearanceColor(TAB_APPEARANCE_PREF_PANEL_COLOR, value) {
+                    appearancePanelColorId = it
+                }
+            },
+            onCursorWidthChange = { value ->
+                appearanceCursorWidth = value.coerceIn(0f, 24f)
+                tabDisplayPrefs.edit().putFloat(
+                    TAB_APPEARANCE_PREF_CURSOR_WIDTH, appearanceCursorWidth
+                ).apply()
+            },
+            onRegionOpacityChange = { value ->
+                appearanceRegionOpacity = value.coerceIn(0f, .85f)
+                tabDisplayPrefs.edit().putFloat(
+                    TAB_APPEARANCE_PREF_REGION_OPACITY, appearanceRegionOpacity
+                ).apply()
+            },
+            onReset = ::resetAppearanceSettings,
+            onDismiss = { showAppearanceSettings = false }
+        )
+    }
 }
 
-// Hàm cung cấp HTML nhúng JS alphaTab
-private fun getAlphaTabHtml(
-    isDarkInitial: Boolean,
-    initialSoundFontMode: String,
-    initialSoundFontUrl: String,
-    currentLang: String,
-    initialShowNoteNames: Boolean
-): String {
-    val quotedInitialSoundFontMode = JSONObject.quote(initialSoundFontMode)
-    val quotedInitialSoundFontUrl = JSONObject.quote(initialSoundFontUrl)
-    val quotedStandardSoundFontUrl = JSONObject.quote(STANDARD_SOUNDFONT_URL)
-    val quotedSoundFontStartFailed = JSONObject.quote(
-        soundFontText(
-            "tab_sound_alpha_start_failed", currentLang,
-            "AlphaTab không thể bắt đầu nạp SoundFont.",
-            "AlphaTab could not start loading the SoundFont."
-        )
-    )
-    val quotedSoundFontLoadFailedPrefix = JSONObject.quote(
-        soundFontText(
-            "tab_sound_load_failed_prefix", currentLang,
-            "Không thể nạp SoundFont: ",
-            "Could not load SoundFont: "
-        )
-    )
-
-    return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <script src="https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/alphaTab.js"
-                onerror="console.error('[TTAlphaTab] SCRIPT_LOAD_FAILED alphatab.js v1.8.4')"></script>
-            <style id="dynamic-theme-style"></style>
-            <style>
-                html, body { 
-                    margin: 0; padding: 0; 
-                    background: transparent; 
-                    overflow: hidden; 
-                }
-                
-                .wrapper { 
-                    position: absolute; 
-                    top: 0; left: 0; right: 0; bottom: 0;
-                    overflow-y: auto; 
-                    overflow-x: hidden; 
-                    -webkit-overflow-scrolling: touch; 
-                }
-                
-                #alphatab-container { 
-                    position: relative;
-                    width: 100%; 
-                    box-sizing: border-box;
-                    margin-top: -10px;
-                    padding-bottom: 60vh;
-                    /* Do not filter the entire score: large offscreen GPU layers can be blank on WebView. */
-                    filter: none !important;
-                }
-
-                /* Invert each small score SVG independently, never one huge SVG parent layer. */
-                body.tt-tab-dark:not(.pdf-export-mode) #alphatab-container svg:not(.tunertools-note-name-overlay) {
-                    filter: invert(1) hue-rotate(180deg);
-                }
-
-                /* The optional note-name overlay spans the full song; do not filter that huge SVG. */
-                body.tt-tab-dark:not(.pdf-export-mode) .tunertools-note-name {
-                    fill: #b8c2cd;
-                    stroke: rgba(0, 0, 0, 0.92);
-                }
-                body.tt-tab-dark:not(.pdf-export-mode) .tunertools-note-name.is-active {
-                    fill: #d0b9ff;
-                }
-
-                /* PDF must always retain the original black-on-white notation. */
-                body.pdf-export-mode #alphatab-container svg {
-                    filter: none !important;
-                }
-
-                /*
-                 * Một số file tải từ kho SQLite không có metadata title bên trong GP.
-                 * Khối này chỉ xuất hiện khi alphaTab không tự vẽ được tiêu đề. Nó vẫn
-                 * nằm trong vùng bản nhạc, ngay trên khuông đầu tiên, không nằm ở toolbar.
-                 */
-                #tunertools-score-title-fallback {
-                    display: none;
-                    width: 100%;
-                    box-sizing: border-box;
-                    margin: 0;
-                    padding: 4px 14px 3px;
-                    overflow: hidden;
-                    white-space: nowrap;
-                    text-align: center;
-                    text-overflow: clip;
-                    font-family: Arial, sans-serif;
-                    font-weight: 700;
-                    line-height: 1.15;
-                    color: #202124;
-                    transform-origin: center center;
-                }
-
-                body.pdf-export-mode #tunertools-score-title-fallback {
-                    color: #000000 !important;
-                    width: 190mm !important;
-                    max-width: 190mm !important;
-                }
-
-                .tunertools-note-name-overlay {
-                    position: absolute;
-                    left: 0;
-                    top: 0;
-                    overflow: visible;
-                    pointer-events: none;
-                    z-index: 4;
-                }
-
-                .tunertools-note-name {
-                    font-family: Arial, sans-serif;
-                    font-size: 8.5px;
-                    font-weight: 600;
-                    text-anchor: middle;
-                    fill: #5f6368;
-                    paint-order: stroke fill;
-                    stroke: rgba(255, 255, 255, 0.90);
-                    stroke-width: 1.1px;
-                    stroke-linejoin: round;
-                }
-
-                .tunertools-note-name.is-active {
-                    fill: #5e35b1;
-                    font-weight: 700;
-                }
-
-                body.pdf-export-mode .tunertools-note-name {
-                    fill: #424242;
-                    stroke: #ffffff;
-                }
-
-                /* Bố cục tạm thời dùng riêng cho WebView PrintDocumentAdapter. */
-                html.pdf-export-mode,
-                body.pdf-export-mode {
-                    width: 190mm !important;
-                    min-width: 190mm !important;
-                    height: auto !important;
-                    min-height: 0 !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                    overflow: visible !important;
-                    background: #ffffff !important;
-                    color-scheme: light !important;
-                }
-
-                body.pdf-export-mode .wrapper {
-                    position: static !important;
-                    width: 190mm !important;
-                    min-width: 190mm !important;
-                    height: auto !important;
-                    min-height: 0 !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                    overflow: visible !important;
-                    background: #ffffff !important;
-                }
-
-                body.pdf-export-mode #alphatab-container {
-                    width: 190mm !important;
-                    min-width: 190mm !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                    filter: none !important;
-                    background: #ffffff !important;
-                }
-
-                body.pdf-export-mode .at-cursor-bar,
-                body.pdf-export-mode .at-cursor-beat {
-                    display: none !important;
-                }
-
-                @media print {
-                    html, body,
-                    .wrapper,
-                    #alphatab-container {
-                        overflow: visible !important;
-                        background: #ffffff !important;
-                    }
-
-                    #alphatab-container {
-                        filter: none !important;
-                        padding-bottom: 0 !important;
-                    }
-                    #alphatab-container svg {
-                        filter: none !important;
-                    }
-
-                    .at-cursor-bar,
-                    .at-cursor-beat {
-                        display: none !important;
-                    }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="wrapper" id="scroll-wrapper">
-                <div id="tunertools-score-title-fallback" aria-hidden="true"></div>
-                <div id="alphatab-container"></div>
-            </div>
-            <script>
-                var currentThemeIsDark = $isDarkInitial;
-                var isPdfExportMode = false;
-                var pdfExportWaitingForRender = false;
-                var pdfExportOriginalState = null;
-                var pdfExportReadyTimer = null;
-                var pdfExportFallbackTimer = null;
-
-                // Hàm thay đổi giao diện động
-                function toggleTheme(isDarkTheme) {
-                    currentThemeIsDark = !!isDarkTheme;
-                    // A CSS filter on the entire alphaTab container creates one giant GPU
-                    // layer for long GP files. On some Android WebViews this layer is not
-                    // painted, even though the DOM contains all rendered SVG systems.
-                    // Keep the parent unfiltered and let CSS invert each SVG separately.
-                    var container = document.getElementById('alphatab-container');
-                    if (container) container.style.filter = 'none';
-                    document.body.classList.toggle('tt-tab-dark',
-                        currentThemeIsDark && !isPdfExportMode);
-
-                    var fallbackTitleElement = document.getElementById('tunertools-score-title-fallback');
-                    if (fallbackTitleElement) {
-                        fallbackTitleElement.style.color = (isPdfExportMode || !currentThemeIsDark)
-                            ? '#202124'
-                            : '#ffffff';
-                    }
-
-                    var style = document.getElementById('dynamic-theme-style');
-                    if (style) {
-                        if (isDarkTheme) {
-                            style.innerHTML = `
-                                .at-cursor-bar { background: rgba(0, 230, 118, 0.25) !important; }
-                                .at-cursor-beat { background: rgba(255, 82, 82, 0.45) !important; border-left: 4px solid rgba(255, 82, 82, 1) !important; box-shadow: -2px 0 10px rgba(255, 82, 82, 0.8) !important; }
-                            `;
-                        } else {
-                            style.innerHTML = `
-                                .at-cursor-bar { background: rgba(255, 242, 0, 0.25) !important; }
-                                .at-cursor-beat { background: rgba(64, 114, 203, 0.3) !important; border-left: 4px solid rgba(64, 114, 203, 1) !important; box-shadow: none !important; }
-                            `;
-                        }
-                    }
-                }
-                
-                // Set màu ngay khi tải lần đầu
-                toggleTheme($isDarkInitial);
-
-                var api = null;
-                var currentTracks = [];
-                var selectedTrackForPlayback = 0;
-                var isApiReady = false;
-                var pendingSoundFontMode = $quotedInitialSoundFontMode;
-                var pendingSoundFontTemporaryFallback = false;
-                var activeSoundFontMode = null;
-                var isSoundFontLoading = true;
-                var soundFontStartFailedText = $quotedSoundFontStartFailed;
-                var soundFontLoadFailedPrefix = $quotedSoundFontLoadFailedPrefix;
-                var standardSoundFontUrl = $quotedStandardSoundFontUrl;
-                var isScoreLoading = false;
-                var scoreAwaitingFirstRender = false;
-                var scoreRenderRecoveryTimer = null;
-                var scoreRenderRecoveryAttempts = 0;
-                var isScoreRenderInProgress = false;
-                var scoreRenderStartedAt = 0;
-                var lastAndroidViewportWidth = 0;
-                var lastAndroidViewportHeight = 0;
-                var lastSyncedCssViewportWidth = 0;
-                var lastTitleRenderCssViewportWidth = 0;
-                var viewportSyncTimer = null;
-                var alphaTabInitRetryTimer = null;
-                var scoreWaitForApiSince = 0;
-                var initFatalReported = false;
-                var lastKnownPlayerState = 0;
-
-                function ttLog(stage, info, severity) {
-                    var message = String(stage) + (info ? ' | ' + String(info) : '');
-                    try {
-                        AndroidInterface.onTabLog(severity || 'I', message);
-                    } catch (ignored) {
-                        console.log('[TTAlphaTab] ' + message);
-                    }
-                }
-
-                window.addEventListener('error', function(event) {
-                    var target = event.target;
-                    if (target && target.tagName === 'SCRIPT') {
-                        ttLog('SCRIPT_ERROR', 'alphaTab external script failed', 'E');
-                    } else {
-                        var src = String(event.filename || '').split('/').pop();
-                        ttLog('JS_ERROR', String(event.message || 'unknown') +
-                            ' at ' + src + ':' + (event.lineno || 0), 'E');
-                    }
-                }, true);
-                window.addEventListener('unhandledrejection', function(event) {
-                    var error = event.reason;
-                    ttLog('JS_REJECTION', String(error && (error.stack || error.message) || error).slice(0, 900), 'E');
-                });
-                ttLog('HTML_SCRIPT_READY', 'alphaTab=' + (typeof alphaTab) +
-                    ' window=' + window.innerWidth + 'x' + window.innerHeight);
-                var autoPlayAfterSoundFontReady = false;
-                var autoFallbackInProgress = false;
-                var soundFontCompatibilityCheckInProgress = false;
-                var soundFontCompatibilityCheckToken = 0;
-                var soundFontCompatibilityScoreGeneration = 0;
-                var soundFontCompatibilityCache = {};
-                var noteNamesVisible = $initialShowNoteNames;
-                var noteNameOverlayId = 'tunertools-note-name-overlay';
-                var lastPlayedNoteNameBeatId = '';
-                var defaultSystemPaddingBottom = 10;
-                var defaultLastSystemPaddingBottom = 5;
-                var noteNameSystemPaddingBottom = 24;
-                var noteNameLastSystemPaddingBottom = 24;
-
-                // Bản sao BPM gốc để mọi lần chỉnh đều tính từ dữ liệu ban đầu,
-                // tránh sai số cộng dồn khi người dùng đổi BPM nhiều lần.
-                var originalTempoEntries = [];
-                var originalBaseBpm = 120;
-                var currentDisplayedBpm = 120;
-
-                // Tiêu đề bài hát được đo theo chiều rộng thật của WebView.
-                // Font được ghi lại bằng Settings.fillFromJson để alphaTab chuyển chuỗi CSS
-                // thành đúng kiểu Font nội bộ trước khi render lại.
-                var currentScoreTitle = 'Bài nhạc';
-                var scoreTitleFallbackId = 'tunertools-score-title-fallback';
-                // Tên lấy từ danh sách Android chỉ được dùng khi file GP không có metadata title.
-                // Tiêu đề vẫn được render bên trong đầu bản nhạc của alphaTab như trước đây.
-                var pendingScoreTitle = '';
-                var scrollToTopAfterNextRender = false;
-                var currentTitleFontSize = 18;
-                var lastResponsiveTitleFont = '';
-                var titleResizeTimer = null;
-                var titlePostRenderTimer = null;
-                var isCorrectingRenderedTitle = false;
-
-                function getTitleViewportMetrics() {
-                    var wrapper = document.getElementById('scroll-wrapper');
-                    var viewportWidth = wrapper && wrapper.clientWidth > 0
-                        ? wrapper.clientWidth
-                        : (window.innerWidth || document.documentElement.clientWidth || 320);
-
-                    // Giữ một khoảng an toàn ở cả hai cạnh màn hình.
-                    var horizontalSafeArea = viewportWidth <= 340 ? 24 : 32;
-                    return {
-                        wrapper: wrapper,
-                        viewportWidth: viewportWidth,
-                        maxTitleWidth: Math.max(88, viewportWidth - horizontalSafeArea)
-                    };
-                }
-
-                function measureTitleWidth(title, fontSize) {
-                    try {
-                        var canvas = document.createElement('canvas');
-                        var context = canvas.getContext('2d');
-                        if (!context) return NaN;
-                        context.font = 'bold ' + fontSize + 'px Arial, sans-serif';
-                        return context.measureText(String(title || '')).width;
-                    } catch (_) {
-                        return NaN;
-                    }
-                }
-
-                function calculateResponsiveTitleFont(title) {
-                    var metrics = getTitleViewportMetrics();
-                    var safeTitle = String(title || 'Bài nhạc').replace(/\s+/g, ' ').trim();
-
-                    // Màn hình dọc dùng cỡ tối đa nhỏ hơn; màn hình ngang vẫn có thể hiển thị lớn.
-                    var maxFontSize = metrics.viewportWidth >= 600
-                        ? 26
-                        : (metrics.viewportWidth >= 400 ? 22 : 20);
-                    var minFontSize = metrics.viewportWidth <= 320 ? 7.5 : 8;
-                    var targetWidth = metrics.maxTitleWidth * 0.94;
-
-                    var measuredAtMax = measureTitleWidth(safeTitle, maxFontSize);
-                    if (!Number.isFinite(measuredAtMax) || measuredAtMax <= 0) {
-                        // Dự phòng cho WebView rất cũ không đo được canvas text.
-                        var estimated = targetWidth / Math.max(1, safeTitle.length * 0.58);
-                        return Math.max(
-                            minFontSize,
-                            Math.min(maxFontSize, Math.floor(estimated * 4) / 4)
-                        );
-                    }
-
-                    if (measuredAtMax <= targetWidth) {
-                        return maxFontSize;
-                    }
-
-                    // Tìm nhị phân theo bước 0.25px để tên dài co vừa chính xác hơn.
-                    var low = minFontSize;
-                    var high = maxFontSize;
-                    var best = minFontSize;
-                    for (var i = 0; i < 14; i++) {
-                        var middle = (low + high) / 2;
-                        var measured = measureTitleWidth(safeTitle, middle);
-                        if (Number.isFinite(measured) && measured <= targetWidth) {
-                            best = middle;
-                            low = middle;
-                        } else {
-                            high = middle;
-                        }
-                    }
-
-                    return Math.max(
-                        minFontSize,
-                        Math.min(maxFontSize, Math.floor(best * 4) / 4)
-                    );
-                }
-
-                function createAlphaTabFont(cssFont) {
-                    try {
-                        if (
-                            typeof alphaTab !== 'undefined' &&
-                            alphaTab.model &&
-                            alphaTab.model.Font &&
-                            typeof alphaTab.model.Font.fromJson === 'function'
-                        ) {
-                            return alphaTab.model.Font.fromJson(cssFont);
-                        }
-                    } catch (_) {
-                        // Settings.fillFromJson phía dưới là nhánh chính.
-                    }
-                    return null;
-                }
-
-                function ensureScoreTitleSettingVisible() {
-                    if (!api || !api.settings || !api.settings.notation) return false;
-
-                    try {
-                        if (typeof api.settings.fillFromJson === 'function') {
-                            api.settings.fillFromJson({
-                                notation: {
-                                    elements: { scoreTitle: true }
-                                }
-                            });
-                            return true;
-                        }
-                    } catch (_) {
-                        // Tiếp tục sang nhánh tương thích bên dưới.
-                    }
-
-                    try {
-                        if (
-                            api.settings.notation.elements &&
-                            typeof api.settings.notation.elements.set === 'function' &&
-                            typeof alphaTab !== 'undefined' &&
-                            alphaTab.NotationElement
-                        ) {
-                            api.settings.notation.elements.set(
-                                alphaTab.NotationElement.ScoreTitle,
-                                true
-                            );
-                            return true;
-                        }
-                    } catch (_) {
-                        // Không chặn việc render nếu bản alphaTab cũ không có Map.set.
-                    }
-
-                    return false;
-                }
-
-                function updateAlphaTabHeaderSettings(titleFont) {
-                    if (!api || !api.settings || !api.settings.display) return false;
-
-                    // Luôn bật lại ScoreTitle để việc đổi chế độ TAB/tiết tấu không làm mất
-                    // tiêu đề ở phần đầu bản nhạc.
-                    ensureScoreTitleSettingVisible();
-
-                    // Đây là cách an toàn cho bản Web: chuỗi CSS được parser của alphaTab
-                    // chuyển thành Font nội bộ, thay vì gán thẳng String vào thuộc tính Font.
-                    try {
-                        if (typeof api.settings.fillFromJson === 'function') {
-                            api.settings.fillFromJson({
-                                display: {
-                                    padding: [12, 10, 12, 24],
-                                    resources: {
-                                        titleFont: titleFont,
-                                        subTitleFont: '14px Arial, sans-serif',
-                                        wordsFont: '12px Arial, sans-serif',
-                                        copyrightFont: 'bold 10px Arial, sans-serif'
-                                    }
-                                },
-                                notation: {
-                                    elements: { scoreTitle: true }
-                                }
-                            });
-                            return true;
-                        }
-                    } catch (_) {
-                        // Tiếp tục sang nhánh tương thích bên dưới.
-                    }
-
-                    var resources = api.settings.display.resources;
-                    if (!resources) return false;
-
-                    var parsedTitleFont = createAlphaTabFont(titleFont);
-                    var parsedSubTitleFont = createAlphaTabFont('14px Arial, sans-serif');
-                    var parsedWordsFont = createAlphaTabFont('12px Arial, sans-serif');
-                    var parsedCopyrightFont = createAlphaTabFont('bold 10px Arial, sans-serif');
-
-                    resources.titleFont = parsedTitleFont || titleFont;
-                    resources.subTitleFont = parsedSubTitleFont || resources.subTitleFont;
-                    resources.wordsFont = parsedWordsFont || resources.wordsFont;
-                    resources.copyrightFont = parsedCopyrightFont || resources.copyrightFont;
-                    api.settings.display.padding = [12, 10, 12, 24];
-                    return true;
-                }
-
-                function applyResponsiveSongHeader(score, renderAfterUpdate, forcedFontSize) {
-                    if (!api || !api.settings || !score) return false;
-
-                    var titleFromFile = String(score.title || '').replace(/\s+/g, ' ').trim();
-                    var fallbackTitle = String(pendingScoreTitle || '').replace(/\s+/g, ' ').trim();
-                    currentScoreTitle = titleFromFile || fallbackTitle || 'Bài nhạc';
-
-                    var scoreTitleChanged = false;
-
-                    // Một số file GP tải từ SQLite không lưu metadata title. Ghi tên bài
-                    // từ kết quả tìm kiếm vào Score trước khi alphaTab render khuông đầu.
-                    if (!titleFromFile && fallbackTitle) {
-                        try {
-                            score.title = currentScoreTitle;
-                            scoreTitleChanged = true;
-                        } catch (_) {
-                            // WebView cũ có thể dùng model chỉ đọc; DOM fallback phía dưới sẽ xử lý.
-                        }
-                    }
-
-                    ensureScoreTitleSettingVisible();
-                    var calculatedSize = Number.isFinite(Number(forcedFontSize))
-                        ? Number(forcedFontSize)
-                        : calculateResponsiveTitleFont(currentScoreTitle);
-                    var metrics = getTitleViewportMetrics();
-                    var minimumSize = metrics.viewportWidth <= 320 ? 7.5 : 8;
-                    var maximumSize = metrics.viewportWidth >= 600
-                        ? 26
-                        : (metrics.viewportWidth >= 400 ? 22 : 20);
-                    var fontSize = Math.max(
-                        minimumSize,
-                        Math.min(maximumSize, Math.floor(calculatedSize * 4) / 4)
-                    );
-                    var titleFont = 'bold ' + fontSize + 'px Arial, sans-serif';
-                    var fontChanged = lastResponsiveTitleFont !== titleFont;
-
-                    if (fontChanged) {
-                        if (!updateAlphaTabHeaderSettings(titleFont)) return false;
-                        currentTitleFontSize = fontSize;
-                        lastResponsiveTitleFont = titleFont;
-                    } else {
-                        // Dù font không đổi, title vừa chèn vẫn cần buộc alphaTab nhận settings mới.
-                        currentTitleFontSize = fontSize;
-                    }
-
-                    if (fontChanged || scoreTitleChanged) {
-                        api.updateSettings();
-                    }
-
-                    if (renderAfterUpdate && api.score) {
-                        api.render();
-                    }
-                    return fontChanged || scoreTitleChanged;
-                }
-
-                function normalizeRenderedText(value) {
-                    return String(value || '').replace(/\s+/g, ' ').trim();
-                }
-
-                function hideFallbackScoreTitle() {
-                    var element = document.getElementById(scoreTitleFallbackId);
-                    if (element) {
-                        element.style.display = 'none';
-                        element.style.transform = '';
-                        element.textContent = '';
-                    }
-
-                    var container = document.getElementById('alphatab-container');
-                    if (container && !isPdfExportMode) {
-                        container.style.marginTop = '-10px';
-                    }
-                }
-
-                function showFallbackScoreTitle() {
-                    var title = normalizeRenderedText(currentScoreTitle);
-                    if (!title || title === 'Bài nhạc') {
-                        hideFallbackScoreTitle();
-                        return;
-                    }
-
-                    var element = document.getElementById(scoreTitleFallbackId);
-                    if (!element) return;
-
-                    element.textContent = title;
-                    element.style.display = 'block';
-                    element.style.fontSize = currentTitleFontSize + 'px';
-                    element.style.color = (isPdfExportMode || !currentThemeIsDark)
-                        ? '#202124'
-                        : '#ffffff';
-                    element.style.transform = '';
-
-                    var container = document.getElementById('alphatab-container');
-                    if (container) {
-                        // Bỏ margin âm để khuông đầu tiên không đè lên tiêu đề dự phòng.
-                        container.style.marginTop = isPdfExportMode ? '0px' : '-2px';
-                    }
-
-                    // Phòng tên quá dài trên màn hình nhỏ: co ngang nhưng không cắt chữ.
-                    requestAnimationFrame(function() {
-                        if (!element || element.style.display === 'none') return;
-                        var availableWidth = Math.max(88, element.clientWidth - 28);
-                        var contentWidth = element.scrollWidth;
-                        if (contentWidth > availableWidth && contentWidth > 0) {
-                            var scaleX = Math.max(0.55, Math.min(1, availableWidth / contentWidth));
-                            element.style.transform = 'scaleX(' + scaleX + ')';
-                        }
-                    });
-                }
-
-                function findRenderedTitleElement() {
-                    var expectedTitle = normalizeRenderedText(currentScoreTitle);
-                    if (!expectedTitle) return null;
-
-                    var textNodes = document.querySelectorAll('#alphatab-container svg text');
-                    for (var i = 0; i < textNodes.length; i++) {
-                        if (normalizeRenderedText(textNodes[i].textContent) === expectedTitle) {
-                            return textNodes[i];
-                        }
-                    }
-                    return null;
-                }
-
-                function verifyRenderedTitleFits() {
-                    clearTimeout(titlePostRenderTimer);
-                    titlePostRenderTimer = setTimeout(function() {
-                        if (!api || !api.score || isCorrectingRenderedTitle) return;
-
-                        var titleElement = findRenderedTitleElement();
-                        if (!titleElement) {
-                            showFallbackScoreTitle();
-                            return;
-                        }
-
-                        hideFallbackScoreTitle();
-
-                        var metrics = getTitleViewportMetrics();
-                        var wrapper = metrics.wrapper;
-                        if (!wrapper) return;
-
-                        var titleRect = titleElement.getBoundingClientRect();
-                        var wrapperRect = wrapper.getBoundingClientRect();
-                        var leftLimit = wrapperRect.left + 8;
-                        var rightLimit = wrapperRect.right - 8;
-                        var isOverflowing =
-                            titleRect.width > metrics.maxTitleWidth ||
-                            titleRect.left < leftLimit ||
-                            titleRect.right > rightLimit;
-
-                        var minimumSize = metrics.viewportWidth <= 320 ? 7.5 : 8;
-                        if (!isOverflowing) return;
-
-                        // Với tên đặc biệt dài, khi đã chạm cỡ chữ tối thiểu thì nén ngang
-                        // riêng dòng tiêu đề để vẫn hiển thị đủ, không cắt ký tự hay xuống dòng.
-                        if (currentTitleFontSize <= minimumSize + 0.01) {
-                            var finalScale = Math.min(
-                                1,
-                                (metrics.maxTitleWidth / Math.max(1, titleRect.width)) * 0.96
-                            );
-                            try {
-                                var naturalSvgLength = titleElement.getComputedTextLength();
-                                if (Number.isFinite(naturalSvgLength) && naturalSvgLength > 0) {
-                                    titleElement.setAttribute(
-                                        'textLength',
-                                        String(naturalSvgLength * finalScale)
-                                    );
-                                    titleElement.setAttribute('lengthAdjust', 'spacingAndGlyphs');
-                                } else {
-                                    throw new Error('Không đọc được chiều dài SVG');
-                                }
-                            } catch (_) {
-                                titleElement.style.transformBox = 'fill-box';
-                                titleElement.style.transformOrigin = 'center center';
-                                titleElement.style.transform = 'scaleX(' + finalScale + ')';
-                            }
-                            return;
-                        }
-
-                        // Đo trực tiếp phần SVG đã render để bù sai số font/devicePixelRatio.
-                        var widthRatio = metrics.maxTitleWidth / Math.max(1, titleRect.width);
-                        var nextSize = Math.floor(
-                            Math.max(minimumSize, currentTitleFontSize * widthRatio * 0.92) * 4
-                        ) / 4;
-                        if (nextSize >= currentTitleFontSize) {
-                            nextSize = Math.max(minimumSize, currentTitleFontSize - 0.5);
-                        }
-                        if (Math.abs(nextSize - currentTitleFontSize) < 0.24) return;
-
-                        isCorrectingRenderedTitle = true;
-                        applyResponsiveSongHeader(api.score, true, nextSize);
-                        setTimeout(function() {
-                            isCorrectingRenderedTitle = false;
-                            verifyRenderedTitleFits();
-                        }, 420);
-                    }, 80);
-                }
-
-                var isUserScrolling = false;
-                var scrollTimeout = null;
-                
-                function ensureInitialTempoAutomation(score) {
-                    if (!score || !score.masterBars || score.masterBars.length === 0) return;
-
-                    var firstMasterBar = score.masterBars[0];
-                    if (!firstMasterBar.tempoAutomations) {
-                        firstMasterBar.tempoAutomations = [];
-                    }
-
-                    if (firstMasterBar.tempoAutomations.length === 0) {
-                        var initialValue = Number(score.tempo);
-                        if (!Number.isFinite(initialValue) || initialValue <= 0) {
-                            initialValue = 120;
-                        }
-
-                        var automation = null;
-                        try {
-                            if (
-                                typeof alphaTab !== 'undefined' &&
-                                alphaTab.model &&
-                                alphaTab.model.Automation
-                            ) {
-                                automation = new alphaTab.model.Automation();
-                            }
-                        } catch (_) {
-                            automation = null;
-                        }
-
-                        // Dạng object này vẫn chứa đầy đủ các thuộc tính mà renderer/MIDI cần.
-                        if (!automation) {
-                            automation = {};
-                        }
-                        automation.type = 0;
-                        automation.isLinear = false;
-                        automation.value = initialValue;
-                        automation.ratioPosition = 0;
-                        automation.text = '';
-                        automation.isVisible = true;
-                        firstMasterBar.tempoAutomations.push(automation);
-                    } else {
-                        // Yêu cầu của màn hình này là luôn nhìn thấy BPM đầu bài.
-                        firstMasterBar.tempoAutomations[0].isVisible = true;
-                    }
-                }
-
-                function captureOriginalTempos(score) {
-                    originalTempoEntries = [];
-                    ensureInitialTempoAutomation(score);
-
-                    if (score && score.masterBars) {
-                        for (var barIndex = 0; barIndex < score.masterBars.length; barIndex++) {
-                            var masterBar = score.masterBars[barIndex];
-                            var automations = masterBar.tempoAutomations || [];
-                            for (var automationIndex = 0; automationIndex < automations.length; automationIndex++) {
-                                var automation = automations[automationIndex];
-                                var value = Number(automation.value);
-                                if (Number.isFinite(value) && value > 0) {
-                                    originalTempoEntries.push({
-                                        automation: automation,
-                                        value: value
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    originalBaseBpm = Number(score && score.tempo);
-                    if (!Number.isFinite(originalBaseBpm) || originalBaseBpm <= 0) {
-                        originalBaseBpm = originalTempoEntries.length > 0
-                            ? originalTempoEntries[0].value
-                            : 120;
-                    }
-
-                    currentDisplayedBpm = Math.round(originalBaseBpm);
-                    AndroidInterface.onTempoChanged(currentDisplayedBpm);
-                }
-
-                function setScoreBpm(targetBpm) {
-                    try {
-                        targetBpm = Math.round(Number(targetBpm));
-                        if (!Number.isFinite(targetBpm) || targetBpm < 20 || targetBpm > 400) {
-                            AndroidInterface.onTempoChangeFailed('BPM phải nằm trong khoảng 20 đến 400.');
-                            return false;
-                        }
-                        if (!api || !api.score || originalTempoEntries.length === 0) {
-                            AndroidInterface.onTempoChangeFailed('Bản nhạc chưa sẵn sàng để đổi BPM.');
-                            return false;
-                        }
-
-                        var ratio = targetBpm / originalBaseBpm;
-                        for (var i = 0; i < originalTempoEntries.length; i++) {
-                            var entry = originalTempoEntries[i];
-                            entry.automation.value = Math.max(
-                                1,
-                                Math.round(entry.value * ratio)
-                            );
-                        }
-
-                        // Đảm bảo BPM đầu bài chính xác tuyệt đối với số người dùng nhập.
-                        if (
-                            api.score.masterBars &&
-                            api.score.masterBars.length > 0 &&
-                            api.score.masterBars[0].tempoAutomations &&
-                            api.score.masterBars[0].tempoAutomations.length > 0
-                        ) {
-                            api.score.masterBars[0].tempoAutomations[0].value = targetBpm;
-                            api.score.masterBars[0].tempoAutomations[0].isVisible = true;
-                        }
-
-                        // BPM đã được ghi thẳng vào data model nên giữ playbackSpeed = 100%.
-                        // Re-render cập nhật con số tempo trên khuông nhạc;
-                        // loadMidiForScore tạo lại MIDI để tốc độ nghe khớp với con số đó.
-                        api.stop();
-                        api.playbackSpeed = 1.0;
-                        api.render();
-                        if (typeof api.loadMidiForScore === 'function') {
-                            api.loadMidiForScore();
-                        }
-
-                        currentDisplayedBpm = targetBpm;
-                        AndroidInterface.onTempoChanged(targetBpm);
-                        return true;
-                    } catch (error) {
-                        AndroidInterface.onTempoChangeFailed(
-                            'Không thể đổi BPM: ' + (error && error.message ? error.message : error)
-                        );
-                        return false;
-                    }
-                }
-
-
-                function clearNoteNameOverlay() {
-                    var existing = document.getElementById(noteNameOverlayId);
-                    if (existing && existing.parentNode) {
-                        existing.parentNode.removeChild(existing);
-                    }
-                }
-
-                function noteNameBeatId(beat) {
-                    if (!beat) return '';
-
-                    var beatId = Number(beat.id);
-                    if (Number.isFinite(beatId)) {
-                        return String(Math.round(beatId));
-                    }
-
-                    var displayStart = Number(beat.absoluteDisplayStart);
-                    var beatIndex = Number(beat.index);
-                    if (Number.isFinite(displayStart)) {
-                        return 's' + String(Math.round(displayStart)) +
-                            'i' + String(Number.isFinite(beatIndex) ? Math.round(beatIndex) : 0);
-                    }
-                    return '';
-                }
-
-                function selectedTrackForNoteNames() {
-                    if (!currentTracks || currentTracks.length === 0) return null;
-                    var safeIndex = Math.max(
-                        0,
-                        Math.min(selectedTrackForPlayback, currentTracks.length - 1)
-                    );
-                    return currentTracks[safeIndex] || null;
-                }
-
-                function trackOfBeatForNoteNames(beat) {
-                    try {
-                        return beat && beat.voice && beat.voice.bar && beat.voice.bar.staff
-                            ? beat.voice.bar.staff.track
-                            : null;
-                    } catch (_) {
-                        return null;
-                    }
-                }
-
-                function beatBelongsToSelectedTrack(beat, selectedTrack) {
-                    if (!beat || !selectedTrack) return true;
-                    var beatTrack = trackOfBeatForNoteNames(beat);
-                    if (!beatTrack) return true;
-                    if (beatTrack === selectedTrack) return true;
-
-                    var beatTrackIndex = Number(beatTrack.index);
-                    var selectedTrackIndex = Number(selectedTrack.index);
-                    return Number.isFinite(beatTrackIndex) &&
-                        Number.isFinite(selectedTrackIndex) &&
-                        beatTrackIndex === selectedTrackIndex;
-                }
-
-                function beatUsesFlatNoteNames(beat) {
-                    try {
-                        var bar = beat && beat.voice ? beat.voice.bar : null;
-                        var masterBar = bar ? bar.masterBar : null;
-                        var keySignature = Number(masterBar ? masterBar.keySignature : 0);
-                        return Number.isFinite(keySignature) && keySignature < 0;
-                    } catch (_) {
-                        return false;
-                    }
-                }
-
-                function notePitchForName(note) {
-                    if (!note || note.isVisible === false || note.isDead === true || note.isPercussion === true) {
-                        return null;
-                    }
-
-                    var pitch = NaN;
-                    try {
-                        if (typeof note.calculateRealValue === 'function') {
-                            pitch = Number(note.calculateRealValue(true, true));
-                        }
-                    } catch (_) {
-                        pitch = NaN;
-                    }
-
-                    if (!Number.isFinite(pitch)) pitch = Number(note.realValue);
-                    if (!Number.isFinite(pitch)) pitch = Number(note.displayValue);
-                    if (!Number.isFinite(pitch)) return null;
-                    return Math.round(pitch);
-                }
-
-                function noteKeyForName(note, noteIndex, pitch) {
-                    var noteId = Number(note ? note.id : NaN);
-                    if (Number.isFinite(noteId)) {
-                        return 'id' + String(Math.round(noteId));
-                    }
-
-                    var stringNumber = Number(note ? note.string : NaN);
-                    return 's' + (Number.isFinite(stringNumber) ? String(Math.round(stringNumber)) : 'x') +
-                        'p' + String(Math.round(pitch)) +
-                        'i' + String(noteIndex);
-                }
-
-                function collectBeatNoteNameEntries(beat) {
-                    if (!beat || beat.isRest === true || beat.isEmpty === true || !beat.notes) {
-                        return [];
-                    }
-
-                    var useFlats = beatUsesFlatNoteNames(beat);
-                    var sharpNames = ['C', 'C\u266f', 'D', 'D\u266f', 'E', 'F', 'F\u266f', 'G', 'G\u266f', 'A', 'A\u266f', 'B'];
-                    var flatNames = ['C', 'D\u266d', 'D', 'E\u266d', 'E', 'F', 'G\u266d', 'G', 'A\u266d', 'A', 'B\u266d', 'B'];
-                    var selectedNames = useFlats ? flatNames : sharpNames;
-                    var entries = [];
-
-                    // Giữ từng nốt vật lý của hợp âm, kể cả khi nhiều dây tạo ra
-                    // cùng một tên nốt ở các quãng tám khác nhau. Ví dụ hợp âm 6 dây
-                    // E-B-E-G#-B-E phải hiển thị đủ 6 tên, không rút gọn còn E-G#-B.
-                    for (var noteIndex = 0; noteIndex < beat.notes.length; noteIndex++) {
-                        var note = beat.notes[noteIndex];
-                        var pitch = notePitchForName(note);
-                        if (!Number.isFinite(pitch)) continue;
-
-                        var pitchClass = ((pitch % 12) + 12) % 12;
-                        var stringNumber = Number(note ? note.string : NaN);
-                        entries.push({
-                            pitch: pitch,
-                            name: selectedNames[pitchClass],
-                            stringNumber: Number.isFinite(stringNumber) ? stringNumber : NaN,
-                            noteIndex: noteIndex,
-                            key: noteKeyForName(note, noteIndex, pitch)
-                        });
-                    }
-
-                    // Đọc từ âm thấp lên âm cao; nếu hai nốt đồng âm thì giữ thứ tự dây.
-                    entries.sort(function(left, right) {
-                        if (left.pitch !== right.pitch) return left.pitch - right.pitch;
-                        if (
-                            Number.isFinite(left.stringNumber) &&
-                            Number.isFinite(right.stringNumber) &&
-                            left.stringNumber !== right.stringNumber
-                        ) {
-                            return right.stringNumber - left.stringNumber;
-                        }
-                        return left.noteIndex - right.noteIndex;
-                    });
-                    return entries;
-                }
-
-                function updateActiveNoteNameBeat(beat) {
-                    lastPlayedNoteNameBeatId = noteNameBeatId(beat);
-                    var labels = document.querySelectorAll('.tunertools-note-name');
-                    var searchToken = lastPlayedNoteNameBeatId
-                        ? '|' + lastPlayedNoteNameBeatId + '|'
-                        : '';
-
-                    for (var labelIndex = 0; labelIndex < labels.length; labelIndex++) {
-                        var label = labels[labelIndex];
-                        var beatIds = label.getAttribute('data-beat-ids') || '';
-                        var isActive = searchToken && beatIds.indexOf(searchToken) >= 0;
-                        if (isActive) {
-                            label.classList.add('is-active');
-                        } else {
-                            label.classList.remove('is-active');
-                        }
-                    }
-                }
-
-                function renderNoteNameOverlay() {
-                    clearNoteNameOverlay();
-                    if (!noteNamesVisible || !api || !api.score) return;
-
-                    var lookup = api.boundsLookup ||
-                        (api.renderer ? api.renderer.boundsLookup : null);
-                    if (!lookup || !lookup.staffSystems || lookup.staffSystems.length === 0) return;
-
-                    var container = document.getElementById('alphatab-container');
-                    if (!container) return;
-
-                    var selectedTrack = selectedTrackForNoteNames();
-                    var svgNamespace = 'http://www.w3.org/2000/svg';
-                    var overlay = document.createElementNS(svgNamespace, 'svg');
-                    overlay.setAttribute('id', noteNameOverlayId);
-                    overlay.setAttribute('class', 'tunertools-note-name-overlay');
-                    overlay.setAttribute('aria-hidden', 'true');
-
-                    var maximumRight = Math.max(container.clientWidth || 0, container.scrollWidth || 0);
-                    var maximumBottom = Math.max(container.clientHeight || 0, container.scrollHeight || 0);
-                    var labelsCreated = 0;
-
-                    for (var systemIndex = 0; systemIndex < lookup.staffSystems.length; systemIndex++) {
-                        var systemBounds = lookup.staffSystems[systemIndex];
-                        if (!systemBounds) continue;
-
-                        var visualBounds = systemBounds.visualBounds || systemBounds.realBounds;
-                        var realBounds = systemBounds.realBounds || visualBounds;
-                        if (!visualBounds || !realBounds) continue;
-
-                        maximumRight = Math.max(
-                            maximumRight,
-                            Number(realBounds.x || 0) + Number(realBounds.w || 0)
-                        );
-                        maximumBottom = Math.max(
-                            maximumBottom,
-                            Number(realBounds.y || 0) + Number(realBounds.h || 0)
-                        );
-
-                        var visualBottom = Number(visualBounds.y || 0) + Number(visualBounds.h || 0);
-                        var labelBaseline = visualBottom + 12;
-                        maximumBottom = Math.max(maximumBottom, labelBaseline + 4);
-
-                        var groupsByX = {};
-                        // Cùng một beat có thể xuất hiện trong bounds của cả khuông nhạc
-                        // và TAB. Chỉ lấy một lần để không nhân đôi tên nốt.
-                        var processedBeatIds = {};
-                        var masterBarBoundsList = systemBounds.bars || [];
-                        for (var masterIndex = 0; masterIndex < masterBarBoundsList.length; masterIndex++) {
-                            var masterBarBounds = masterBarBoundsList[masterIndex];
-                            var barBoundsList = masterBarBounds && masterBarBounds.bars
-                                ? masterBarBounds.bars
-                                : [];
-
-                            for (var barIndex = 0; barIndex < barBoundsList.length; barIndex++) {
-                                var barBounds = barBoundsList[barIndex];
-                                var beatBoundsList = barBounds && barBounds.beats
-                                    ? barBounds.beats
-                                    : [];
-
-                                for (var beatIndex = 0; beatIndex < beatBoundsList.length; beatIndex++) {
-                                    var beatBounds = beatBoundsList[beatIndex];
-                                    var beat = beatBounds ? beatBounds.beat : null;
-                                    if (!beatBelongsToSelectedTrack(beat, selectedTrack)) continue;
-
-                                    var beatId = noteNameBeatId(beat);
-                                    if (
-                                        beatId &&
-                                        Object.prototype.hasOwnProperty.call(processedBeatIds, beatId)
-                                    ) {
-                                        continue;
-                                    }
-
-                                    var entries = collectBeatNoteNameEntries(beat);
-                                    if (entries.length === 0) continue;
-                                    if (beatId) processedBeatIds[beatId] = true;
-
-                                    var x = Number(beatBounds.onNotesX);
-                                    if (!Number.isFinite(x)) {
-                                        var beatVisualBounds = beatBounds.visualBounds || beatBounds.realBounds;
-                                        if (!beatVisualBounds) continue;
-                                        x = Number(beatVisualBounds.x || 0) +
-                                            Number(beatVisualBounds.w || 0) / 2;
-                                    }
-
-                                    var roundedX = Math.round(x * 2) / 2;
-                                    var groupKey = String(roundedX);
-                                    var group = groupsByX[groupKey];
-                                    if (!group) {
-                                        group = {
-                                            x: roundedX,
-                                            entries: [],
-                                            entryKeys: {},
-                                            beatIds: {}
-                                        };
-                                        groupsByX[groupKey] = group;
-                                    }
-
-                                    for (var entryIndex = 0; entryIndex < entries.length; entryIndex++) {
-                                        var entry = entries[entryIndex];
-                                        var entryKey = (beatId || ('x' + groupKey)) + '|' + entry.key;
-                                        if (Object.prototype.hasOwnProperty.call(group.entryKeys, entryKey)) {
-                                            continue;
-                                        }
-                                        group.entryKeys[entryKey] = true;
-                                        group.entries.push(entry);
-                                    }
-
-                                    if (beatId) group.beatIds[beatId] = true;
-                                }
-                            }
-                        }
-
-                        var groups = [];
-                        for (var groupProperty in groupsByX) {
-                            if (Object.prototype.hasOwnProperty.call(groupsByX, groupProperty)) {
-                                groups.push(groupsByX[groupProperty]);
-                            }
-                        }
-                        groups.sort(function(left, right) { return left.x - right.x; });
-
-                        for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {
-                            var currentGroup = groups[groupIndex];
-                            var groupEntries = (currentGroup.entries || []).slice();
-                            groupEntries.sort(function(left, right) {
-                                if (left.pitch !== right.pitch) return left.pitch - right.pitch;
-                                if (
-                                    Number.isFinite(left.stringNumber) &&
-                                    Number.isFinite(right.stringNumber) &&
-                                    left.stringNumber !== right.stringNumber
-                                ) {
-                                    return right.stringNumber - left.stringNumber;
-                                }
-                                return left.noteIndex - right.noteIndex;
-                            });
-
-                            var nameParts = [];
-                            for (var nameIndex = 0; nameIndex < groupEntries.length; nameIndex++) {
-                                nameParts.push(groupEntries[nameIndex].name);
-                            }
-                            if (nameParts.length === 0) continue;
-
-                            // Không loại tên trùng: mỗi dây/nốt của hợp âm được thể hiện riêng.
-                            var labelText = nameParts.join('\u00b7');
-                            var leftBoundary = groupIndex > 0
-                                ? (groups[groupIndex - 1].x + currentGroup.x) / 2
-                                : Number(realBounds.x || 0);
-                            var rightBoundary = groupIndex < groups.length - 1
-                                ? (currentGroup.x + groups[groupIndex + 1].x) / 2
-                                : Number(realBounds.x || 0) + Number(realBounds.w || 0);
-                            var availableWidth = Math.max(7, rightBoundary - leftBoundary - 2);
-                            var baseFontSize = nameParts.length >= 5 ? 7.8 : 8.5;
-                            var minimumFontSize = nameParts.length >= 5 ? 5.6 : 6.2;
-                            var estimatedWidth = Math.max(1, labelText.length * baseFontSize * 0.57);
-                            var fontSize = estimatedWidth > availableWidth
-                                ? Math.max(minimumFontSize, baseFontSize * availableWidth / estimatedWidth)
-                                : baseFontSize;
-
-                            var textNode = document.createElementNS(svgNamespace, 'text');
-                            textNode.setAttribute('class', 'tunertools-note-name');
-                            textNode.setAttribute('x', String(currentGroup.x));
-                            textNode.setAttribute('y', String(labelBaseline));
-                            textNode.style.fontSize = String(fontSize) + 'px';
-                            textNode.textContent = labelText;
-
-                            var beatIdParts = [];
-                            for (var beatIdKey in currentGroup.beatIds) {
-                                if (Object.prototype.hasOwnProperty.call(currentGroup.beatIds, beatIdKey)) {
-                                    beatIdParts.push(beatIdKey);
-                                }
-                            }
-                            textNode.setAttribute(
-                                'data-beat-ids',
-                                '|' + beatIdParts.join('|') + '|'
-                            );
-
-                            var adjustedEstimatedWidth = Math.max(
-                                1,
-                                labelText.length * fontSize * 0.57
-                            );
-                            if (adjustedEstimatedWidth > availableWidth && availableWidth > 4) {
-                                textNode.setAttribute('textLength', String(availableWidth));
-                                textNode.setAttribute('lengthAdjust', 'spacingAndGlyphs');
-                            }
-
-                            overlay.appendChild(textNode);
-                            labelsCreated++;
-                        }
-                    }
-
-                    if (labelsCreated === 0) return;
-
-                    var overlayWidth = Math.max(1, Math.ceil(maximumRight));
-                    var overlayHeight = Math.max(1, Math.ceil(maximumBottom));
-                    overlay.setAttribute('width', String(overlayWidth));
-                    overlay.setAttribute('height', String(overlayHeight));
-                    overlay.setAttribute('viewBox', '0 0 ' + overlayWidth + ' ' + overlayHeight);
-                    overlay.style.width = String(overlayWidth) + 'px';
-                    overlay.style.height = String(overlayHeight) + 'px';
-                    container.appendChild(overlay);
-                    updateActiveNoteNameBeat(
-                        lastPlayedNoteNameBeatId ? { id: Number(lastPlayedNoteNameBeatId) } : null
-                    );
-                }
-
-                function setNoteNamesVisible(visible) {
-                    if (isPdfExportMode) return false;
-
-                    var nextVisible = !!visible;
-                    if (nextVisible === noteNamesVisible) {
-                        if (nextVisible) renderNoteNameOverlay();
-                        else clearNoteNameOverlay();
-                        return true;
-                    }
-
-                    var previousVisible = noteNamesVisible;
-                    noteNamesVisible = nextVisible;
-                    if (!noteNamesVisible) {
-                        clearNoteNameOverlay();
-                        lastPlayedNoteNameBeatId = '';
-                    }
-
-                    if (!api || !api.settings || !api.settings.display) return true;
-
-                    try {
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        var previousScrollTop = wrapper ? wrapper.scrollTop : 0;
-                        var targetSystemPadding = noteNamesVisible
-                            ? noteNameSystemPaddingBottom
-                            : defaultSystemPaddingBottom;
-                        var targetLastSystemPadding = noteNamesVisible
-                            ? noteNameLastSystemPaddingBottom
-                            : defaultLastSystemPaddingBottom;
-
-                        if (typeof api.settings.fillFromJson === 'function') {
-                            api.settings.fillFromJson({
-                                display: {
-                                    systemPaddingBottom: targetSystemPadding,
-                                    lastSystemPaddingBottom: targetLastSystemPadding
-                                }
-                            });
-                        } else {
-                            api.settings.display.systemPaddingBottom = targetSystemPadding;
-                            api.settings.display.lastSystemPaddingBottom = targetLastSystemPadding;
-                        }
-
-                        api.updateSettings();
-                        if (api.score) {
-                            applySelectedTrackSolo(true);
-                        }
-
-                        setTimeout(function() {
-                            var currentWrapper = document.getElementById('scroll-wrapper');
-                            if (currentWrapper) {
-                                var maxScroll = Math.max(
-                                    0,
-                                    currentWrapper.scrollHeight - currentWrapper.clientHeight
-                                );
-                                currentWrapper.scrollTop = Math.min(previousScrollTop, maxScroll);
-                            }
-                        }, 320);
-                        return true;
-                    } catch (error) {
-                        noteNamesVisible = previousVisible;
-                        console.warn('Could not change note-name display', error);
-                        return false;
-                    }
-                }
-
-                function setStaveDisplayMode(mode) {
-                    if (!api || !api.score || isPdfExportMode) return false;
-
-                    var normalizedMode = String(mode || 'scoretab').toLowerCase();
-                    if (
-                        normalizedMode !== 'scoretab' &&
-                        normalizedMode !== 'tab' &&
-                        normalizedMode !== 'score'
-                    ) {
-                        normalizedMode = 'scoretab';
-                    }
-
-                    // TAB-only dùng từng ký hiệu trường độ riêng ở phía dưới khuông.
-                    // Phần thân nốt sẽ được rút ngắn bằng custom renderer bên dưới,
-                    // nhờ đó không còn đường dọc chạy xuyên qua dây và số ngăn đàn.
-                    // Ở chế độ có khuông nhạc, dùng Automatic để tránh lặp ký hiệu tiết tấu.
-                    var tabRhythmMode = normalizedMode === 'tab'
-                        ? 'ShowWithBars'
-                        : 'Automatic';
-                    var tabRhythmHeight = 25;
-
-                    try {
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        var previousScrollTop = wrapper ? wrapper.scrollTop : 0;
-
-                        if (
-                            api.settings &&
-                            typeof api.settings.fillFromJson === 'function'
-                        ) {
-                            api.settings.fillFromJson({
-                                display: {
-                                    staveProfile: normalizedMode,
-                                    systemPaddingBottom: noteNamesVisible
-                                        ? noteNameSystemPaddingBottom
-                                        : defaultSystemPaddingBottom,
-                                    lastSystemPaddingBottom: noteNamesVisible
-                                        ? noteNameLastSystemPaddingBottom
-                                        : defaultLastSystemPaddingBottom
-                                },
-                                notation: {
-                                    rhythmMode: tabRhythmMode,
-                                    rhythmHeight: tabRhythmHeight,
-                                    elements: { scoreTitle: true }
-                                }
-                            });
-                        } else if (
-                            api.settings &&
-                            api.settings.display &&
-                            typeof alphaTab !== 'undefined' &&
-                            alphaTab.StaveProfile
-                        ) {
-                            api.settings.display.staveProfile =
-                                normalizedMode === 'tab'
-                                    ? alphaTab.StaveProfile.Tab
-                                    : normalizedMode === 'score'
-                                        ? alphaTab.StaveProfile.Score
-                                        : alphaTab.StaveProfile.ScoreTab;
-                            api.settings.display.systemPaddingBottom = noteNamesVisible
-                                ? noteNameSystemPaddingBottom
-                                : defaultSystemPaddingBottom;
-                            api.settings.display.lastSystemPaddingBottom = noteNamesVisible
-                                ? noteNameLastSystemPaddingBottom
-                                : defaultLastSystemPaddingBottom;
-
-                            if (api.settings.notation) {
-                                ensureScoreTitleSettingVisible();
-                                if (alphaTab.TabRhythmMode) {
-                                    api.settings.notation.rhythmMode =
-                                        normalizedMode === 'tab'
-                                            ? alphaTab.TabRhythmMode.ShowWithBars
-                                            : alphaTab.TabRhythmMode.Automatic;
-                                } else {
-                                    api.settings.notation.rhythmMode = tabRhythmMode;
-                                }
-                                api.settings.notation.rhythmHeight = tabRhythmHeight;
-                            }
-                        } else {
-                            return false;
-                        }
-
-                        api.updateSettings();
-                        applySelectedTrackSolo(true);
-
-                        // Sau khi render lại, giữ vị trí cuộn gần nhất để người dùng
-                        // không bị đưa đột ngột về đầu bản nhạc.
-                        setTimeout(function() {
-                            var currentWrapper = document.getElementById('scroll-wrapper');
-                            if (currentWrapper) {
-                                var maxScroll = Math.max(
-                                    0,
-                                    currentWrapper.scrollHeight - currentWrapper.clientHeight
-                                );
-                                currentWrapper.scrollTop = Math.min(previousScrollTop, maxScroll);
-                            }
-                        }, 300);
-
-                        return true;
-                    } catch (error) {
-                        console.warn('Could not change stave display mode', error);
-                        return false;
-                    }
-                }
-
-                function resetSoundFontCompatibilityState() {
-                    soundFontCompatibilityCheckToken++;
-                    soundFontCompatibilityCache = {};
-                    if (soundFontCompatibilityCheckInProgress) {
-                        soundFontCompatibilityCheckInProgress = false;
-                        AndroidInterface.onSoundFontCompatibilityCheckChanged(false);
-                    }
-                }
-
-                function applySelectedTrackSolo(shouldRender) {
-                    if (!api || !currentTracks || currentTracks.length === 0) return;
-
-                    var safeIndex = Math.max(
-                        0,
-                        Math.min(selectedTrackForPlayback, currentTracks.length - 1)
-                    );
-                    selectedTrackForPlayback = safeIndex;
-
-                    var selectedTrack = currentTracks[safeIndex];
-                    api.changeTrackSolo(currentTracks, false);
-                    if (shouldRender) {
-                        api.renderTracks([selectedTrack]);
-                    }
-                    api.changeTrackSolo([selectedTrack], true);
-                }
-
-                function selectedTrackNoteRange() {
-                    if (!currentTracks || currentTracks.length === 0) return null;
-                    var track = currentTracks[selectedTrackForPlayback];
-                    if (!track || !track.staves) return null;
-
-                    // Track bi mute hoac volume bang 0 se im lang voi moi SoundFont. Khong coi
-                    // day la loi tuong thich de tranh chuyen cau hinh sai nguyen nhan.
-                    var playbackInfo = track.playbackInfo;
-                    if (
-                        playbackInfo &&
-                        (playbackInfo.isMute === true || Number(playbackInfo.volume) <= 0)
-                    ) {
-                        return null;
-                    }
-
-                    var firstTick = Number.POSITIVE_INFINITY;
-                    var lastTick = 0;
-                    var firstDuration = 0;
-                    var noteCount = 0;
-
-                    for (var staffIndex = 0; staffIndex < track.staves.length; staffIndex++) {
-                        var staff = track.staves[staffIndex];
-                        if (!staff || !staff.bars) continue;
-
-                        for (var barIndex = 0; barIndex < staff.bars.length; barIndex++) {
-                            var bar = staff.bars[barIndex];
-                            if (!bar || !bar.voices) continue;
-
-                            for (var voiceIndex = 0; voiceIndex < bar.voices.length; voiceIndex++) {
-                                var voice = bar.voices[voiceIndex];
-                                if (!voice || !voice.beats) continue;
-
-                                for (var beatIndex = 0; beatIndex < voice.beats.length; beatIndex++) {
-                                    var beat = voice.beats[beatIndex];
-                                    if (!beat || !beat.notes || beat.notes.length === 0) continue;
-
-                                    var tick = Number(beat.absolutePlaybackStart);
-                                    if (!Number.isFinite(tick)) continue;
-                                    var duration = Number(beat.playbackDuration);
-                                    if (!Number.isFinite(duration) || duration <= 0) duration = 960;
-
-                                    if (tick < firstTick) {
-                                        firstTick = tick;
-                                        firstDuration = duration;
-                                    }
-                                    lastTick = Math.max(lastTick, tick + duration);
-                                    noteCount += beat.notes.length;
-                                }
-                            }
-                        }
-                    }
-
-                    if (!Number.isFinite(firstTick) || noteCount <= 0) return null;
-
-                    // Bat dau ngay truoc not dau tien de khong nham doan nghi dau bai la loi.
-                    var startTick = Math.max(0, firstTick - Math.max(60, firstDuration * 0.10));
-                    var minimumSpan = Math.max(3840, firstDuration * 8);
-                    var maximumEnd = startTick + 15360;
-                    var endTick = Math.min(Math.max(lastTick + 960, startTick + minimumSpan), maximumEnd);
-                    if (!Number.isFinite(endTick) || endTick <= startTick) {
-                        endTick = startTick + 7680;
-                    }
-
-                    return {
-                        startTick: startTick,
-                        endTick: endTick,
-                        noteCount: noteCount
-                    };
-                }
-
-                function containsAudibleSamples(samples) {
-                    if (!samples || samples.length === 0) return false;
-
-                    var peak = 0;
-                    var energy = 0;
-                    var count = 0;
-                    for (var i = 0; i < samples.length; i++) {
-                        var value = Number(samples[i]);
-                        if (!Number.isFinite(value)) continue;
-                        var absolute = Math.abs(value);
-                        if (absolute > peak) peak = absolute;
-                        energy += value * value;
-                        count++;
-                    }
-
-                    if (count === 0) return false;
-                    var rms = Math.sqrt(energy / count);
-                    // Preset bi thieu tra ve mau bang 0. Nguong rat thap de khong loai nham not pianissimo.
-                    return peak >= 0.00001 || rms >= 0.000001;
-                }
-
-                async function verifySelectedSoundFontProducesAudio() {
-                    if (!api || !api.score || activeSoundFontMode === 'standard') return true;
-                    if (typeof api.exportAudio !== 'function') return true;
-
-                    var noteRange = selectedTrackNoteRange();
-                    // Track khong co not la van de noi dung/track, khong phai loi SoundFont.
-                    if (!noteRange) return true;
-
-                    var cacheKey = [
-                        soundFontCompatibilityScoreGeneration,
-                        selectedTrackForPlayback,
-                        activeSoundFontMode
-                    ].join('|');
-                    if (Object.prototype.hasOwnProperty.call(soundFontCompatibilityCache, cacheKey)) {
-                        return soundFontCompatibilityCache[cacheKey] === true;
-                    }
-
-                    var checkToken = ++soundFontCompatibilityCheckToken;
-                    soundFontCompatibilityCheckInProgress = true;
-                    AndroidInterface.onSoundFontCompatibilityCheckChanged(true);
-                    var exporter = null;
-
-                    try {
-                        api.stop();
-                        var options = new alphaTab.synth.AudioExportOptions();
-                        options.sampleRate = 22050;
-                        options.masterVolume = 1.0;
-                        options.metronomeVolume = 0.0;
-                        options.useSyncPoints = false;
-                        options.playbackRange = {
-                            startTick: noteRange.startTick,
-                            endTick: noteRange.endTick
-                        };
-
-                        if (options.trackVolume && typeof options.trackVolume.set === 'function') {
-                            for (var trackIndex = 0; trackIndex < currentTracks.length; trackIndex++) {
-                                options.trackVolume.set(
-                                    trackIndex,
-                                    trackIndex === selectedTrackForPlayback ? 1.0 : 0.0
-                                );
-                            }
-                        }
-
-                        exporter = await api.exportAudio(options);
-                        var audible = false;
-                        for (var chunkIndex = 0; chunkIndex < 20; chunkIndex++) {
-                            if (checkToken !== soundFontCompatibilityCheckToken) return true;
-                            var chunk = await exporter.render(400);
-                            if (!chunk) break;
-                            if (containsAudibleSamples(chunk.samples)) {
-                                audible = true;
-                                break;
-                            }
-                            if (
-                                Number.isFinite(Number(chunk.currentTick)) &&
-                                Number(chunk.currentTick) >= noteRange.endTick
-                            ) {
-                                break;
-                            }
-                        }
-
-                        if (checkToken === soundFontCompatibilityCheckToken) {
-                            soundFontCompatibilityCache[cacheKey] = audible;
-                        }
-                        return audible;
-                    } catch (error) {
-                        // Neu WebView/alphaTab khong ho tro exportAudio, khong duoc fallback nham.
-                        console.warn('SoundFont compatibility check skipped', error);
-                        soundFontCompatibilityCache[cacheKey] = true;
-                        return true;
-                    } finally {
-                        if (exporter && typeof exporter.destroy === 'function') {
-                            try { exporter.destroy(); } catch (_) {}
-                        }
-                        if (checkToken === soundFontCompatibilityCheckToken) {
-                            soundFontCompatibilityCheckInProgress = false;
-                            AndroidInterface.onSoundFontCompatibilityCheckChanged(false);
-                        }
-                    }
-                }
-
-                function autoFallbackToStandard() {
-                    if (
-                        !api ||
-                        activeSoundFontMode === 'standard' ||
-                        autoFallbackInProgress
-                    ) {
-                        return false;
-                    }
-
-                    var incompatibleMode = activeSoundFontMode || 'standard';
-                    autoFallbackInProgress = true;
-                    AndroidInterface.onSoundFontAutoFallback(incompatibleMode);
-                    var started = switchSoundFontMode(
-                        'standard',
-                        standardSoundFontUrl,
-                        true,
-                        true
-                    );
-                    if (!started) {
-                        autoFallbackInProgress = false;
-                    }
-                    return started;
-                }
-
-                function signalA4PdfLayoutReady() {
-                    if (!isPdfExportMode || !pdfExportWaitingForRender) return;
-
-                    pdfExportWaitingForRender = false;
-                    clearTimeout(pdfExportReadyTimer);
-                    clearTimeout(pdfExportFallbackTimer);
-                    setTimeout(function() {
-                        AndroidInterface.onPdfLayoutReady();
-                    }, 80);
-                }
-
-                function prepareA4PdfExport() {
-                    try {
-                        if (!api || !api.score) {
-                            AndroidInterface.onPdfExportFailed('Bản nhạc chưa sẵn sàng để xuất PDF.');
-                            return;
-                        }
-                        if (isPdfExportMode) return;
-
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        pdfExportOriginalState = {
-                            scale: Number(api.settings.display.scale),
-                            stretchForce: Number(api.settings.display.stretchForce),
-                            enableLazyLoading: typeof api.settings.core.enableLazyLoading === 'boolean'
-                                ? api.settings.core.enableLazyLoading
-                                : true,
-                            scrollTop: wrapper ? wrapper.scrollTop : 0
-                        };
-
-                        api.stop();
-                        isPdfExportMode = true;
-                        pdfExportWaitingForRender = true;
-                        document.documentElement.classList.add('pdf-export-mode');
-                        document.body.classList.add('pdf-export-mode');
-                        toggleTheme(currentThemeIsDark);
-
-                        // Cùng các thông số alphaTab dùng cho bản in: render toàn bộ,
-                        // scale 0.8, stretchForce 0.8 và chiều rộng vùng nội dung A4.
-                        api.settings.core.enableLazyLoading = false;
-                        api.settings.display.scale = 0.8;
-                        api.settings.display.stretchForce = 0.8;
-
-                        // Tính lại tiêu đề theo chiều rộng 190 mm rồi render track đang chọn.
-                        lastResponsiveTitleFont = '';
-                        applyResponsiveSongHeader(api.score, false);
-                        applySelectedTrackSolo(true);
-
-                        clearTimeout(pdfExportFallbackTimer);
-                        pdfExportFallbackTimer = setTimeout(function() {
-                            signalA4PdfLayoutReady();
-                        }, 7000);
-                    } catch (error) {
-                        restoreAfterA4PdfExport();
-                        AndroidInterface.onPdfExportFailed(
-                            'Không thể chuẩn bị PDF: ' +
-                            (error && error.message ? error.message : error)
-                        );
-                    }
-                }
-
-                function restoreAfterA4PdfExport() {
-                    clearTimeout(pdfExportReadyTimer);
-                    clearTimeout(pdfExportFallbackTimer);
-                    pdfExportWaitingForRender = false;
-
-                    if (!isPdfExportMode) return;
-                    isPdfExportMode = false;
-                    document.documentElement.classList.remove('pdf-export-mode');
-                    document.body.classList.remove('pdf-export-mode');
-
-                    try {
-                        if (api && api.score && pdfExportOriginalState) {
-                            api.settings.core.enableLazyLoading =
-                                pdfExportOriginalState.enableLazyLoading;
-                            api.settings.display.scale = Number.isFinite(pdfExportOriginalState.scale)
-                                ? pdfExportOriginalState.scale
-                                : 1.0;
-                            api.settings.display.stretchForce =
-                                Number.isFinite(pdfExportOriginalState.stretchForce)
-                                    ? pdfExportOriginalState.stretchForce
-                                    : 1.0;
-
-                            lastResponsiveTitleFont = '';
-                            applyResponsiveSongHeader(api.score, false);
-                            applySelectedTrackSolo(true);
-
-                            var oldScrollTop = pdfExportOriginalState.scrollTop || 0;
-                            setTimeout(function() {
-                                var wrapper = document.getElementById('scroll-wrapper');
-                                if (wrapper) wrapper.scrollTop = oldScrollTop;
-                            }, 350);
-                        }
-                    } catch (_) {
-                        // Không chặn giao diện nếu thiết bị hủy hộp thoại in giữa chừng.
-                    } finally {
-                        toggleTheme(currentThemeIsDark);
-                        pdfExportOriginalState = null;
-                    }
-                }
-
-                function switchSoundFontMode(
-                    mode,
-                    soundFontUrl,
-                    temporaryFallback,
-                    autoPlayAfterLoad
-                ) {
-                    if (!api || !soundFontUrl) return false;
-
-                    try {
-                        api.stop();
-                        resetSoundFontCompatibilityState();
-                        pendingSoundFontMode = String(mode || 'standard');
-                        pendingSoundFontTemporaryFallback = !!temporaryFallback;
-                        autoPlayAfterSoundFontReady = !!autoPlayAfterLoad;
-                        isSoundFontLoading = true;
-
-                        // append=false da thay the toan bo SoundFont cu. Khong reset truoc de
-                        // tranh tao khoang thoi gian player khong con preset nao.
-                        var started = api.loadSoundFont(soundFontUrl, false);
-                        if (!started) {
-                            var failedMode = pendingSoundFontMode || 'standard';
-                            pendingSoundFontMode = null;
-                            pendingSoundFontTemporaryFallback = false;
-                            autoPlayAfterSoundFontReady = false;
-                            isSoundFontLoading = false;
-                            AndroidInterface.onSoundFontLoadFailed(
-                                failedMode,
-                                soundFontStartFailedText
-                            );
-                            return false;
-                        }
-
-                        return true;
-                    } catch (error) {
-                        var failedMode = pendingSoundFontMode || String(mode || 'standard');
-                        pendingSoundFontMode = null;
-                        pendingSoundFontTemporaryFallback = false;
-                        autoPlayAfterSoundFontReady = false;
-                        isSoundFontLoading = false;
-                        AndroidInterface.onSoundFontLoadFailed(
-                            failedMode,
-                            soundFontLoadFailedPrefix +
-                                (error && error.message ? error.message : error)
-                        );
-                        return false;
-                    }
-                }
-
-                // alphaTab mặc định nối thân trường độ từ số ngăn đàn xuống beam,
-                // vì vậy đường dọc đi xuyên qua khuông TAB. TunerTools giữ cách tính
-                // trường độ của alphaTab nhưng chỉ vẽ đoạn thân ngắn ngay phía trên beam.
-                // Custom renderer chạy ở main thread nên initAlphaTab đặt useWorkers=false.
-                var detachedTabRhythmFactoryPatched = false;
-
-                function installDetachedTabRhythmPatch() {
-                    if (detachedTabRhythmFactoryPatched) return true;
-
-                    try {
-                        if (
-                            typeof alphaTab === 'undefined' ||
-                            !alphaTab.Environment ||
-                            !alphaTab.Environment.defaultRenderers
-                        ) {
-                            return false;
-                        }
-
-                        var factories = alphaTab.Environment.defaultRenderers;
-                        var tabFactory = null;
-                        for (var factoryIndex = 0; factoryIndex < factories.length; factoryIndex++) {
-                            var candidate = factories[factoryIndex];
-                            if (
-                                candidate &&
-                                candidate.staffId === 'tab' &&
-                                typeof candidate.create === 'function'
-                            ) {
-                                tabFactory = candidate;
-                                break;
-                            }
-                        }
-
-                        if (!tabFactory) return false;
-                        if (tabFactory.__tunerToolsDetachedRhythmPatched === true) {
-                            detachedTabRhythmFactoryPatched = true;
-                            return true;
-                        }
-
-                        var originalCreateTabRenderer = tabFactory.create;
-                        tabFactory.create = function(renderer, bar) {
-                            var tabRenderer = originalCreateTabRenderer.call(this, renderer, bar);
-
-                            if (
-                                tabRenderer &&
-                                tabRenderer.__tunerToolsThinRhythmBeam !== true
-                            ) {
-                                try {
-                                    // Beam mặc định của alphaTab khá dày khi thu nhỏ trên màn hình
-                                    // điện thoại. Chỉ giảm độ dày các thanh ngang của TAB; số lượng
-                                    // một, hai hoặc ba thanh vẫn giữ nguyên để đọc đúng trường độ.
-                                    Object.defineProperty(tabRenderer, 'beamThickness', {
-                                        configurable: true,
-                                        get: function() {
-                                            var sourceThickness =
-                                                this.smuflMetrics &&
-                                                Number.isFinite(Number(this.smuflMetrics.beamThickness))
-                                                    ? Number(this.smuflMetrics.beamThickness)
-                                                    : 3;
-
-                                            return Math.max(
-                                                0.85,
-                                                Math.min(1.15, sourceThickness * 0.34)
-                                            );
-                                        }
-                                    });
-                                    tabRenderer.__tunerToolsThinRhythmBeam = true;
-                                } catch (_) {
-                                    // Nếu phiên bản alphaTab không cho ghi đè getter thì vẫn dùng
-                                    // renderer mặc định, không làm gián đoạn việc tải bản nhạc.
-                                }
-                            }
-
-                            if (
-                                tabRenderer &&
-                                tabRenderer.__tunerToolsDetachedRhythmRenderer !== true
-                            ) {
-                                tabRenderer.paintBeamingStem = function(
-                                    beat,
-                                    cy,
-                                    x,
-                                    topY,
-                                    bottomY,
-                                    canvas
-                                ) {
-                                    if (!canvas || typeof canvas.fillRect !== 'function') return;
-
-                                    var stemTop = Number(topY);
-                                    var stemBottom = Number(bottomY);
-                                    if (!Number.isFinite(stemTop) || !Number.isFinite(stemBottom)) return;
-                                    if (stemBottom < stemTop) {
-                                        var swapY = stemTop;
-                                        stemTop = stemBottom;
-                                        stemBottom = swapY;
-                                    }
-
-                                    var availableHeight = stemBottom - stemTop;
-                                    if (availableHeight <= 0) return;
-
-                                    var configuredRhythmHeight = 25;
-                                    if (
-                                        this.settings &&
-                                        this.settings.notation &&
-                                        Number.isFinite(Number(this.settings.notation.rhythmHeight))
-                                    ) {
-                                        configuredRhythmHeight = Number(
-                                            this.settings.notation.rhythmHeight
-                                        );
-                                    }
-
-                                    // Chỉ giữ 7-12 px cuối của thân nốt. Đoạn này nằm hoàn toàn
-                                    // trong vùng trường độ dưới khuông, không chạm dây hoặc số TAB.
-                                    var preferredStemLength = Math.max(
-                                        7,
-                                        Math.min(12, configuredRhythmHeight * 0.42)
-                                    );
-                                    var detachedStemLength = Math.min(
-                                        availableHeight,
-                                        preferredStemLength
-                                    );
-                                    var detachedStemTop = stemBottom - detachedStemLength;
-                                    var stemThickness = this.smuflMetrics &&
-                                        Number.isFinite(Number(this.smuflMetrics.stemThickness))
-                                        ? Number(this.smuflMetrics.stemThickness)
-                                        : 1;
-
-                                    canvas.fillRect(
-                                        Number(x),
-                                        detachedStemTop,
-                                        stemThickness,
-                                        detachedStemLength
-                                    );
-                                };
-                                tabRenderer.__tunerToolsDetachedRhythmRenderer = true;
-                            }
-                            return tabRenderer;
-                        };
-
-                        tabFactory.__tunerToolsDetachedRhythmPatched = true;
-                        detachedTabRhythmFactoryPatched = true;
-                        return true;
-                    } catch (error) {
-                        console.warn('Could not install detached TAB rhythm renderer', error);
-                        return false;
-                    }
-                }
-
-                function hasVisibleRenderedScore() {
-                    var container = document.getElementById('alphatab-container');
-                    if (!container) return false;
-
-                    var scoreSvgs = container.querySelectorAll('svg');
-                    for (var i = 0; i < scoreSvgs.length; i++) {
-                        var svg = scoreSvgs[i];
-                        var rect = svg.getBoundingClientRect();
-                        if (rect.width <= 8 || rect.height <= 24) continue;
-
-                        if (
-                            svg.querySelectorAll(
-                                'path, line, polyline, polygon, text, use, rect, circle, ellipse'
-                            ).length > 4
-                        ) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-
-                function finishFirstScoreRenderIfVisible() {
-                    if (!scoreAwaitingFirstRender || !hasVisibleRenderedScore()) return false;
-
-                    scoreAwaitingFirstRender = false;
-                    scoreRenderRecoveryAttempts = 0;
-                    clearTimeout(scoreRenderRecoveryTimer);
-                    var wrapper = document.getElementById('scroll-wrapper');
-                    var container = document.getElementById('alphatab-container');
-                    var scoreSvgs = container ? container.querySelectorAll('svg') : [];
-                    var first = scoreSvgs.length ? scoreSvgs[0] : null;
-                    var firstRect = first ? first.getBoundingClientRect() : null;
-                    var elementStyle = first ? window.getComputedStyle(first) : null;
-                    ttLog('SVG_VISIBLE', 'svg=' + scoreSvgs.length +
-                        ' dark=' + document.body.classList.contains('tt-tab-dark') +
-                        ' parentFilter=' + (container ? window.getComputedStyle(container).filter : '?') +
-                        ' svgFilter=' + (elementStyle ? elementStyle.filter : '?') +
-                        ' firstTop=' + (firstRect ? Math.round(firstRect.top) : '?') +
-                        ' wrapper=' + (wrapper ? wrapper.clientWidth + 'x' + wrapper.clientHeight : '?') +
-                        ' scoreHeight=' + (container ? container.scrollHeight : '?') +
-                        ' scroll=' + (wrapper ? Math.round(wrapper.scrollTop) : '?'));
-                    AndroidInterface.onScoreRendered();
-                    return true;
-                }
-
-                function cancelPendingScoreRender() {
-                    scoreAwaitingFirstRender = false;
-                    scoreRenderRecoveryAttempts = 0;
-                    isScoreRenderInProgress = false;
-                    scoreRenderStartedAt = 0;
-                    clearTimeout(scoreRenderRecoveryTimer);
-                    clearTimeout(viewportSyncTimer);
-                }
-
-                function scheduleScoreRenderRecovery(delayMs) {
-                    clearTimeout(scoreRenderRecoveryTimer);
-                    scoreRenderRecoveryTimer = setTimeout(function() {
-                        if (!scoreAwaitingFirstRender || !api || !api.score || isPdfExportMode) {
-                            return;
-                        }
-
-                        if (finishFirstScoreRenderIfVisible()) return;
-
-                        if (scoreRenderRecoveryAttempts >= 15) {
-                            var failedWrapper = document.getElementById('scroll-wrapper');
-                            ttLog('SVG_RENDER_TIMEOUT', 'attempts=' + scoreRenderRecoveryAttempts +
-                                ' svgs=' + document.querySelectorAll('#alphatab-container svg').length +
-                                ' viewport=' + (failedWrapper ? failedWrapper.clientWidth + 'x' + failedWrapper.clientHeight : 'missing'), 'E');
-                            cancelPendingScoreRender();
-                            AndroidInterface.onScoreLoaded(
-                                "[]",
-                                "Lỗi hiển thị khuông nhạc: xem Logcat TTAlphaTab."
-                            );
-                            return;
-                        }
-
-                        // Không ngắt một bản nhạc lớn đang render bình thường. Chỉ can thiệp nếu
-                        // render đã treo quá lâu mà DOM vẫn chưa có khuông nhạc.
-                        if (
-                            isScoreRenderInProgress &&
-                            Date.now() - scoreRenderStartedAt < 12000
-                        ) {
-                            scheduleScoreRenderRecovery(500);
-                            return;
-                        }
-
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        var container = document.getElementById('alphatab-container');
-                        var width = wrapper ? wrapper.clientWidth : 0;
-                        var height = wrapper ? wrapper.clientHeight : 0;
-
-                        if (width <= 1 || height <= 1 || !container) {
-                            scoreRenderRecoveryAttempts++;
-                            scheduleScoreRenderRecovery(
-                                Math.min(1800, 250 + scoreRenderRecoveryAttempts * 180)
-                            );
-                            return;
-                        }
-
-                        // Buộc alphaTab nhận kích thước thật của WebView rồi render lại.
-                        // Không gọi API private triggerResize; resize event kích hoạt cơ chế
-                        // tự đo của alphaTab và listener phía dưới sẽ render đúng một lần.
-                        if (scoreRenderRecoveryAttempts % 4 === 0) {
-                            ttLog('RENDER_RECOVERY', 'attempt=' + scoreRenderRecoveryAttempts +
-                                ' viewport=' + width + 'x' + height);
-                        }
-                        window.dispatchEvent(new Event('resize'));
-
-                        scoreRenderRecoveryAttempts++;
-                        scheduleScoreRenderRecovery(
-                            Math.min(1800, 450 + scoreRenderRecoveryAttempts * 220)
-                        );
-                    }, Math.max(0, Number(delayMs) || 0));
-                }
-
-                function onAndroidViewportChanged(width, height) {
-                    // Android View measurements arrive in physical pixels; browser layout
-                    // is in CSS pixels. Only score width changes require a new alphaTab render.
-                    width = Math.max(0, Math.round(Number(width) || 0));
-                    height = Math.max(0, Math.round(Number(height) || 0));
-                    if (width <= 0 || height <= 0) return;
-                    lastAndroidViewportWidth = width;
-                    lastAndroidViewportHeight = height;
-
-                    var wrapper = document.getElementById('scroll-wrapper');
-                    var cssWidth = wrapper ? wrapper.clientWidth : 0;
-                    var cssHeight = wrapper ? wrapper.clientHeight : 0;
-                    if (cssWidth <= 1 || cssHeight <= 1) return;
-
-                    // Ignore height-only changes from Compose animations. Dispatching a
-                    // fake resize for every frame previously caused continual renders.
-                    if (cssWidth === lastSyncedCssViewportWidth) return;
-                    lastSyncedCssViewportWidth = cssWidth;
-                    ttLog('CSS_VIEWPORT_WIDTH', 'css=' + cssWidth + 'x' + cssHeight +
-                        ' android=' + width + 'x' + height);
-
-                    clearTimeout(viewportSyncTimer);
-                    viewportSyncTimer = setTimeout(function() {
-                        if (!api || !isApiReady || isPdfExportMode) return;
-                        window.dispatchEvent(new Event('resize'));
-                        if (scoreAwaitingFirstRender) scheduleScoreRenderRecovery(320);
-                    }, 180);
-                }
-
-                function initAlphaTab(attempt) {
-                    attempt = Number(attempt) || 0;
-                    if (isApiReady || api || initFatalReported) return;
-
-                    var wrapper = document.getElementById('scroll-wrapper');
-                    var container = document.getElementById('alphatab-container');
-                    var width = wrapper ? wrapper.clientWidth : 0;
-                    var height = wrapper ? wrapper.clientHeight : 0;
-                    if (attempt === 0 || attempt === 8 || attempt === 20 || attempt === 35) {
-                        ttLog('INIT_ATTEMPT', 'n=' + attempt + ' viewport=' + width + 'x' + height +
-                            ' alphaTab=' + typeof alphaTab);
-                    }
-                    if (!wrapper || !container || typeof alphaTab === 'undefined') {
-                        if (attempt >= 35) {
-                            initFatalReported = true;
-                            var reason = (!wrapper || !container)
-                                ? 'thiếu vùng hiển thị WebView'
-                                : 'không tải được thư viện alphaTab.js';
-                            ttLog('INIT_FATAL', reason, 'E');
-                            AndroidInterface.onScoreLoaded('[]', 'Lỗi: ' + reason);
-                            return;
-                        }
-                        clearTimeout(alphaTabInitRetryTimer);
-                        alphaTabInitRetryTimer = setTimeout(function() {
-                            initAlphaTab(attempt + 1);
-                        }, 300);
-                        return;
-                    }
-
-                    // Do not block alphaTab creation indefinitely on a 0px WebView.
-                    // AlphaTab can defer rendering; viewport updates will trigger a render later.
-                    if (width <= 1 || height <= 1) {
-                        if (attempt < 12) {
-                            clearTimeout(alphaTabInitRetryTimer);
-                            alphaTabInitRetryTimer = setTimeout(function() {
-                                initAlphaTab(attempt + 1);
-                            }, 150);
-                            return;
-                        }
-                        ttLog('INIT_FALLBACK', 'initializing with 0px viewport; awaiting Android layout', 'W');
-                    }
-
-                    installDetachedTabRhythmPatch();
-                    
-                    wrapper.addEventListener('touchstart', function() {
-                        isUserScrolling = true;
-                        clearTimeout(scrollTimeout);
-                    }, { passive: true });
-
-                    wrapper.addEventListener('touchend', function() {
-                        scrollTimeout = setTimeout(function() { isUserScrolling = false; }, 3000);
-                    }, { passive: true });
-                    
-                    wrapper.addEventListener('wheel', function() {
-                        isUserScrolling = true;
-                        clearTimeout(scrollTimeout);
-                        scrollTimeout = setTimeout(function() { isUserScrolling = false; }, 3000);
-                    }, { passive: true });
-
-                    ttLog('API_CONSTRUCT', 'viewport=' + wrapper.clientWidth + 'x' + wrapper.clientHeight);
-                    try {
-                    api = new alphaTab.AlphaTabApi(document.getElementById('alphatab-container'), {
-                        // Tắt render worker để custom TabBarRenderer ở trên được áp dụng.
-                        core: { engine: 'svg', useWorkers: false, enableLazyLoading: false },
-                        display: {
-                            layoutMode: 'page',
-                            staveProfile: 'scoretab',
-                            stretchForce: 1.0,
-                            systemPaddingBottom: noteNamesVisible
-                                ? noteNameSystemPaddingBottom
-                                : defaultSystemPaddingBottom,
-                            lastSystemPaddingBottom: noteNamesVisible
-                                ? noteNameLastSystemPaddingBottom
-                                : defaultLastSystemPaddingBottom,
-                            padding: [12, 10, 12, 24],
-                            resources: {
-                                titleFont: 'bold 18px Arial, sans-serif',
-                                subTitleFont: '14px Arial, sans-serif',
-                                wordsFont: '12px Arial, sans-serif',
-                                copyrightFont: 'bold 10px Arial, sans-serif'
-                            }
-                        },
-                        // Automatic không vẽ thêm tiết tấu khi khuông nhạc đang hiển thị.
-                        // Khi người dùng chọn TAB, setStaveDisplayMode() chuyển sang
-                        // ShowWithBars và custom renderer chỉ giữ ký hiệu ở dưới khuông.
-                        notation: {
-                            rhythmMode: 'Automatic',
-                            rhythmHeight: 25,
-                            elements: { scoreTitle: true }
-                        },
-                        player: { 
-                            enablePlayer: true,
-                            enableCursor: true,
-                            soundFont: $quotedInitialSoundFontUrl,
-                            scrollElement: wrapper
-                        }
-                    });
-                    } catch (initError) {
-                        api = null;
-                        initFatalReported = true;
-                        ttLog('API_CONSTRUCT_FAILED', String(initError && (initError.stack || initError.message) || initError).slice(0, 900), 'E');
-                        AndroidInterface.onScoreLoaded('[]', 'Lỗi: không thể khởi tạo alphaTab, xem Logcat.');
-                        return;
-                    }
-
-                    api.soundFontLoad.on(function(e) {
-                        AndroidInterface.onSoundFontLoadProgress(
-                            Number(e && e.loaded ? e.loaded : 0),
-                            Number(e && e.total ? e.total : 0)
-                        );
-                    });
-                    api.soundFontLoaded.on(function() {
-                        isSoundFontLoading = false;
-                        activeSoundFontMode = pendingSoundFontMode ||
-                            activeSoundFontMode ||
-                            'standard';
-                        var wasTemporaryFallback = pendingSoundFontTemporaryFallback;
-                        pendingSoundFontMode = null;
-                        pendingSoundFontTemporaryFallback = false;
-                        AndroidInterface.onSoundFontLoaded(
-                            activeSoundFontMode,
-                            wasTemporaryFallback
-                        );
-
-                        // Doi SoundFont trong luc score dang mo phai tao lai MIDI truoc khi Play.
-                        if (api && api.score && typeof api.loadMidiForScore === 'function') {
-                            api.loadMidiForScore();
-                        }
-                    });
-                    api.playerReady.on(function() {
-                        AndroidInterface.onPlayerReady();
-                        if (autoPlayAfterSoundFontReady) {
-                            autoPlayAfterSoundFontReady = false;
-                            autoFallbackInProgress = false;
-                            setTimeout(function() {
-                                if (api && api.isReadyForPlayback) {
-                                    api.play();
-                                }
-                            }, 50);
-                        }
-                    });
-                    api.playerStateChanged.on(function(e) {
-                        lastKnownPlayerState = Number(e && e.state ? e.state : 0);
-                        if (e && e.stopped === true) {
-                            updateActiveNoteNameBeat(null);
-                        }
-                        AndroidInterface.onPlayerStateChanged(lastKnownPlayerState);
-                    });
-                    if (api.playedBeatChanged && typeof api.playedBeatChanged.on === 'function') {
-                        api.playedBeatChanged.on(function(beat) {
-                            updateActiveNoteNameBeat(beat);
-                        });
-                    }
-                    api.midiLoaded.on(function() {
-                        // loadMidiForScore() tạo lại MIDI khi đổi BPM; áp lại track đang solo.
-                        applySelectedTrackSolo(false);
-                    });
-
-                    api.playerPositionChanged.on(function(e) {
-                        if (isUserScrolling) return;
-
-                        var cursor = document.querySelector('.at-cursor-beat');
-                        if (cursor) {
-                            var rect = cursor.getBoundingClientRect();
-                            var wrapperHeight = wrapper.clientHeight;
-                            
-                            if (rect.top > wrapperHeight * 0.6 || rect.top < wrapperHeight * 0.1) {
-                                var absoluteTop = wrapper.scrollTop + rect.top;
-                                wrapper.scrollTo({ top: absoluteTop - (wrapperHeight * 0.3), behavior: 'smooth' });
-                            }
-                        }
-                    });
-
-                    api.error.on(function(e) {
-                        var message = 'Lỗi AlphaTab: ' +
-                            (e && e.message ? e.message : e);
-                        ttLog('ALPHATAB_ERROR', message, 'E');
-
-                        if (isScoreLoading) {
-                            isScoreLoading = false;
-                            cancelPendingScoreRender();
-                            AndroidInterface.onScoreLoaded("[]", message);
-                        } else if (isSoundFontLoading || pendingSoundFontMode) {
-                            var failedMode = pendingSoundFontMode ||
-                                activeSoundFontMode ||
-                                'standard';
-                            pendingSoundFontMode = null;
-                            pendingSoundFontTemporaryFallback = false;
-                            autoPlayAfterSoundFontReady = false;
-                            autoFallbackInProgress = false;
-                            isSoundFontLoading = false;
-                            AndroidInterface.onSoundFontLoadFailed(failedMode, message);
-                        } else {
-                            cancelPendingScoreRender();
-                            AndroidInterface.onScoreLoaded("[]", message);
-                        }
-                    });
-
-                    if (api.renderStarted && typeof api.renderStarted.on === 'function') {
-                        api.renderStarted.on(function() {
-                            isScoreRenderInProgress = true;
-                            scoreRenderStartedAt = Date.now();
-                        });
-                    }
-
-                    // Kiểm tra lại đúng kích thước SVG sau khi alphaTab đã gắn kết quả
-                    // vào DOM. Nếu font thực tế vẫn rộng hơn màn hình thì tự co thêm.
-                    var completedRenderEvent = api.postRenderFinished || api.renderFinished;
-                    if (completedRenderEvent && typeof completedRenderEvent.on === 'function') {
-                        completedRenderEvent.on(function() {
-                            var renderedSvgs = document.querySelectorAll('#alphatab-container svg');
-                            ttLog('RENDER_FINISHED', 'svgs=' + renderedSvgs.length +
-                                ' first=' + (renderedSvgs.length ?
-                                  Math.round(renderedSvgs[0].getBoundingClientRect().width) + 'x' +
-                                  Math.round(renderedSvgs[0].getBoundingClientRect().height) : 'none'));
-                            isScoreRenderInProgress = false;
-                            scoreRenderStartedAt = 0;
-                            verifyRenderedTitleFits();
-                            renderNoteNameOverlay();
-
-                            // scoreLoaded chỉ xác nhận dữ liệu đã được đọc. Chỉ mở giao diện điều
-                            // khiển sau khi SVG thực sự xuất hiện trong DOM của WebView.
-                            requestAnimationFrame(function() {
-                                if (!finishFirstScoreRenderIfVisible() && scoreAwaitingFirstRender) {
-                                    scheduleScoreRenderRecovery(180);
-                                }
-                            });
-
-                            // Mỗi lần mở bài mới phải quay về đúng đầu bản nhạc để người dùng
-                            // nhìn thấy tiêu đề. Không áp dụng khi chỉ đổi track hoặc đổi chế độ.
-                            if (scrollToTopAfterNextRender) {
-                                scrollToTopAfterNextRender = false;
-                                var renderedWrapper = document.getElementById('scroll-wrapper');
-                                if (renderedWrapper) renderedWrapper.scrollTop = 0;
-                            }
-
-                            if (pdfExportWaitingForRender) {
-                                // Đợi tiêu đề và các SVG ổn định; nếu alphaTab render lại,
-                                // timer được đặt lại để PDF không bị thiếu trang hoặc cắt chữ.
-                                clearTimeout(pdfExportReadyTimer);
-                                pdfExportReadyTimer = setTimeout(function() {
-                                    signalA4PdfLayoutReady();
-                                }, 700);
-                            }
-                        });
-                    }
-
-                    api.scoreLoaded.on(function(score) {
-                        ttLog('SCORE_PARSED', 'tracks=' + (score && score.tracks ? score.tracks.length : 0));
-                        isScoreLoading = false;
-                        scoreAwaitingFirstRender = true;
-                        scoreRenderRecoveryAttempts = 0;
-                        clearTimeout(scoreRenderRecoveryTimer);
-                        soundFontCompatibilityScoreGeneration++;
-                        resetSoundFontCompatibilityState();
-                        autoFallbackInProgress = false;
-                        autoPlayAfterSoundFontReady = false;
-                        currentTracks = score.tracks;
-                        lastPlayedNoteNameBeatId = '';
-                        clearNoteNameOverlay();
-
-                        // Khôi phục tiêu đề ngay trong phần đầu bản nhạc. Nếu metadata của
-                        // file GP trống thì dùng tên bài từ danh sách Android làm dự phòng.
-                        applyResponsiveSongHeader(score, false);
-                        captureOriginalTempos(score);
-
-                        var tracksData = [];
-                        for(var i=0; i<score.tracks.length; i++) {
-                            tracksData.push({ index: i, name: score.tracks[i].name || ('Track ' + (i+1)) });
-                        }
-                        
-                        if(currentTracks.length > 0) {
-                            selectedTrackForPlayback = 0;
-                            applySelectedTrackSolo(true);
-                        }
-                        
-                        var title = String(score.title || currentScoreTitle || 'Bài nhạc').trim();
-                        AndroidInterface.onScoreLoaded(JSON.stringify(tracksData), title);
-
-                        // Nếu lần render tự động ban đầu chạy khi WebView chưa có kích thước,
-                        // watchdog sẽ phát resize và render lại sau khi Compose đã đo xong.
-                        scheduleScoreRenderRecovery(350);
-
-                        // Một số bản alphaTab không tạo header nếu file gốc không có metadata.
-                        // Kiểm tra lại sau render; nếu vẫn thiếu thì hiển thị title dự phòng
-                        // ngay trong vùng bản nhạc, phía trên khuông đầu tiên.
-                        setTimeout(function() {
-                            verifyRenderedTitleFits();
-                        }, 180);
-                    });
-                    
-                    // Khi xoay màn hình hoặc WebView thay đổi chiều rộng, tính lại font
-                    // để tiêu đề vẫn vừa cả ở chế độ dọc lẫn ngang.
-                    window.addEventListener('resize', function() {
-                        clearTimeout(titleResizeTimer);
-                        titleResizeTimer = setTimeout(function() {
-                            if (!api || !api.score || isPdfExportMode) return;
-                            var activeWrapper = document.getElementById('scroll-wrapper');
-                            var cssWidth = activeWrapper ? activeWrapper.clientWidth : window.innerWidth;
-                            if (cssWidth <= 1 || cssWidth === lastTitleRenderCssViewportWidth) return;
-                            lastTitleRenderCssViewportWidth = cssWidth;
-
-                            // Only a real browser CSS-width change requires score re-layout.
-                            applyResponsiveSongHeader(api.score, false);
-                            api.render();
-                            if (scoreAwaitingFirstRender) scheduleScoreRenderRecovery(320);
-                        }, 240);
-                    });
-
-                    isApiReady = true;
-                    ttLog('API_READY', 'viewport=' + wrapper.clientWidth + 'x' + wrapper.clientHeight);
-                    AndroidInterface.onTabReady();
-                    onAndroidViewportChanged(
-                        wrapper.clientWidth || window.innerWidth || 0,
-                        wrapper.clientHeight || window.innerHeight || 0
-                    );
-                }
-                
-                async function loadScoreFromUrl(fileUrl, fallbackTitle) {
-                    if (!isApiReady || !api) {
-                        if (!scoreWaitForApiSince) {
-                            scoreWaitForApiSince = Date.now();
-                            ttLog('SCORE_WAIT_API', 'isReady=' + isApiReady + ' api=' + !!api);
-                        }
-                        if (initFatalReported || Date.now() - scoreWaitForApiSince > 16000) {
-                            scoreWaitForApiSince = 0;
-                            ttLog('SCORE_WAIT_API_TIMEOUT', 'alphaTab=' + typeof alphaTab, 'E');
-                            AndroidInterface.onScoreLoaded('[]',
-                                'Lỗi: alphaTab chưa sẵn sàng (xem Logcat TTAlphaTab).');
-                            return;
-                        }
-                        setTimeout(function() {
-                            loadScoreFromUrl(fileUrl, fallbackTitle);
-                        }, 500);
-                        return;
-                    }
-                    scoreWaitForApiSince = 0;
-                    ttLog('SCORE_FETCH_STARTED', 'local=' + (String(fileUrl).indexOf('__local_score__') >= 0));
-
-                    try {
-                        pendingScoreTitle = String(fallbackTitle || '')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-                        hideFallbackScoreTitle();
-                        scrollToTopAfterNextRender = true;
-
-                        // Xóa vị trí cuộn của bài trước ngay khi bắt đầu tải. Sau lần render
-                        // đầu tiên sẽ đặt lại thêm một lần để chắc chắn tiêu đề không bị khuất.
-                        var wrapper = document.getElementById('scroll-wrapper');
-                        if (wrapper) wrapper.scrollTop = 0;
-
-                        isScoreLoading = true;
-                        scoreAwaitingFirstRender = false;
-                        scoreRenderRecoveryAttempts = 0;
-                        isScoreRenderInProgress = false;
-                        scoreRenderStartedAt = 0;
-                        clearTimeout(scoreRenderRecoveryTimer);
-                        resetSoundFontCompatibilityState();
-                        autoFallbackInProgress = false;
-                        autoPlayAfterSoundFontReady = false;
-                        const res = await fetch(fileUrl);
-                        if (!res.ok) throw new Error("Mã phản hồi HTTP " + res.status);
-                        const buffer = await res.arrayBuffer();
-                        ttLog('SCORE_FETCH_OK', 'bytes=' + buffer.byteLength);
-                        api.load(new Uint8Array(buffer));
-                    } catch (err) {
-                        isScoreLoading = false;
-                        cancelPendingScoreRender();
-                        ttLog('SCORE_FETCH_ERROR', String(err && (err.stack || err.message) || err).slice(0, 900), 'E');
-                        AndroidInterface.onScoreLoaded("[]", "Lỗi Fetch JS: " + err.message);
-                    }
-                }
-                
-                function selectTrackSolo(index) {
-                    if (!currentTracks || index < 0 || index >= currentTracks.length) return;
-                    selectedTrackForPlayback = index;
-                    lastPlayedNoteNameBeatId = '';
-                    clearNoteNameOverlay();
-                    resetSoundFontCompatibilityState();
-                    applySelectedTrackSolo(true);
-                }
-
-                async function playPause() {
-                    if (!api) return false;
-
-                    if (lastKnownPlayerState === 1) {
-                        api.pause();
-                        return true;
-                    }
-                    if (
-                        isSoundFontLoading ||
-                        soundFontCompatibilityCheckInProgress ||
-                        !api.isReadyForPlayback
-                    ) {
-                        return false;
-                    }
-
-                    if (activeSoundFontMode && activeSoundFontMode !== 'standard') {
-                        var compatible = await verifySelectedSoundFontProducesAudio();
-                        if (!compatible) {
-                            autoFallbackToStandard();
-                            return true;
-                        }
-                    }
-
-                    return api.play();
-                }
-                function stopPlayer() {
-                    resetSoundFontCompatibilityState();
-                    if (api) api.stop();
-                }
-
-                window.addEventListener('load', function() {
-                    ttLog('WINDOW_LOADED', 'alphaTab=' + typeof alphaTab);
-                    initAlphaTab(0);
-                });
-                // load may have fired before this handler on some WebView implementations.
-                if (document.readyState === 'complete') {
-                    setTimeout(function() { initAlphaTab(0); }, 0);
-                }
-            </script>
-        </body>
-        </html>
-    """.trimIndent()
-}
 // ----------------- API BẢN NHẠC -----------------
 private enum class SheetMusicServerSource {
     PRIMARY,
@@ -7876,29 +7609,22 @@ private data class SheetMusicSearchOutcome(
 )
 
 private object TuneToolsSheetMusicApi {
-    private const val FALLBACK_API_BASE_URL = "https://tuner.alwaysdata.net"
-    private const val FALLBACK_SEARCH_ENDPOINT =
+    // One PHP on alwaysdata now serves Vietnamese folders, international songs,
+    // rhythms and GP bytes using the same database and Drive token.
+    private const val DRIVE_API_BASE_URL = "https://tuner.alwaysdata.net"
+    private const val DRIVE_SECTIONS_ENDPOINT =
         "https://tuner.alwaysdata.net/api_gp_drive.php"
 
-    // Máy chủ chính cần chuyển sang dự phòng tương đối nhanh khi thật sự mất kết nối.
-    private const val PRIMARY_CONNECT_TIMEOUT_MS = 8_000
-    private const val PRIMARY_READ_TIMEOUT_MS = 20_000
-    private const val FALLBACK_CONNECT_TIMEOUT_MS = 10_000
-    private const val FALLBACK_READ_TIMEOUT_MS = 30_000
+    private const val DRIVE_CONNECT_TIMEOUT_MS = 4_000
+    private const val DRIVE_READ_TIMEOUT_MS = 9_000
+    private const val LEGACY_CONNECT_TIMEOUT_MS = 4_000
+    private const val LEGACY_READ_TIMEOUT_MS = 10_000
 
-    // Khi đang dùng máy chủ dự phòng, kiểm tra lại máy chủ chính định kỳ.
-    const val PRIMARY_RECOVERY_CHECK_INTERVAL_MS = 20_000L
-
-    /**
-     * Lỗi HTTP có mã phản hồi để phân biệt lỗi máy chủ 5xx với lỗi quyền 4xx.
-     * Chỉ lỗi máy chủ/tạm thời mới được phép chuyển sang máy chủ dự phòng.
-     */
     private class SearchHttpException(
         val statusCode: Int,
         message: String
     ) : IllegalStateException(message)
 
-    /** Máy chủ trả HTTP 200 nhưng nội dung không phải JSON tìm kiếm hợp lệ. */
     private class InvalidSearchResponseException(
         message: String,
         cause: Throwable? = null
@@ -7913,107 +7639,95 @@ private object TuneToolsSheetMusicApi {
         rhythm: String? = null,
         folder: String? = null
     ): SheetMusicSearchOutcome {
-        val primaryUrl = buildPrimarySearchUrl(
-            apiBaseUrl = apiBaseUrl,
-            searchPath = searchPath,
-            keyword = keyword,
-            section = section,
-            rhythm = rhythm,
-            folder = folder
-        )
-
+        // All three tabs now use exactly the API contract provided by
+        // api_gp_drive.php (one PHP file on alwaysdata).
+        val driveUrl = buildDriveSectionsUrl(keyword, section, rhythm, folder)
         try {
-            val primaryJson = httpGetText(
-                urlString = primaryUrl,
-                apiToken = apiToken,
-                connectTimeoutMs = PRIMARY_CONNECT_TIMEOUT_MS,
-                readTimeoutMs = PRIMARY_READ_TIMEOUT_MS
+            val driveJson = httpGetText(
+                urlString = driveUrl,
+                apiToken = null, // Never forward the token from a different server.
+                connectTimeoutMs = DRIVE_CONNECT_TIMEOUT_MS,
+                readTimeoutMs = DRIVE_READ_TIMEOUT_MS
             )
-
-            // Kết quả rỗng hợp lệ vẫn được giữ nguyên, tuyệt đối không fallback chỉ vì không có bài.
             return SheetMusicSearchOutcome(
-                songs = parseSearchResponse(primaryJson, apiBaseUrl),
+                songs = parseSearchResponse(driveJson, DRIVE_API_BASE_URL),
                 source = SheetMusicServerSource.PRIMARY
             )
-        } catch (primaryError: Exception) {
-            if (!shouldUseFallback(primaryError)) {
-                throw primaryError
-            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (driveError: Exception) {
+            if (!shouldUseFallback(driveError)) throw driveError
+            android.util.Log.w(
+                "TuneToolsSheetMusicApi",
+                "alwaysdata sections temporarily unavailable; trying legacy IIS",
+                driveError
+            )
 
-            runCatching {
-                android.util.Log.w(
-                    "TuneToolsSheetMusicApi",
-                    "Primary GP server failed. Switching to backup server.",
-                    primaryError
-                )
-            }
-
-            val fallbackUrl = buildFallbackSearchUrl(keyword)
-
+            // Keep the existing IIS endpoint as an emergency fallback only.
+            // Its result is NEVER substituted for a valid empty Drive catalogue.
+            val legacyUrl = buildPrimarySearchUrl(
+                apiBaseUrl = apiBaseUrl,
+                searchPath = searchPath,
+                keyword = keyword,
+                section = section,
+                rhythm = rhythm,
+                folder = folder
+            )
             try {
-                val fallbackJson = httpGetText(
-                    urlString = fallbackUrl,
-                    apiToken = null,
-                    connectTimeoutMs = FALLBACK_CONNECT_TIMEOUT_MS,
-                    readTimeoutMs = FALLBACK_READ_TIMEOUT_MS
+                val legacyJson = httpGetText(
+                    urlString = legacyUrl,
+                    apiToken = apiToken,
+                    connectTimeoutMs = LEGACY_CONNECT_TIMEOUT_MS,
+                    readTimeoutMs = LEGACY_READ_TIMEOUT_MS
                 )
-
                 return SheetMusicSearchOutcome(
-                    songs = parseSearchResponse(
-                        jsonText = fallbackJson,
-                        apiBaseUrl = FALLBACK_API_BASE_URL
-                    ),
+                    songs = parseSearchResponse(legacyJson, apiBaseUrl),
                     source = SheetMusicServerSource.FALLBACK
                 )
-            } catch (fallbackError: Exception) {
-                val primaryMessage = primaryError.message
-                    ?.takeIf { it.isNotBlank() }
-                    ?: "không thể kết nối"
-                val fallbackMessage = fallbackError.message
-                    ?.takeIf { it.isNotBlank() }
-                    ?: "không thể kết nối"
-
-                val combinedError = IllegalStateException(
-                    "Máy chủ chính lỗi ($primaryMessage) và máy chủ dự phòng cũng lỗi " +
-                            "($fallbackMessage).",
-                    fallbackError
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (legacyError: Exception) {
+                val failure = IllegalStateException(
+                    "Không thể tải danh mục từ Google Drive hoặc máy chủ dự phòng.",
+                    legacyError
                 )
-                combinedError.addSuppressed(primaryError)
-                throw combinedError
+                failure.addSuppressed(driveError)
+                throw failure
             }
         }
     }
 
-    /**
-     * Chỉ gọi máy chủ chính, không tự chuyển sang dự phòng. Hàm này được dùng
-     * để kiểm tra máy chủ chính đã phục hồi hay chưa khi ứng dụng đang ở chế độ dự phòng.
-     */
-    fun searchPrimaryOnly(
-        apiBaseUrl: String,
-        searchPath: String,
+    private fun buildDriveSectionsUrl(
         keyword: String,
-        apiToken: String?,
         section: MusicLibrarySection,
-        rhythm: String? = null,
-        folder: String? = null
-    ): List<TuneToolsSong> {
-        val primaryUrl = buildPrimarySearchUrl(
-            apiBaseUrl = apiBaseUrl,
-            searchPath = searchPath,
-            keyword = keyword,
-            section = section,
-            rhythm = rhythm,
-            folder = folder
+        rhythm: String?,
+        folder: String?
+    ): String {
+        val sectionCode = when (section) {
+            MusicLibrarySection.NHAC_VIET -> "nhac_viet"
+            MusicLibrarySection.QUOC_TE -> "quoc_te"
+            MusicLibrarySection.DIEU_NHAC -> "dieu_nhac"
+        }
+        val parameters = mutableListOf(
+            "action=sections",
+            "section=$sectionCode",
+            "q=" + URLEncoder.encode(keyword, StandardCharsets.UTF_8.name())
         )
+        when (section) {
+            MusicLibrarySection.NHAC_VIET -> folder
+                ?.trim()
+                ?.trim('/')
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { parameters += "folder=" + URLEncoder.encode(it, StandardCharsets.UTF_8.name()) }
 
-        val primaryJson = httpGetText(
-            urlString = primaryUrl,
-            apiToken = apiToken,
-            connectTimeoutMs = PRIMARY_CONNECT_TIMEOUT_MS,
-            readTimeoutMs = PRIMARY_READ_TIMEOUT_MS
-        )
+            MusicLibrarySection.DIEU_NHAC -> rhythm
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { parameters += "rhythm=" + URLEncoder.encode(it, StandardCharsets.UTF_8.name()) }
 
-        return parseSearchResponse(primaryJson, apiBaseUrl)
+            MusicLibrarySection.QUOC_TE -> Unit
+        }
+        return DRIVE_SECTIONS_ENDPOINT + "?" + parameters.joinToString("&")
     }
 
     private fun buildPrimarySearchUrl(
@@ -8069,25 +7783,13 @@ private object TuneToolsSheetMusicApi {
     }
 
     /**
-     * Máy chủ dự phòng dùng DB + Google Drive và chỉ cần action=search, q, limit.
-     * Không truyền token của máy chủ chính sang Alwaysdata.
-     */
-    private fun buildFallbackSearchUrl(keyword: String): String {
-        val parameters = listOf(
-            "action=search",
-            "q=" + URLEncoder.encode(keyword, StandardCharsets.UTF_8.name()),
-            "limit=100"
-        )
-        return FALLBACK_SEARCH_ENDPOINT + "?" + parameters.joinToString("&")
-    }
-
-    /**
      * Chỉ fallback khi server thật sự không dùng được:
      * - lỗi mạng/timeout/DNS/SSL;
+     * - HTTP 404 khi API sections chính biến mất / bị đổi đường dẫn;
      * - HTTP 408, 429 hoặc 5xx;
      * - HTTP 200 nhưng JSON tìm kiếm bị hỏng/không đúng cấu trúc.
      *
-     * Không fallback với 401/403/404 và không fallback với danh sách rỗng hợp lệ.
+     * Không fallback với 401/403 và không fallback với danh sách rỗng hợp lệ.
      */
     private fun shouldUseFallback(error: Throwable): Boolean {
         var current: Throwable? = error
@@ -8095,7 +7797,8 @@ private object TuneToolsSheetMusicApi {
         while (current != null) {
             when (current) {
                 is SearchHttpException -> {
-                    return current.statusCode == 408 ||
+                    return current.statusCode == 404 ||
+                            current.statusCode == 408 ||
                             current.statusCode == 429 ||
                             current.statusCode in 500..599
                 }
@@ -8125,6 +7828,16 @@ private object TuneToolsSheetMusicApi {
 
                 trimmed.startsWith("{") -> {
                     val root = JSONObject(trimmed)
+                    if ((root.has("ok") && !root.optBoolean("ok", true)) ||
+                        (root.has("success") && !root.optBoolean("success", true))) {
+                        throw InvalidSearchResponseException(
+                            firstNonBlank(
+                                root.optString("error"),
+                                root.optString("message"),
+                                "Máy chủ chưa sẵn sàng trả danh mục bản nhạc."
+                            )
+                        )
+                    }
                     root.optJSONArray("data")
                         ?: root.optJSONArray("songs")
                         ?: root.optJSONArray("results")
