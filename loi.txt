@@ -1,1 +1,13 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\CHAY_KIEM_THU_ORPHEUS.ps1"
+
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\CHAY_KIEM_THU_ORPHEUS.ps1"
+The argument '.\CHAY_KIEM_THU_ORPHEUS.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator>
+
