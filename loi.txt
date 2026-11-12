@@ -1,13 +1,7 @@
-$dir = "$env:USERPROFILE\Downloads"
-
-Expand-Archive `
-    -LiteralPath "$dir\Orpheus_KiemThu_Windows_FIX.zip" `
-    -DestinationPath "$dir\Orpheus_KiemThu_Windows" `
-    -Force
-
-
-
-
 cd "$env:USERPROFILE\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\CHAY_KIEM_THU_ORPHEUS.ps1"
+Copy-Item ".\KET_QUA_KIEM_THU\ket_qua.txt" ".\ket_qua_cu.txt" -ErrorAction SilentlyContinue
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File ".\CHAY_KIEM_THU_ORPHEUS.ps1" `
+    -ImageFile ".\ban_nhac.png"
