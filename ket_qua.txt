@@ -1,0 +1,33 @@
+=== ORPHEUS TEST ===
+File: C:\Users\Administrator\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows\orpheus-android-1-2026-10-27.zip
+[OK] layout.onnx: 7,016,960 bytes / SHA-256 OK
+[OK] encoder.onnx: 7,996,402 bytes / SHA-256 OK
+[OK] decoder.onnx: 6,040,619 bytes / SHA-256 OK
+[OK] orpheus.json: 214 bytes / SHA-256 OK
+[OK] Version=2026-10-27; total=21,054,195 bytes (~21.05 MB)
+ONNX Runtime: 1.31.1
+[OK] Loaded layout.onnx in 44 ms
+     input: {"name": "page", "type": "tensor(float)", "shape": [1, 1, "height", "width"]}
+     output: {"name": "classes", "type": "tensor(int32)", "shape": [1, "height", "width"]}
+[OK] Loaded encoder.onnx in 763 ms
+     input: {"name": "strip", "type": "tensor(float)", "shape": [1, 1, 320, "width"]}
+     output: {"name": "cross", "type": "tensor(float)", "shape": [12, 1, 8, "memory", 32]}
+[OK] Loaded decoder.onnx in 237 ms
+     input: {"name": "token", "type": "tensor(int32)", "shape": [1, 1]}
+     input: {"name": "step", "type": "tensor(int32)", "shape": [1]}
+     input: {"name": "selfK", "type": "tensor(float)", "shape": [6, 1, 8, 512, 32]}
+     input: {"name": "selfV", "type": "tensor(float)", "shape": [6, 1, 8, 512, 32]}
+     input: {"name": "cross", "type": "tensor(float)", "shape": [12, 1, 8, "memory", 32]}
+     input: {"name": "mask", "type": "tensor(float)", "shape": [1, 1, 1, 512]}
+     output: {"name": "logits", "type": "tensor(float)", "shape": [1, 167]}
+     output: {"name": "newK", "type": "tensor(float)", "shape": [6, 1, 8, 1, 32]}
+     output: {"name": "newV", "type": "tensor(float)", "shape": [6, 1, 8, 1, 32]}
+Khong co anh: dung hinh khuong nhac gia de thu ky thuat. KHONG danh gia do chinh xac OMR.
+[OK] layout inference: 284 ms, output [1, 576, 768], classes {'0': 442368}
+[OK] encoder inference: 146 ms, cross shape [12, 1, 8, 1280, 32]
+[OK] decoder 1 buoc: 15 ms, outputs=[[1, 167], [6, 1, 8, 1, 32], [6, 1, 8, 1, 32]], finite=True
+---
+DA CHAY THANH CONG 3 MO HINH ONNX tren CPU.
+CHUA CHUNG MINH doc dung not, nhip hoac xuat MusicXML.
+Tien xu ly va token hien la gia dinh de smoke test, khong phai pipeline EZMusic.
+Xem hinh layout_classes.png va layout_overlay.png trong thu muc ket qua.
