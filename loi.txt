@@ -1,29 +1,8 @@
-$zip = "$env:USERPROFILE\Downloads\PDF_TAB_GP3_GP4_GP5_Windows.zip"
-$folder = "C:\TunerTools\Tools\PDF_TAB_GP"
+$zip = "$env:USERPROFILE\Downloads\TunerTools_PDF_Anh_Sang_GP_WEB_Windows.zip"
+$dir = "C:\TunerTools\Tools\PDF_TAB_GP_WEB"
 
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
+New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-Expand-Archive -LiteralPath $zip -DestinationPath $folder -Force
+Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
 
-
-
-
-
-$script = Get-ChildItem "C:\TunerTools\Tools\PDF_TAB_GP" `
-    -Filter "CHAY_CHUYEN_GP5.ps1" -Recurse |
-    Select-Object -First 1
-
-if ($script) {
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script.FullName
-} else {
-    Write-Host "Khong tim thay file CHAY_CHUYEN_GP5.ps1"
-}
-
-
-
-
-
-
-
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\CHAY_CHUYEN_GP5.ps1"
+& "$dir\CHAY_WEB.bat"
