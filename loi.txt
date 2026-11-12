@@ -5,3 +5,24 @@ Copy-Item ".\KET_QUA_KIEM_THU\ket_qua.txt" ".\ket_qua_cu.txt" -ErrorAction Silen
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File ".\CHAY_KIEM_THU_ORPHEUS.ps1" `
     -ImageFile ".\ban_nhac.png"
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> cd "$env:USERPROFILE\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows"
+>>
+>> Copy-Item ".\KET_QUA_KIEM_THU\ket_qua.txt" ".\ket_qua_cu.txt" -ErrorAction SilentlyContinue
+>>
+>> powershell.exe -NoProfile -ExecutionPolicy Bypass `
+>>     -File ".\CHAY_KIEM_THU_ORPHEUS.ps1" `
+>>     -ImageFile ".\ban_nhac.pdf"
+Python: 3.11.9 / 64bit
+Dang kiem tra numpy, pillow va onnxruntime ...
+[OK] numpy, pillow, onnxruntime da san sang.
+Resolve-Path : Cannot find path '.\ban_nhac.pdf' because it does not exist.
+At C:\Users\Administrator\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows\CHAY_KIEM_THU_ORPHEUS.ps1:113 char:19
++     $ImageFile = (Resolve-Path -LiteralPath $ImageFile).Path
++                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (.\ban_nhac.pdf:String) [Resolve-Path], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.ResolvePathCommand
+
+PS C:\Users\Administrator\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows>
