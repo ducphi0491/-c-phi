@@ -1,28 +1,42 @@
-cd "$env:USERPROFILE\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows"
 
-Copy-Item ".\KET_QUA_KIEM_THU\ket_qua.txt" ".\ket_qua_cu.txt" -ErrorAction SilentlyContinue
+$test = "$env:USERPROFILE\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows"
+Set-Location $test
 
+# Mo cua so chon file
+Add-Type -AssemblyName System.Windows.Forms
+
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = "Chon ban nhac can kiem thu"
+$dialog.InitialDirectory = "$env:USERPROFILE\Downloads"
+$dialog.Filter = "Ban nhac|*.pdf;*.png;*.jpg;*.jpeg"
+
+if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+    Write-Host "Chua chon file."
+    return
+}
+
+$source = $dialog.FileName
+$inputFile = $source
+
+# Neu la PDF, chuyen trang dau tien sang PNG
+if ([IO.Path]::GetExtension($source).ToLowerInvariant() -eq ".pdf") {
+    $py = Join-Path $test ".venv\Scripts\python.exe"
+
+    & $py -m pip install --disable-pip-version-check pymupdf
+    if ($LASTEXITCODE -ne 0) {
+        throw "Khong cai duoc PyMuPDF."
+    }
+
+    $inputFile = Join-Path $test "ban_nhac.png"
+
+    & $py -c "import pymupdf,sys; d=pymupdf.open(sys.argv[1]); d[0].get_pixmap(matrix=pymupdf.Matrix(2,2),alpha=False).save(sys.argv[2])" $source $inputFile
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Chuyen PDF sang PNG that bai."
+    }
+}
+
+# Chay kiem thu Orpheus
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File ".\CHAY_KIEM_THU_ORPHEUS.ps1" `
-    -ImageFile ".\ban_nhac.png"
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-PS C:\Users\Administrator> cd "$env:USERPROFILE\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows"
->>
->> Copy-Item ".\KET_QUA_KIEM_THU\ket_qua.txt" ".\ket_qua_cu.txt" -ErrorAction SilentlyContinue
->>
->> powershell.exe -NoProfile -ExecutionPolicy Bypass `
->>     -File ".\CHAY_KIEM_THU_ORPHEUS.ps1" `
->>     -ImageFile ".\ban_nhac.pdf"
-Python: 3.11.9 / 64bit
-Dang kiem tra numpy, pillow va onnxruntime ...
-[OK] numpy, pillow, onnxruntime da san sang.
-Resolve-Path : Cannot find path '.\ban_nhac.pdf' because it does not exist.
-At C:\Users\Administrator\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows\CHAY_KIEM_THU_ORPHEUS.ps1:113 char:19
-+     $ImageFile = (Resolve-Path -LiteralPath $ImageFile).Path
-+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : ObjectNotFound: (.\ban_nhac.pdf:String) [Resolve-Path], ItemNotFoundException
-    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.ResolvePathCommand
-
-PS C:\Users\Administrator\Downloads\Orpheus_KiemThu_Windows\Orpheus_Test_Windows>
+    -File (Join-Path $test "CHAY_KIEM_THU_ORPHEUS.ps1") `
+    -ImageFile $inputFile
