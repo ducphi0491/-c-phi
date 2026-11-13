@@ -7,3 +7,41 @@ Expand-Archive -LiteralPath $zip `
     -DestinationPath $dir -Force
 
 & "$dir\CHAY_WEB.bat"
+
+
+
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+ Expand-Archive
+    The archive file 'C:\TunerTools\Tools\PDF_TAB_GP_WEB' expansion is in progress...
+    [o                                                                                                           ]
+
+>>
+>> Expand-Archive -LiteralPath $zip `
+>>     -DestinationPath $dir -Force
+>>
+>> & "$dir\CHAY_WEB.bat"
+Expand-Archive : The path 'C:\Users\Administrator\Downloads\TunerTools_PDF_GP_WEB_V5_DOI_CHIEU.zip' either does not
+exist or is not a valid file system path.
+At line:6 char:1
++ Expand-Archive -LiteralPath $zip `
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (C:\Users\Admini...5_DOI_CHIEU.zip:String) [Expand-Archive], InvalidOpe
+   rationException
+    + FullyQualifiedErrorId : ArchiveCmdletPathNotFound,Expand-Archive
+
+
+===========================================
+ TunerTools - PDF / Anh -> GP Web V4
+===========================================
+Optional OCR engine: True
+Ghi chu: V4 co the chay TAB vector ma khong can cai OCR/OMR.
+De them OCR anh/PDF scan, chay CAI_ENGINE_OCR.bat rieng.
+Mo server local: http://127.0.0.1:8021
+
+Da mo giao dien tren trinh duyet.
+KHONG mo cong 8021 ra Internet; moi file duoc xu ly tren may tinh.
+Nhan ENTER tai cua so nay de dung server.
+
