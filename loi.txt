@@ -1,8 +1,7 @@
-$zip = "$env:USERPROFILE\Downloads\TunerTools_PDF_GP_WEB_V3.zip"
+$zip = "$env:USERPROFILE\Downloads\TunerTools_PDF_GP_WEB_V4_VECTOR_OCR.zip"
 
 $dir = "C:\TunerTools\Tools\PDF_TAB_GP_WEB"
 
-Expand-Archive -LiteralPath $zip `
-    -DestinationPath $dir -Force
+Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
 
 & "$dir\CHAY_WEB.bat"
