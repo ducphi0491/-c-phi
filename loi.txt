@@ -2,25 +2,25 @@
 $downloads = "$env:USERPROFILE\Downloads"
 
 $zip = Get-ChildItem $downloads `
-    -Filter "TunerTools_WEB_V6_TAB_FIX_20261114*.zip" `
+    -Filter "TunerTools_WEB_V6_1_FIX_XUAT_DOI_CHIEU*.zip" `
     -File |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
 if (-not $zip) {
-    throw "Khong tim thay ZIP V6 trong Downloads."
+    throw "Khong tim thay ZIP V6.1 trong Downloads."
 }
 
-$folder = "$downloads\TunerTools_V6"
+$folder = "$downloads\TunerTools_V6_1_FIX"
 
 Expand-Archive -LiteralPath $zip.FullName `
-    -DestinationPath $folder -Force
+    -DestinationPath $folder -Force -ErrorAction Stop
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File "$folder\CAI_DAT_V6.ps1"
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Cai dat V6 that bai."
+    throw "Cai dat that bai."
 }
 
 & "C:\TunerTools\Tools\PDF_TAB_GP_WEB\CHAY_WEB.bat"
