@@ -1,36 +1,42 @@
 
+# Thu muc tai file
 $downloads = "$env:USERPROFILE\Downloads"
-$dir = "C:\TunerTools\Tools\PDF_TAB_GP_WEB"
+$extract = "$downloads\TunerTools_V5_FIX"
+$install = "C:\TunerTools\Tools\PDF_TAB_GP_WEB"
 
-# Tu dong tim file ZIP V5
-$zip = Get-ChildItem -Path $downloads `
-    -Filter "TunerTools_PDF_GP_WEB_V5_DOI_CHIEU*.zip" `
-    -File |
+# Tim file ZIP V5
+$zip = Get-ChildItem $downloads -File |
+    Where-Object { $_.Name -like "TunerTools_V5_FIX_20261113*.zip" } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
 if (-not $zip) {
-    Write-Host "LOI: Khong tim thay file V5 trong Downloads." -ForegroundColor Red
-    Write-Host "Hay tai file ZIP V5 ve truoc khi chay."
+    Write-Host "LOI: Khong tim thay file ZIP V5 trong Downloads!" -ForegroundColor Red
     return
 }
 
 Write-Host "Tim thay: $($zip.FullName)" -ForegroundColor Green
 
-# Giai nen V5
-New-Item -ItemType Directory -Path $dir -Force | Out-Null
-
+# Giai nen
 Expand-Archive -LiteralPath $zip.FullName `
-    -DestinationPath $dir -Force -ErrorAction Stop
+    -DestinationPath $extract -Force -ErrorAction Stop
 
-Write-Host "Da giai nen V5 thanh cong." -ForegroundColor Green
+# Tim bo cai dat
+$setup = Get-ChildItem $extract `
+    -Filter "CAI_DAT_V5_FIX.ps1" -Recurse |
+    Select-Object -First 1
 
-# Kiem tra file khoi dong
-$launcher = Join-Path $dir "CHAY_WEB.bat"
+if (-not $setup) {
+    throw "Khong tim thay CAI_DAT_V5_FIX.ps1"
+}
 
-if (-not (Test-Path $launcher)) {
-    throw "Khong tim thay CHAY_WEB.bat"
+# Cai dat V5
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File $setup.FullName
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Cai dat V5 that bai. Kiem tra thong bao phia tren."
 }
 
 # Khoi dong website
-& $launcher
+& "$install\CHAY_WEB.bat"
