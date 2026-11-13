@@ -1,47 +1,36 @@
 
-$zip = "$env:USERPROFILE\Downloads\TunerTools_PDF_GP_WEB_V5_DOI_CHIEU.zip"
-
+$downloads = "$env:USERPROFILE\Downloads"
 $dir = "C:\TunerTools\Tools\PDF_TAB_GP_WEB"
 
-Expand-Archive -LiteralPath $zip `
-    -DestinationPath $dir -Force
+# Tu dong tim file ZIP V5
+$zip = Get-ChildItem -Path $downloads `
+    -Filter "TunerTools_PDF_GP_WEB_V5_DOI_CHIEU*.zip" `
+    -File |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
 
-& "$dir\CHAY_WEB.bat"
+if (-not $zip) {
+    Write-Host "LOI: Khong tim thay file V5 trong Downloads." -ForegroundColor Red
+    Write-Host "Hay tai file ZIP V5 ve truoc khi chay."
+    return
+}
 
+Write-Host "Tim thay: $($zip.FullName)" -ForegroundColor Green
 
+# Giai nen V5
+New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
+Expand-Archive -LiteralPath $zip.FullName `
+    -DestinationPath $dir -Force -ErrorAction Stop
 
-Windows PowerShell
-Copyright (C) Microsoft Corporation. All rights reserved.
+Write-Host "Da giai nen V5 thanh cong." -ForegroundColor Green
 
- Expand-Archive
-    The archive file 'C:\TunerTools\Tools\PDF_TAB_GP_WEB' expansion is in progress...
-    [o                                                                                                           ]
+# Kiem tra file khoi dong
+$launcher = Join-Path $dir "CHAY_WEB.bat"
 
->>
->> Expand-Archive -LiteralPath $zip `
->>     -DestinationPath $dir -Force
->>
->> & "$dir\CHAY_WEB.bat"
-Expand-Archive : The path 'C:\Users\Administrator\Downloads\TunerTools_PDF_GP_WEB_V5_DOI_CHIEU.zip' either does not
-exist or is not a valid file system path.
-At line:6 char:1
-+ Expand-Archive -LiteralPath $zip `
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : InvalidArgument: (C:\Users\Admini...5_DOI_CHIEU.zip:String) [Expand-Archive], InvalidOpe
-   rationException
-    + FullyQualifiedErrorId : ArchiveCmdletPathNotFound,Expand-Archive
+if (-not (Test-Path $launcher)) {
+    throw "Khong tim thay CHAY_WEB.bat"
+}
 
-
-===========================================
- TunerTools - PDF / Anh -> GP Web V4
-===========================================
-Optional OCR engine: True
-Ghi chu: V4 co the chay TAB vector ma khong can cai OCR/OMR.
-De them OCR anh/PDF scan, chay CAI_ENGINE_OCR.bat rieng.
-Mo server local: http://127.0.0.1:8021
-
-Da mo giao dien tren trinh duyet.
-KHONG mo cong 8021 ra Internet; moi file duoc xu ly tren may tinh.
-Nhan ENTER tai cua so nay de dung server.
-
+# Khoi dong website
+& $launcher
