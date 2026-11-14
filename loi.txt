@@ -1,19 +1,35 @@
-=======================================
- TUNERTOOLS - SCORE-OMR THU NGHIEM
-=======================================
-Web rieng: http://127.0.0.1:8022
-Khong thay the V6; khong tai PDF len may chu ngoai.
-
-[OK] Python launcher: py -3.11-64
-Chua tim thay JDK Java 17+ (java.exe va javac.exe). Cai JDK 17/21, mo PowerShell moi.
-https://learn.microsoft.com/en-us/java/openjdk/download
-At C:\TunerTools\Tools\ScoreOMR_Web_Test\CHAY_SCORE_OMR_WEB.ps1:67 char:5
-+     throw 'Chua tim thay JDK Java 17+ (java.exe va javac.exe). Cai JD ...
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OperationStopped: (Chua tim thay J...penjdk/download:String) [], RuntimeException
-    + FullyQualifiedErrorId : Chua tim thay JDK Java 17+ (java.exe va javac.exe). Cai JDK 17/21, mo PowerShell moi. ht
-   tps://learn.microsoft.com/en-us/java/openjdk/download
-
-PS C:\Users\Administrator>
+winget install --id Microsoft.OpenJDK.21 --exact --source winget --accept-package-agreements --accept-source-agreements
 
 
+
+
+
+java -version
+javac -version
+
+
+
+
+
+$jdk = Get-ChildItem "C:\Program Files\Microsoft" `
+    -Directory -Filter "jdk-21*" `
+    -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if (-not $jdk) {
+    throw "Khong tim thay JDK 21. Kiem tra lai cai dat."
+}
+
+$env:JAVA_HOME = $jdk.FullName
+$env:Path = (Join-Path $jdk.FullName "bin") + ";" + $env:Path
+
+Write-Host "JAVA_HOME = $env:JAVA_HOME" -ForegroundColor Green
+
+java -version
+javac -version
+
+
+
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\TunerTools\Tools\ScoreOMR_Web_Test\CHAY_SCORE_OMR_WEB.ps1"
