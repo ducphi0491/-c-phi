@@ -1,22 +1,19 @@
+=======================================
+ TUNERTOOLS - SCORE-OMR THU NGHIEM
+=======================================
+Web rieng: http://127.0.0.1:8022
+Khong thay the V6; khong tai PDF len may chu ngoai.
 
-$downloads = "$env:USERPROFILE\Downloads"
+[OK] Python launcher: py -3.11-64
+Chua tim thay JDK Java 17+ (java.exe va javac.exe). Cai JDK 17/21, mo PowerShell moi.
+https://learn.microsoft.com/en-us/java/openjdk/download
+At C:\TunerTools\Tools\ScoreOMR_Web_Test\CHAY_SCORE_OMR_WEB.ps1:67 char:5
++     throw 'Chua tim thay JDK Java 17+ (java.exe va javac.exe). Cai JD ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Chua tim thay J...penjdk/download:String) [], RuntimeException
+    + FullyQualifiedErrorId : Chua tim thay JDK Java 17+ (java.exe va javac.exe). Cai JDK 17/21, mo PowerShell moi. ht
+   tps://learn.microsoft.com/en-us/java/openjdk/download
 
-$zip = Get-ChildItem $downloads `
-    -Filter "ScoreOMR_WEB_POWERSHELL_WIN_20261114*.zip" `
-    -File |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
+PS C:\Users\Administrator>
 
-if (-not $zip) {
-    throw "Khong tim thay file ZIP trong Downloads."
-}
 
-$dir = "C:\TunerTools\Tools\ScoreOMR_Web_Test"
-
-New-Item -ItemType Directory -Path $dir -Force | Out-Null
-
-Expand-Archive -LiteralPath $zip.FullName `
-    -DestinationPath $dir -Force -ErrorAction Stop
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$dir\CHAY_SCORE_OMR_WEB.ps1"
